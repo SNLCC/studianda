@@ -152,7 +152,7 @@ apps/desktop/release/win-unpacked/Studianda.exe
 - 安装包通过 `extraResources` 携带**完整**的法律文件集合：`LICENSE`、`NOTICE`、`legal/`（第三方清单、许可证原文、Electron/Chromium/Node 声明）与 `legal/USAGE-NOTICE.md`（完整版使用须知）；
 - 源码仓库同样保留**完整**集合：`LICENSE`、`NOTICE`、`legal/` 与 `docs/USAGE-NOTICE.md`；安装包与仓库不是互补关系，两侧各自都应完整且内容一致；
 - `pnpm check:legal` 校验仓库内部一致性；`scripts/package.mjs` 在写出 build-manifest 后会自动以 `--package` 再跑一次，逐文件比对安装包与仓库两侧集合，缺项或内容不一致会让打包失败。
-- `electron-builder` 在构建时下载的 `7za.exe` 只用于生成产物，**不进入** `app.asar`、`resources/` 或安装包；但 NSIS 安装器内嵌了运行期解压插件 `nsis7z.dll`（基于 7-Zip 源码）及 StdUtils/UAC/WinShell 等 NSIS 插件，它们会随安装包分发。`legal/upstream/official/nsis7z/` 与 `legal/upstream/official/nsis-plugins/` 因此必须保留各自的许可、来源与源码；兼容性说明见 `legal/COMPATIBILITY.md`。若将来改用 zip payload 等方案，也要按实际随包组件更新声明。
+- `electron-builder` 在构建时下载的 `7za.exe` 只用于生成产物，**不进入** `app.asar`、`resources/` 或安装包；但 NSIS 安装器内嵌了运行期解压插件 `nsis7z.dll`（基于 7-Zip 源码）及 StdUtils/UAC/WinShell 等 NSIS 插件，它们会随安装包分发。`legal/upstream/official/nsis7z/` 与 `legal/upstream/official/nsis-plugins/` 因此必须保留各自的许可、来源与源码；兼容性说明见 `legal/COMPATIBILITY.md`。
 
 ## 安装与资料位置
 
