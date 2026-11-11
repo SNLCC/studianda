@@ -57,6 +57,8 @@ export interface RuntimeAdapter {
   ): Promise<{ encryptionAvailable: boolean; configured: string[] }>;
   getDataLocation?(): Promise<string>;
   openLegalNotice?(): Promise<{ ok: boolean }>;
+  /** 打开安装包内完整版《使用须知与隐私说明》；未实现时调用方回退到仓库文档链接。 */
+  openUsageNotice?(): Promise<{ ok: boolean; message?: string }>;
   /** 在本机文件管理器打开数据目录；失败时 message 里带路径供用户手动打开。 */
   openDataLocation?(): Promise<{ ok: boolean; message: string }>;
   changeDataLocation?(): Promise<{ ok: boolean; message: string }>;

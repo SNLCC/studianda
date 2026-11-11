@@ -136,13 +136,15 @@ export function UpdatePanel({ adapter }: { adapter: RuntimeAdapter }): JSX.Eleme
       </p>
 
       {update?.getAutoCheck && autoCheck !== null ? (
-        <label className="kr-muted">
+        <label className="kr-settings__check">
           <input
             type="checkbox"
             checked={autoCheck}
             onChange={(event) => void changeAutoCheck(event.target.checked)}
-          />{' '}
-          启动后自动检查更新（默认关闭；只发送版本号等元数据；手动检查仍可用）
+          />
+          <span>
+            启动后自动检查更新（默认关闭；只发送版本号等元数据；手动检查仍可用）
+          </span>
         </label>
       ) : null}
 

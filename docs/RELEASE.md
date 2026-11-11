@@ -27,8 +27,8 @@
 1. 工作区干净，`pnpm install --frozen-lockfile` 已通过（lockfile 与 package.json 一致）。
 2. 写发版说明：从 `docs/releases/v0.1.0.md` 复制为 `docs/releases/<tag>.md` 并改写内容。
 3. 自检版本：`pnpm check:version`。
-4. **必须**跑一遍 `pnpm verify`（`typecheck` + `test` + `check:contract` + `check:ui` + `check:telemetry` + `check:governance` + `build`）：全绿才能发版，失败不发布。CI 的 `ci.yml` 在 main 上跑同一入口，本地与 CI 结果应一致。
-5. **文档与声明自检**：如果本次发版改动了联网功能、默认行为或数据流向，同步更新 `docs/USAGE-NOTICE.md`（含文档版本与生效日期）与 README「数据与隐私」，并确认 `docs/USAGE-NOTICE.md` 与 `CONTRIBUTING.md` 中的产品边界仍然成立。
+4. **必须**跑一遍 `pnpm verify`（`typecheck` + `test` + `check:contract` + `check:ui` + `check:telemetry` + `check:governance` + `check:legal` + `build`）：全绿才能发版，失败不发布。CI 的 `ci.yml` 在 main 上跑同一入口，本地与 CI 结果应一致。
+5. **文档与声明自检**：如果本次发版改动了联网功能、默认行为或数据流向，同步更新 `docs/USAGE-NOTICE.md`（含文档版本与生效日期）与 README「数据与隐私」，并确认 `docs/USAGE-NOTICE.md` 与 `CONTRIBUTING.md` 中的产品边界仍然成立；`pnpm check:legal` 会校验版本、日期与两侧法律文件是否完整一致。
 6. **备份与回滚预案**：在测试机准备一份资料目录备份；确认回滚目标（上一个已发布版本）与紧急止损方式（见「回滚策略」）；准备发版说明与（如有必要）用户公告。
 
 ## 发布检查单
@@ -38,10 +38,11 @@
 **代码与构建**
 
 - [ ] `pnpm install --frozen-lockfile` 通过
-- [ ] `pnpm verify` 全绿（typecheck / test / check:contract / check:ui / check:telemetry / check:governance / build）
+- [ ] `pnpm verify` 全绿（typecheck / test / check:contract / check:ui / check:telemetry / check:governance / check:legal / build）
 - [ ] `pnpm check:version` 通过，tag 为 `v` + 版本号
 - [ ] `docs/releases/<tag>.md` 已写好，含变更、已知问题（未签名）与校验方法
 - [ ] 若改了联网功能或数据流向：`docs/USAGE-NOTICE.md` 与 README「数据与隐私」已同步
+- [ ] 安装包与源码仓库法律文件各自完整且一致（打包日志中的 `check:legal` 通过；可手动复跑 `node scripts/audit-legal-completeness.mjs --package`）
 
 **完整性校验**
 

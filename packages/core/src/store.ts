@@ -8272,13 +8272,23 @@ export class Store {
     );
   }
 
-  /** 从旧版 data 目录迁移文档/批注/笔记/消息/设置/向量缓存。源库只读。 */
+  /**
+   * 从旧版 data 目录迁移文档/批注/笔记/消息/设置/向量缓存。源库只读。
+   *
+   * 源目录允许直接传入 reader.sqlite3 文件。PDF 按以下顺序查找：Zotero 外部路径、
+   * `documents.path`（相对源目录，兼容新版本资料目录）、`papers/<sha256>.pdf`、
+   * `papers/<文档 ID>.pdf`、源目录下的 `<文档 ID>.pdf`（旧 Python 版布局）。
+   */
   migrateLegacy(legacyDir: string): LegacyMigrationReport {
-    const sourceDir = path.resolve(legacyDir);
-    const legacyDbPath = sourceDir.endsWith('reader.sqlite3')
-      ? sourceDir
-      : path.join(sourceDir, 'reader.sqlite3');
+    const inputPath = path.resolve(legacyDir);
+    const legacyDbPath = inputPath.endsWith('reader.sqlite3')
+      ? inputPath
+      : path.join(inputPath, 'reader.sqlite3');
     if (!existsSync(legacyDbPath)) throw new Error(`旧版数据库不存在：${legacyDbPath}`);
+    const sourceDir = path.dirname(legacyDbPath);
+    if (path.resolve(sourceDir) === path.resolve(this.dataDir)) {
+      throw new Error('源目录就是当前资料目录：请用「资料位置」迁移，而不是「从旧版迁移数据」');
+    }
 
     const legacy = new DatabaseSync(legacyDbPath);
     const report: LegacyMigrationReport = {
@@ -8324,28 +8334,52 @@ export class Store {
         )
       );
     const hasTable = (name: string): boolean => hasTableIn(legacy, name);
-    const columnsOf = (table: string): Set<string> => columnsOfIn(legacy, table);
 
     const value = (row: Record<string, unknown>, key: string, fallback: unknown): unknown =>
       row[key] ?? fallback;
 
     const migratedDocuments = new Set<string>();
 
+    /**
+     * 旧版资料目录里 PDF 的可能位置（按优先级去重，只生成路径，不判断存在）。
+     *
+     * 旧 Python 版把副本放在 data 目录根部的 `<文档 ID>.pdf`；新版资料目录用
+     * `papers/<sha256>.pdf` 并在 `documents.path` 记相对路径；Zotero 文献是外部路径。
+     * 迁移目标目录可能正是上一版的资料目录，因此这几种布局都要认。
+     */
+    const legacyPdfCandidates = (row: Record<string, unknown>): string[] => {
+      const id = String(value(row, 'id', ''));
+      const storageKind = String(value(row, 'storage_kind', 'copy'));
+      const externalPath = String(value(row, 'external_path', '')).trim();
+      const storedPath = String(value(row, 'path', '')).trim();
+      const sha256 = String(value(row, 'sha256', '')).trim().toLowerCase();
+      const candidates: string[] = [];
+      const add = (candidate: string): void => {
+        if (!candidate) return;
+        const resolved = path.resolve(candidate);
+        if (!candidates.includes(resolved)) candidates.push(resolved);
+      };
+      if (storageKind === 'zotero' && externalPath) add(externalPath);
+      if (storedPath) {
+        add(path.isAbsolute(storedPath) ? storedPath : path.join(sourceDir, storedPath));
+      }
+      if (sha256) add(path.join(sourceDir, 'papers', `${sha256}.pdf`));
+      if (id) {
+        add(path.join(sourceDir, 'papers', `${id}.pdf`));
+        add(path.join(sourceDir, `${id}.pdf`));
+      }
+      return candidates;
+    };
+
     if (hasTable('documents')) {
-      const columns = columnsOf('documents');
       const rows = legacy.prepare('SELECT * FROM documents').all() as unknown as Array<
         Record<string, unknown>
       >;
       for (const row of rows) {
         const id = String(value(row, 'id', ''));
         if (!id) continue;
-        const storageKind = String(value(row, 'storage_kind', 'copy'));
-        const externalPath = String(value(row, 'external_path', ''));
-        const candidate =
-          storageKind === 'zotero' && externalPath && existsSync(externalPath)
-            ? externalPath
-            : path.join(sourceDir, `${id}.pdf`);
-        if (!existsSync(candidate)) {
+        const candidate = legacyPdfCandidates(row).find((pdfPath) => existsSync(pdfPath));
+        if (!candidate) {
           report.skippedDocuments += 1;
           report.warnings.push(`文档 ${id} 的 PDF 不存在，已跳过`);
           continue;
@@ -8386,6 +8420,12 @@ export class Store {
           );
         migratedDocuments.add(id);
         report.documents += 1;
+      }
+      if (report.skippedDocuments > 0) {
+        report.warnings.push(
+          '找不到 PDF 的文档不会被复制：旧 Python 版资料目录在根部放 <文档 ID>.pdf，' +
+            '新版本资料目录在 papers/ 下按 sha256 命名；请确认所选目录就是文档所在的数据目录。'
+        );
       }
     }
 
@@ -8515,8 +8555,19 @@ export class Store {
         `INSERT OR IGNORE INTO ${targetTable}(${columns.join(', ')})
          VALUES (${columns.map(() => '?').join(', ')})`
       );
+      // 文档被跳过（PDF 找不到）时，它名下的译文/页面编辑/结构等也不该进新库，
+      // 否则新库会出现指向不存在文献的孤儿数据。
+      const scopedColumn = sourceColumns.has('document_id')
+        ? 'document_id'
+        : sourceTable === 'structures' && sourceColumns.has('document')
+          ? 'document'
+          : '';
       let migrated = 0;
       for (const row of rows) {
+        if (hasTable('documents') && scopedColumn) {
+          const documentId = String(row[scopedColumn] ?? '');
+          if (documentId && !migratedDocuments.has(documentId)) continue;
+        }
         const result = statement.run(
           ...columns.map((column) => (row[column] ?? null) as string | number | null)
         );

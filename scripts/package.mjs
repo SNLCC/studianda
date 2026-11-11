@@ -33,6 +33,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import {
+  copyFileSync,
   createReadStream,
   cpSync,
   existsSync,
@@ -314,6 +315,11 @@ run('node', [path.join(root, 'scripts', 'audit-packaged-legal.mjs')]);
 const packagedLegalDir = path.join(resourcesDir, 'legal');
 rmSync(packagedLegalDir, { recursive: true, force: true });
 cpSync(path.join(root, 'legal'), packagedLegalDir, { recursive: true });
+// 完整版《使用须知与隐私说明》在源码仓库位于 docs/；安装包 legal/ 也必须是完整集合。
+copyFileSync(
+  path.join(root, 'docs', 'USAGE-NOTICE.md'),
+  path.join(packagedLegalDir, 'USAGE-NOTICE.md')
+);
 
 // 4.2) app-update.yml：应用内更新的渠道配置，必须进安装包的 resources。
 //      electron-builder 26 的 --dir / --prepackaged 两条路径都不会写它（只走真正的
@@ -546,6 +552,8 @@ if (
 ) {
   fail('build-manifest.json 写回校验失败：版本记录不一致。');
 }
+// 5.5) 法律文件完整性：安装包与源码仓库必须各自完备（不是互补关系）。
+run('node', [path.join(root, 'scripts', 'audit-legal-completeness.mjs'), '--package']);
 
 console.log('\n[package] 完成');
 console.log(`  版本：${version}（root / apps/desktop 一致）`);

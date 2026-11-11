@@ -24,6 +24,7 @@ import {
   USAGE_NOTICE_EFFECTIVE_DATE,
   USAGE_NOTICE_VERSION,
   UsageNoticeDialog,
+  hasAcknowledgedCurrentUsageNotice,
   hasReadCurrentUsageNotice
 } from './usage-notice.js';
 
@@ -135,9 +136,8 @@ const SECTION_GROUPS: Record<string, string[]> = {
     '资料位置',
     '数据备份',
     '清空全部本地数据',
-    '诊断',
+    '诊断与维护',
     '从旧版迁移数据',
-    '使用须知与隐私说明',
     '第三方许可与声明'
   ],
   关于与更新: ['关于与更新', '使用须知与隐私说明']
@@ -375,14 +375,26 @@ function SettingsViewContent({
     }
   });
 
-  /* ---- 使用须知完整版：复用壳的 openExternal，不在应用内新造 IPC ---- */
+  /* ---- 使用须知完整版：优先安装包内 legal/USAGE-NOTICE.md，回退仓库文档 ---- */
   const openNoticeDoc = async (): Promise<void> => {
     const result = await openExternalLink(adapter, USAGE_NOTICE_DOC_URL);
     if (!result.ok) {
       notify(result.message ?? '无法打开链接，请复制链接在浏览器中打开。', 'error');
     }
   };
+  const openFullUsageNotice = async (): Promise<void> => {
+    if (adapter.openUsageNotice) {
+      try {
+        const local = await adapter.openUsageNotice();
+        if (local.ok) return;
+      } catch {
+        // 回退到仓库文档
+      }
+    }
+    await openNoticeDoc();
+  };
   const usageNoticeRead = hasReadCurrentUsageNotice();
+  const usageNoticeAcknowledged = hasAcknowledgedCurrentUsageNotice();
 
   const settingsQuery = useQuery({
     queryKey: ['settings'],
@@ -2780,276 +2792,289 @@ function SettingsViewContent({
             打开数据目录
           </button>
         </div>
-        <p className="kr-settings__group-label">图片资源占用</p>
-        {noteAssetUsageQuery.isLoading ? (
-          <p className="kr-muted">正在统计图片资源…</p>
-        ) : noteAssetUsageQuery.isError ? (
-          <p className="kr-page-error" role="alert">
-            读取图片资源统计失败：
-            {noteAssetUsageQuery.error instanceof Error
-              ? noteAssetUsageQuery.error.message
-              : '未知错误'}
-            <button
-              type="button"
-              className="kr-link-button"
-              onClick={() => void noteAssetUsageQuery.refetch()}
-            >
-              重试
-            </button>
-          </p>
-        ) : noteAssetUsageQuery.data ? (
-          <>
-            <ul className="kr-settings__backups" aria-label="图片资源占用">
-              <li>
-                文件数：{noteAssetUsageQuery.data.fileCount} 个；总占用：
-                {formatBytes(noteAssetUsageQuery.data.totalBytes)}
-              </li>
-              <li>
-                仍被引用（未删除内容）：
-                {noteAssetUsageQuery.data.activeReferencedFiles ?? 0} 个；仅被已删除内容引用：
-                {noteAssetUsageQuery.data.deletedReferencedFiles ?? 0} 个
-              </li>
-              <li>
-                孤儿：{noteAssetUsageQuery.data.orphanFiles} 个；上次清理：
-                {noteAssetUsageQuery.data.lastGcAt
-                  ? new Date(noteAssetUsageQuery.data.lastGcAt).toLocaleString()
-                  : '从未清理'}
-              </li>
-              <li>
-                资源索引：
-                {noteAssetUsageQuery.data.indexedAt
-                  ? new Date(noteAssetUsageQuery.data.indexedAt).toLocaleString()
-                  : '未记录'}
-                （文件 {noteAssetUsageQuery.data.indexedFiles ?? 0} 个、引用{' '}
-                {noteAssetUsageQuery.data.indexedRefs ?? 0} 条）
-              </li>
-            </ul>
-            <p className="kr-muted">
-              共享图片只要仍有任一未删除笔记/批注引用就不会被清理。「仅被已删除内容引用」默认保留；需文件超过
-              24 小时，并在清理时取消「保留已删除内容引用」才会删除。
-            </p>
-            <p className="kr-muted">
-              资源索引时间/文件数/引用条数是上次迁移或重建时的快照；当前实时数量以文件数、被引用、孤儿为准。
-            </p>
-          </>
-        ) : null}
-        <div className="kr-settings__actions">
-          <button
-            type="button"
-            onClick={() => void noteAssetUsageQuery.refetch()}
-            disabled={noteAssetUsageQuery.isFetching}
-            title="重新统计本地笔记图片资源占用与孤儿数量"
-          >
-            {noteAssetUsageQuery.isFetching ? '刷新中…' : '刷新'}
-          </button>
-          <button
-            type="button"
-            onClick={rebuildNoteAssetIndex}
-            disabled={startReindex.isPending || reindexJob?.status === 'running'}
-            title="重新扫描所有笔记/批注内容，修复外部改库造成的引用统计不一致"
-          >
-            {startReindex.isPending || reindexJob?.status === 'running'
-              ? '重建中…'
-              : '重建资源索引'}
-          </button>
-        </div>
-        <p className="kr-muted">
-          重建资源索引：用于修复外部直接改数据库等造成的引用统计不一致；会重新扫描所有笔记/批注内容。
-        </p>
-        {reindexJob?.status === 'running' ? (
-          <div className="kr-reindex-progress" role="status">
-            <p>
-              正在重建资源索引：{reindexPhaseLabel(reindexJob.phase)}（{reindexJob.done}/
-              {reindexJob.total}，{reindexPercent(reindexJob)}%）
-            </p>
-            <progress
-              value={Math.min(reindexJob.done, Math.max(1, reindexJob.total))}
-              max={Math.max(1, reindexJob.total)}
-              aria-label="资源索引重建进度"
-            />
-          </div>
-        ) : reindexJob?.status === 'done' ? (
-          <p className="kr-settings__message" role="status">
-            资源索引已重建：{reindexJob.indexedFiles} 个文件、{reindexJob.indexedRefs} 条引用
-            {reindexJob.indexedAt
-              ? `（${new Date(reindexJob.indexedAt).toLocaleString()}）`
-              : ''}
-            。
-          </p>
-        ) : reindexJob?.status === 'error' ? (
-          <p className="kr-page-error" role="alert">
-            重建资源索引失败：{reindexJob.error || reindexError || '未知错误'}
-          </p>
-        ) : reindexError ? (
-          <p className="kr-page-error" role="alert">
-            {reindexError}
-          </p>
-        ) : null}
-        <p className="kr-muted">
-          清理未引用图片：只删除 24 小时以上、且没有被任何笔记/批注引用的本地图片资源（24
-          小时内的新文件会跳过）；先预览可删除数量与可释放空间，再确认执行。
-        </p>
-        <div className="kr-settings__checks">
-          <label>
-            <input
-              type="checkbox"
-              checked={gcIncludeDeleted}
-              disabled={gcBusy}
-              onChange={(event) => setGcIncludeDeleted(event.target.checked)}
-            />
-            保留已删除笔记/批注引用的图片（推荐）
-          </label>
-        </div>
-        <p className="kr-muted">
-          {gcIncludeDeleted
-            ? '已删除笔记/批注中引用的图片也会保留，恢复笔记后图片不会丢失。'
-            : '⚠ 取消勾选后，只被已删除笔记/批注引用的图片也会被清理；之后恢复这些笔记时图片可能缺失。'}
-        </p>
-        <div className="kr-settings__actions">
-          <button
-            type="button"
-            onClick={() => void cleanNoteAssets()}
-            disabled={gcBusy}
-            title="扫描本地图片资源，删除 24 小时以上且未被引用的文件"
-          >
-            {gcBusy ? '清理中…' : '清理未引用图片'}
-          </button>
-        </div>
-        {gcError ? (
-          <p className="kr-page-error" role="alert">
-            清理未引用图片失败：{gcError}
-          </p>
-        ) : null}
-        {gcReport ? (
-          <ul className="kr-settings__backups" aria-label="图片清理结果">
-            <li>
-              扫描：{gcReport.scannedFiles} 个文件；仍被引用：
-              {gcReport.referencedFiles} 个
-            </li>
-            <li>
-              已删除：{gcReport.deletedFiles} 个；保留：{gcReport.keptFiles} 个；跳过新文件：
-              {gcReport.skippedRecent} 个
-            </li>
-            <li>释放空间：{formatBytes(gcReport.bytesFreed)}</li>
-          </ul>
-        ) : null}
-        <p className="kr-settings__group-label">笔记图片上限</p>
-        <p className="kr-muted">
-          仅影响之后上传的图片，已有图片不受影响。服务端会按这里的上限校验新上传的
-          note-assets 图片（大小与像素）。
-        </p>
-        <div className="kr-note-image-limits">
-          <label>
-            <span>单图大小上限（MB，1–20）</span>
-            <input
-              type="number"
-              min={1}
-              max={20}
-              step={0.5}
-              value={noteImageMaxMb}
-              disabled={saveNoteImageLimits.isPending}
-              onChange={(event) => {
-                setNoteImageMaxMb(event.target.value);
-                setNoteImageLimitError('');
-              }}
-            />
-          </label>
-          <label>
-            <span>单图像素上限（百万像素，1–25）</span>
-            <input
-              type="number"
-              min={1}
-              max={25}
-              step={1}
-              value={noteImageMaxMp}
-              disabled={saveNoteImageLimits.isPending}
-              onChange={(event) => {
-                setNoteImageMaxMp(event.target.value);
-                setNoteImageLimitError('');
-              }}
-            />
-          </label>
-          <button
-            type="button"
-            onClick={submitNoteImageLimits}
-            disabled={saveNoteImageLimits.isPending || settingsQuery.isLoading}
-            title="保存笔记图片大小与像素上限（仅影响之后上传的图片）"
-          >
-            {saveNoteImageLimits.isPending ? '保存中…' : '保存图片上限'}
-          </button>
-        </div>
-        {settingsQuery.isLoading ? (
-          <p className="kr-muted">正在读取图片上限设置…</p>
-        ) : null}
-        {noteImageLimitError ? (
-          <p className="kr-page-error" role="alert">
-            {noteImageLimitError}
-          </p>
-        ) : null}
-        {(diagnosticsPackagesQuery.data ?? []).length > 0 ? (
-          <ul className="kr-settings__backups">
-            {(diagnosticsPackagesQuery.data ?? []).map((item) => (
-              <li key={item.name} title={item.path}>
-                {item.name} · {(item.bytes / 1024).toFixed(0)} KB
-                <span className="kr-muted"> · {item.path}</span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="kr-muted">还没有导出过诊断包（最多保留最近 5 个）。</p>
-        )}
-        {diagnosticsQuery.data ? (
-          <ul className="kr-settings__backups">
-            <li>数据库完整性：{diagnosticsQuery.data.integrity}</li>
-            <li>缺失文件：{diagnosticsQuery.data.missingFiles}</li>
-            <li>文档：{diagnosticsQuery.data.counts.documents ?? 0}</li>
-            <li>备份：{diagnosticsQuery.data.usage.backups} 个</li>
-            <li>
-              数据量：数据库{' '}
-              {(diagnosticsQuery.data.usage.databaseBytes / 1024 / 1024).toFixed(1)} MB，
-              PDF {(diagnosticsQuery.data.usage.papersBytes / 1024 / 1024).toFixed(1)} MB
-            </li>
-            <li>最近错误：{diagnosticsQuery.data.recentErrors.length} 条</li>
-            {diagnosticsQuery.data.failedTasks.map((item) => (
-              <li key={item.category}>
-                失败任务 · {item.category}：{item.count} 次
-                {item.lastMessage ? `（最近：${item.lastMessage}）` : ''}
-              </li>
-            ))}
-            {diagnosticsQuery.data.recentErrors.length > 0 ? (
-              <li>
-                <details>
-                  <summary>查看最近 {diagnosticsQuery.data.recentErrors.length} 条错误</summary>
-                  <ul>
-                    {diagnosticsQuery.data.recentErrors.map((item) => (
-                      <li key={`${item.timestamp}-${item.context}`}>
-                        {item.timestamp} · {item.context} · {item.message}
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              </li>
+        <details className="kr-settings__details">
+          <summary>图片资源占用与清理</summary>
+          <div className="kr-settings__details-body">
+            {noteAssetUsageQuery.isLoading ? (
+              <p className="kr-muted">正在统计图片资源…</p>
+            ) : noteAssetUsageQuery.isError ? (
+              <p className="kr-page-error" role="alert">
+                读取图片资源统计失败：
+                {noteAssetUsageQuery.error instanceof Error
+                  ? noteAssetUsageQuery.error.message
+                  : '未知错误'}
+                <button
+                  type="button"
+                  className="kr-link-button"
+                  onClick={() => void noteAssetUsageQuery.refetch()}
+                >
+                  重试
+                </button>
+              </p>
+            ) : noteAssetUsageQuery.data ? (
+              <>
+                <ul className="kr-settings__backups" aria-label="图片资源占用">
+                  <li>
+                    文件数：{noteAssetUsageQuery.data.fileCount} 个；总占用：
+                    {formatBytes(noteAssetUsageQuery.data.totalBytes)}
+                  </li>
+                  <li>
+                    仍被引用（未删除内容）：
+                    {noteAssetUsageQuery.data.activeReferencedFiles ?? 0} 个；仅被已删除内容引用：
+                    {noteAssetUsageQuery.data.deletedReferencedFiles ?? 0} 个
+                  </li>
+                  <li>
+                    孤儿：{noteAssetUsageQuery.data.orphanFiles} 个；上次清理：
+                    {noteAssetUsageQuery.data.lastGcAt
+                      ? new Date(noteAssetUsageQuery.data.lastGcAt).toLocaleString()
+                      : '从未清理'}
+                  </li>
+                  <li>
+                    资源索引：
+                    {noteAssetUsageQuery.data.indexedAt
+                      ? new Date(noteAssetUsageQuery.data.indexedAt).toLocaleString()
+                      : '未记录'}
+                    （文件 {noteAssetUsageQuery.data.indexedFiles ?? 0} 个、引用{' '}
+                    {noteAssetUsageQuery.data.indexedRefs ?? 0} 条）
+                  </li>
+                </ul>
+                <p className="kr-muted">
+                  共享图片只要仍有任一未删除笔记/批注引用就不会被清理。「仅被已删除内容引用」默认保留；需文件超过
+                  24 小时，并在清理时取消「保留已删除内容引用」才会删除。
+                </p>
+                <p className="kr-muted">
+                  资源索引时间/文件数/引用条数是上次迁移或重建时的快照；当前实时数量以文件数、被引用、孤儿为准。
+                </p>
+              </>
             ) : null}
-            {diagnosticsQuery.data.recentErrors.slice(0, 3).map((item) => (
-              <li key={`${item.timestamp}-${item.context}`}>
-                {item.context} · {item.message}
-              </li>
-            ))}
-          </ul>
-        ) : null}
-        {diagnosticsQuery.isError ? (
-          <p className="kr-page-error">
-            {diagnosticsQuery.error instanceof Error
-              ? diagnosticsQuery.error.message
-              : '诊断失败'}
-          </p>
-        ) : null}
+            <div className="kr-settings__actions">
+              <button
+                type="button"
+                onClick={() => void noteAssetUsageQuery.refetch()}
+                disabled={noteAssetUsageQuery.isFetching}
+                title="重新统计本地笔记图片资源占用与孤儿数量"
+              >
+                {noteAssetUsageQuery.isFetching ? '刷新中…' : '刷新'}
+              </button>
+              <button
+                type="button"
+                onClick={rebuildNoteAssetIndex}
+                disabled={startReindex.isPending || reindexJob?.status === 'running'}
+                title="重新扫描所有笔记/批注内容，修复外部改库造成的引用统计不一致"
+              >
+                {startReindex.isPending || reindexJob?.status === 'running'
+                  ? '重建中…'
+                  : '重建资源索引'}
+              </button>
+            </div>
+            <p className="kr-muted">
+              重建资源索引：用于修复外部直接改数据库等造成的引用统计不一致；会重新扫描所有笔记/批注内容。
+            </p>
+            {reindexJob?.status === 'running' ? (
+              <div className="kr-reindex-progress" role="status">
+                <p>
+                  正在重建资源索引：{reindexPhaseLabel(reindexJob.phase)}（{reindexJob.done}/
+                  {reindexJob.total}，{reindexPercent(reindexJob)}%）
+                </p>
+                <progress
+                  value={Math.min(reindexJob.done, Math.max(1, reindexJob.total))}
+                  max={Math.max(1, reindexJob.total)}
+                  aria-label="资源索引重建进度"
+                />
+              </div>
+            ) : reindexJob?.status === 'done' ? (
+              <p className="kr-settings__message" role="status">
+                资源索引已重建：{reindexJob.indexedFiles} 个文件、{reindexJob.indexedRefs} 条引用
+                {reindexJob.indexedAt
+                  ? `（${new Date(reindexJob.indexedAt).toLocaleString()}）`
+                  : ''}
+                。
+              </p>
+            ) : reindexJob?.status === 'error' ? (
+              <p className="kr-page-error" role="alert">
+                重建资源索引失败：{reindexJob.error || reindexError || '未知错误'}
+              </p>
+            ) : reindexError ? (
+              <p className="kr-page-error" role="alert">
+                {reindexError}
+              </p>
+            ) : null}
+            <p className="kr-muted">
+              清理未引用图片：只删除 24 小时以上、且没有被任何笔记/批注引用的本地图片资源（24
+              小时内的新文件会跳过）；先预览可删除数量与可释放空间，再确认执行。
+            </p>
+            <div className="kr-settings__checks">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={gcIncludeDeleted}
+                  disabled={gcBusy}
+                  onChange={(event) => setGcIncludeDeleted(event.target.checked)}
+                />
+                保留已删除笔记/批注引用的图片（推荐）
+              </label>
+            </div>
+            <p className="kr-muted">
+              {gcIncludeDeleted
+                ? '已删除笔记/批注中引用的图片也会保留，恢复笔记后图片不会丢失。'
+                : '⚠ 取消勾选后，只被已删除笔记/批注引用的图片也会被清理；之后恢复这些笔记时图片可能缺失。'}
+            </p>
+            <div className="kr-settings__actions">
+              <button
+                type="button"
+                onClick={() => void cleanNoteAssets()}
+                disabled={gcBusy}
+                title="扫描本地图片资源，删除 24 小时以上且未被引用的文件"
+              >
+                {gcBusy ? '清理中…' : '清理未引用图片'}
+              </button>
+            </div>
+            {gcError ? (
+              <p className="kr-page-error" role="alert">
+                清理未引用图片失败：{gcError}
+              </p>
+            ) : null}
+            {gcReport ? (
+              <ul className="kr-settings__backups" aria-label="图片清理结果">
+                <li>
+                  扫描：{gcReport.scannedFiles} 个文件；仍被引用：
+                  {gcReport.referencedFiles} 个
+                </li>
+                <li>
+                  已删除：{gcReport.deletedFiles} 个；保留：{gcReport.keptFiles} 个；跳过新文件：
+                  {gcReport.skippedRecent} 个
+                </li>
+                <li>释放空间：{formatBytes(gcReport.bytesFreed)}</li>
+              </ul>
+            ) : null}
+          </div>
+        </details>
+        <details className="kr-settings__details">
+          <summary>笔记图片上限</summary>
+          <div className="kr-settings__details-body">
+            <p className="kr-muted">
+              仅影响之后上传的图片，已有图片不受影响。服务端会按这里的上限校验新上传的
+              note-assets 图片（大小与像素）。
+            </p>
+            <div className="kr-note-image-limits">
+              <label>
+                <span>单图大小上限（MB，1–20）</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  step={0.5}
+                  value={noteImageMaxMb}
+                  disabled={saveNoteImageLimits.isPending}
+                  onChange={(event) => {
+                    setNoteImageMaxMb(event.target.value);
+                    setNoteImageLimitError('');
+                  }}
+                />
+              </label>
+              <label>
+                <span>单图像素上限（百万像素，1–25）</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={25}
+                  step={1}
+                  value={noteImageMaxMp}
+                  disabled={saveNoteImageLimits.isPending}
+                  onChange={(event) => {
+                    setNoteImageMaxMp(event.target.value);
+                    setNoteImageLimitError('');
+                  }}
+                />
+              </label>
+              <button
+                type="button"
+                onClick={submitNoteImageLimits}
+                disabled={saveNoteImageLimits.isPending || settingsQuery.isLoading}
+                title="保存笔记图片大小与像素上限（仅影响之后上传的图片）"
+              >
+                {saveNoteImageLimits.isPending ? '保存中…' : '保存图片上限'}
+              </button>
+            </div>
+            {settingsQuery.isLoading ? (
+              <p className="kr-muted">正在读取图片上限设置…</p>
+            ) : null}
+            {noteImageLimitError ? (
+              <p className="kr-page-error" role="alert">
+                {noteImageLimitError}
+              </p>
+            ) : null}
+          </div>
+        </details>
+        <details className="kr-settings__details">
+          <summary>诊断报告与诊断包</summary>
+          <div className="kr-settings__details-body">
+            {(diagnosticsPackagesQuery.data ?? []).length > 0 ? (
+              <ul className="kr-settings__backups">
+                {(diagnosticsPackagesQuery.data ?? []).map((item) => (
+                  <li key={item.name} title={item.path}>
+                    {item.name} · {(item.bytes / 1024).toFixed(0)} KB
+                    <span className="kr-muted"> · {item.path}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="kr-muted">还没有导出过诊断包（最多保留最近 5 个）。</p>
+            )}
+            {diagnosticsQuery.data ? (
+              <ul className="kr-settings__backups">
+                <li>数据库完整性：{diagnosticsQuery.data.integrity}</li>
+                <li>缺失文件：{diagnosticsQuery.data.missingFiles}</li>
+                <li>文档：{diagnosticsQuery.data.counts.documents ?? 0}</li>
+                <li>备份：{diagnosticsQuery.data.usage.backups} 个</li>
+                <li>
+                  数据量：数据库{' '}
+                  {(diagnosticsQuery.data.usage.databaseBytes / 1024 / 1024).toFixed(1)} MB，
+                  PDF {(diagnosticsQuery.data.usage.papersBytes / 1024 / 1024).toFixed(1)} MB
+                </li>
+                <li>最近错误：{diagnosticsQuery.data.recentErrors.length} 条</li>
+                {diagnosticsQuery.data.failedTasks.map((item) => (
+                  <li key={item.category}>
+                    失败任务 · {item.category}：{item.count} 次
+                    {item.lastMessage ? `（最近：${item.lastMessage}）` : ''}
+                  </li>
+                ))}
+                {diagnosticsQuery.data.recentErrors.length > 0 ? (
+                  <li>
+                    <details>
+                      <summary>查看最近 {diagnosticsQuery.data.recentErrors.length} 条错误</summary>
+                      <ul>
+                        {diagnosticsQuery.data.recentErrors.map((item) => (
+                          <li key={`${item.timestamp}-${item.context}`}>
+                            {item.timestamp} · {item.context} · {item.message}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  </li>
+                ) : null}
+                {diagnosticsQuery.data.recentErrors.slice(0, 3).map((item) => (
+                  <li key={`${item.timestamp}-${item.context}`}>
+                    {item.context} · {item.message}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {diagnosticsQuery.isError ? (
+              <p className="kr-page-error">
+                {diagnosticsQuery.error instanceof Error
+                  ? diagnosticsQuery.error.message
+                  : '诊断失败'}
+              </p>
+            ) : null}
+          </div>
+        </details>
       </section>
 
       <section className="kr-settings__section">
         <SectionHeading
           title="从旧版迁移数据"
-          hint="选择旧 Python 版的 data 目录（包含 reader.sqlite3 与 papers）。迁移会复制文档、片段、批注、笔记、会话、模型地址与向量缓存；旧版 API Key 无法迁移，需要在这里重新填写。"
+          hint="选择含 reader.sqlite3 的旧版资料目录：旧 Python 版的 PDF 在 data 目录根部，新版本的在 papers/ 下。迁移会复制文档、片段、批注、笔记、会话、译文、页面编辑与向量缓存；旧版 API Key 无法迁移，需要在这里重新填写。"
         />
         <p className="kr-muted">从旧版 data 目录复制资料。</p>
         <p className="kr-muted">源目录不会被修改。</p>
@@ -3092,8 +3117,11 @@ function SettingsViewContent({
         <p className="kr-muted">
           应用内为精简版（版本 {USAGE_NOTICE_VERSION}，生效日期 {USAGE_NOTICE_EFFECTIVE_DATE}）。
           {usageNoticeRead
-            ? '已阅读当前版本。'
-            : '当前版本尚未标记已读；不强制阻断使用，建议开始使用前阅读。'}
+            ? '当前版本已阅读。'
+            : '当前版本尚未标记已读；首次使用的引导页会要求阅读并勾选确认。'}
+          {usageNoticeAcknowledged
+            ? '已勾选确认「已查看使用须知与隐私说明」。'
+            : '尚未勾选确认「已查看使用须知与隐私说明」。'}
         </p>
         <div className="kr-settings__actions">
           <button type="button" onClick={() => setUsageNoticeOpen(true)}>
@@ -3103,9 +3131,10 @@ function SettingsViewContent({
             <button
               type="button"
               className="kr-secondary"
-              onClick={() => void openNoticeDoc()}
+              title="优先打开安装包内的完整版；不可用时打开仓库文档"
+              onClick={() => void openFullUsageNotice()}
             >
-              打开完整版（仓库文档）
+              打开完整版
             </button>
           ) : null}
         </div>

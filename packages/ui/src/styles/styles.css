@@ -2343,85 +2343,164 @@ a {
   display: grid;
   place-items: center;
   min-height: 100%;
-  padding: 40px 24px;
+  padding: 24px;
+  overflow-y: auto;
   background:
     radial-gradient(circle at 50% 18%, rgb(255 255 255 / 52%), transparent 55%),
     var(--kr-paper);
 }
 
 .kr-guide__card {
-  width: min(620px, 100%);
-  padding: 34px 38px;
+  width: min(640px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  padding: 26px 30px;
   border: 1px solid var(--kr-line);
   border-radius: 12px;
   background: var(--kr-paper-raised);
   box-shadow: 0 18px 50px rgb(70 55 30 / 10%);
 }
 
+/* 头部：印章与标题同一行，压缩首屏高度 */
+.kr-guide__header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 0 0 18px;
+}
+
 .kr-guide__seal {
   display: block;
-  width: 64px;
-  height: 64px;
-  margin-bottom: 20px;
+  flex: none;
+  width: 52px;
+  height: 52px;
+}
+
+.kr-guide__intro {
+  min-width: 0;
 }
 
 .kr-guide h1 {
-  margin: 0 0 8px;
+  margin: 0 0 4px;
   font-family: var(--kr-font-reading);
-  font-size: var(--kr-fs-h1);
+  font-size: var(--kr-fs-h2);
   font-weight: 600;
 }
 
 .kr-guide__lead {
-  margin: 0 0 22px;
-  
+  margin: 0;
   font-family: var(--kr-font-kai);
-  font-size: var(--kr-fs-h3);
-  line-height: 1.8;
+  font-size: var(--kr-fs-ui);
+  line-height: 1.6;
   letter-spacing: 0.01em;
-  color: var(--kr-ink);
+  color: var(--kr-ink-soft);
 }
 
+/* 三步说明改为三列，窄屏自动堆叠 */
 .kr-guide ol {
   display: grid;
-  gap: 16px;
-  margin: 0 0 26px;
-  padding-left: 22px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 18px;
+  margin: 0 0 16px;
+  padding-left: 18px;
 }
 
 .kr-guide li strong {
   display: block;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
   font-family: var(--kr-font-reading);
+  font-size: var(--kr-fs-ui);
+}
+
+.kr-guide li::marker {
+  color: var(--kr-celadon-deep);
+  font-weight: 600;
 }
 
 .kr-guide li span {
   color: var(--kr-ink-soft);
-  font-size: var(--kr-fs-ui);
-  line-height: 1.6;
+  font-size: var(--kr-fs-caption);
+  line-height: 1.5;
 }
 
 .kr-guide__notice {
-  margin: 0 0 24px;
-  padding: 10px 14px;
-  border: 1px solid var(--kr-line);
-  border-radius: 8px;
-  background: var(--kr-paper-sunk);
+  margin: 0 0 14px;
+  padding: 2px 0 2px 10px;
+  border: 0;
+  border-left: 2px solid var(--kr-celadon);
+  border-radius: 0;
+  background: transparent;
   color: var(--kr-ink-soft);
   font-size: var(--kr-fs-caption);
-  line-height: 1.7;
+  line-height: 1.65;
 }
 
-.kr-guide > .kr-guide__card > button {
+/* 确认区：使用须知链接 + 两个确认框收进同一个浅色框 */
+.kr-guide__consent-box {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 14px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--kr-line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--kr-paper-sunk) 65%, transparent);
+}
+
+.kr-guide__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.kr-guide__actions > button {
   padding: 8px 20px;
   border-color: var(--kr-celadon-deep);
   background: var(--kr-celadon-deep);
   color: #fffaf0;
 }
 
-.kr-guide > .kr-guide__card > button:hover {
+.kr-guide__actions > button:hover {
   background: var(--kr-celadon);
   border-color: var(--kr-celadon);
+}
+
+@media (max-width: 640px) {
+  .kr-guide {
+    padding: 16px;
+  }
+
+  .kr-guide__card {
+    max-height: calc(100vh - 32px);
+    padding: 20px 22px;
+  }
+
+  .kr-guide__header {
+    align-items: flex-start;
+  }
+
+  .kr-guide ol {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+}
+
+@media (max-height: 720px) {
+  .kr-guide {
+    padding: 14px 20px;
+  }
+
+  .kr-guide__card {
+    max-height: calc(100vh - 28px);
+    padding: 20px 24px;
+  }
+
+  .kr-guide__seal {
+    width: 44px;
+    height: 44px;
+  }
+
+  .kr-guide__header {
+    margin-bottom: 12px;
+  }
 }
 
 .kr-settings {
@@ -3692,6 +3771,24 @@ a {
 .kr-settings__checks input {
   width: auto;
 }
+/* 设置里的单个复选框行：不要套用「标签在上、输入框占满整行」的字段行网格 */
+.kr-settings__section label.kr-settings__check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: var(--kr-fs-ui);
+  line-height: 1.6;
+}
+.kr-settings__section label.kr-settings__check span {
+  color: var(--kr-ink-soft);
+  font-size: var(--kr-fs-ui);
+  line-height: 1.6;
+}
+.kr-settings__section label.kr-settings__check input[type='checkbox'] {
+  width: auto;
+  flex: none;
+  margin: 3px 0 0;
+}
 .kr-shortcut-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3968,6 +4065,25 @@ a {
   max-height: none;
   overflow: visible;
   align-self: auto;
+}
+/* Embedding / Rerank 两栏：第二栏不继承「节间距 24」，两栏内部间距与控件基线对齐，
+   保存按钮贴底；否则右侧整列会比左侧下移 24px。 */
+.kr-usage-pair {
+  align-items: stretch;
+}
+.kr-usage-pair .kr-settings__section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.kr-usage-pair .kr-settings__section + .kr-settings__section {
+  margin-top: 0;
+}
+.kr-usage-pair .kr-settings__section > * + * {
+  margin-top: 0;
+}
+.kr-usage-pair .kr-settings__actions {
+  margin-top: auto;
 }
 .kr-titlebar__quote {
   margin-left: auto;
@@ -4933,6 +5049,45 @@ a {
   color: var(--kr-ink-soft);
   font-size: var(--kr-fs-caption);
   font-weight: 600;
+}
+/* 设置：可折叠分组（诊断与维护等长内容），默认收起以缩短篇幅 */
+.kr-settings__details {
+  border: 1px solid var(--kr-line);
+  border-radius: 8px;
+  padding: 0 14px;
+  background: color-mix(in srgb, var(--kr-paper-sunk) 55%, transparent);
+}
+.kr-settings__details > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0;
+  color: var(--kr-ink);
+  font-weight: 600;
+  font-size: var(--kr-fs-ui);
+  cursor: pointer;
+  list-style: none;
+}
+.kr-settings__details > summary::-webkit-details-marker {
+  display: none;
+}
+.kr-settings__details > summary::before {
+  content: '▸';
+  color: var(--kr-celadon-deep);
+  font-size: var(--kr-fs-caption);
+  transition: transform 150ms ease;
+}
+.kr-settings__details[open] > summary::before {
+  transform: rotate(90deg);
+}
+.kr-settings__details-body {
+  display: grid;
+  gap: 14px;
+  padding: 0 0 14px;
+}
+.kr-settings__details-body > * {
+  margin-top: 0;
+  margin-bottom: 0;
 }
 /* 设置内容区：一个页面里可以依次放多张卡片（数据与维护），统一滚动 */
 .kr-settings__content {
@@ -11621,7 +11776,7 @@ details.kr-outline2__card > summary::-webkit-details-marker {
   flex-wrap: wrap;
   align-items: baseline;
   gap: 4px;
-  margin: 0 0 14px;
+  margin: 0 0 2px;
 }
 
 .kr-guide__notice-link button {
@@ -11630,10 +11785,14 @@ details.kr-outline2__card > summary::-webkit-details-marker {
   background: none;
   color: var(--kr-celadon-deep);
   font: inherit;
-  font-size: var(--kr-fs-ui);
+  font-size: var(--kr-fs-caption);
   text-decoration: underline;
   text-underline-offset: 3px;
   cursor: pointer;
+}
+
+.kr-guide__notice-link .kr-muted {
+  font-size: var(--kr-fs-caption);
 }
 
 .kr-guide__notice-link button:hover {
@@ -11644,11 +11803,8 @@ details.kr-outline2__card > summary::-webkit-details-marker {
   display: flex;
   gap: 8px;
   align-items: flex-start;
-  margin: 0 0 8px;
-  padding: 10px 12px;
-  border: 1px solid var(--kr-line);
-  border-radius: var(--kr-radius-md);
-  background: var(--kr-paper-sunk);
+  margin: 0;
+  padding: 4px 0;
   color: var(--kr-ink);
   font-size: var(--kr-fs-ui);
   line-height: 1.6;
@@ -11660,13 +11816,27 @@ details.kr-outline2__card > summary::-webkit-details-marker {
   margin-top: 3px;
 }
 
-.kr-guide__consent-hint {
-  margin: 0 0 12px;
-  color: var(--kr-vermilion-deep);
-  font-size: var(--kr-fs-caption);
+.kr-guide__consent:has(input:disabled) {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
-.kr-guide > .kr-guide__card > button:disabled {
+.kr-guide__consent input:disabled {
+  cursor: not-allowed;
+}
+
+.kr-guide__consent-hint {
+  margin: -2px 0 2px 24px;
+  color: var(--kr-vermilion-deep);
+  font-size: var(--kr-fs-caption);
+  line-height: 1.5;
+}
+
+.kr-guide__consent-hint[data-tone='info'] {
+  color: var(--kr-ink-soft);
+}
+
+.kr-guide__actions > button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }

@@ -14,8 +14,8 @@ In short (the LICENSE text governs, this summary does not):
   receive these terms (or the URL above) and this notice;
 - commercial use is not permitted without a separate license from the licensor.
 
-Third-party components: see legal/THIRD-PARTY.md. The project name and icon are
-not licensed with the code; see legal/BRAND.md.
+Third-party components: see legal/THIRD-PARTY.md. The project name and icon
+are used to identify this project; see legal/BRAND.md.
 
 Note: this file is the plain-text notice required by the license. It is not
 legal/NOTICE.html, which is the browsable licence page the application shows

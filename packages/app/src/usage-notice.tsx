@@ -4,16 +4,16 @@
  * 完整版见仓库 `docs/USAGE-NOTICE.md`：这里只保留用户在应用内需要立刻知道的事实
  * （本地工具定位、第三方 AI 服务责任边界、BYOK 边界、三方角色、逐功能数据流向、
  * 风险、未成年人、责任边界、版本）。改动内容时同步更新 `USAGE_NOTICE_VERSION`：已读记录按版本
- * 保存，旧版本会在设置页重新提示「有新版本」，但不强制阻断使用。
+ * 保存，旧版本会在设置页提示「有新版本」；欢迎引导页要求先读当前版本并勾选确认后才能开始使用。
  */
 import { useEffect, useRef, useState, type JSX } from 'react';
 import { USAGE_NOTICE_DOC_URL, openExternalLink } from './external-links.js';
 import type { RuntimeAdapter } from './runtime.js';
 
 /** 须知版本：与 docs/USAGE-NOTICE.md 的「文档版本」保持一致。 */
-export const USAGE_NOTICE_VERSION = 'v1.9';
+export const USAGE_NOTICE_VERSION = 'v1.10';
 /** 生效日期：与 docs/USAGE-NOTICE.md 保持一致。 */
-export const USAGE_NOTICE_EFFECTIVE_DATE = '2026-11-10';
+export const USAGE_NOTICE_EFFECTIVE_DATE = '2026-11-11';
 /** 适用的应用版本。 */
 export const USAGE_NOTICE_APPLICABLE_VERSION = '勘读 Studianda 0.1.x';
 
@@ -21,6 +21,8 @@ export const USAGE_NOTICE_APPLICABLE_VERSION = '勘读 Studianda 0.1.x';
 export const USAGE_NOTICE_STORAGE_KEY = 'studianda.usageNotice.readVersion';
 /** 年龄确认（localStorage）：只记确认结果，不做身份核验。 */
 export const AGE_CONFIRM_STORAGE_KEY = 'studianda.age.confirmed';
+/** 已勾选「已查看使用须知」的版本（localStorage）：只记本机确认，不上传。 */
+export const USAGE_NOTICE_ACK_STORAGE_KEY = 'studianda.usageNotice.ackVersion';
 
 /** 使用须知的一节：标题 + 正文段落 + 要点列表。 */
 export interface UsageNoticeSection {
@@ -104,7 +106,7 @@ export const USAGE_NOTICE_SECTIONS: UsageNoticeSection[] = [
     paragraphs: [],
     bullets: [
       '面向具备独立判断能力的研究者、教师、学生与写作者；不面向未成年人提供服务与推广，不设面向未成年人的功能或监护人模式。',
-      '首次启动需要确认「已年满 18 周岁，并知悉本工具不面向未成年人」。未满 18 周岁请勿使用。'
+      '首次启动需要先打开并阅读当前版本《使用须知与隐私说明》，勾选「已查看使用须知与隐私说明」，并确认「已年满 18 周岁，并知悉本工具不面向未成年人」，之后才能开始使用。未满 18 周岁请勿使用。'
     ]
   },
   {
@@ -150,6 +152,33 @@ export function markUsageNoticeRead(): void {
   }
 }
 
+/** 读取「已勾选已查看须知」的版本；本地存储不可用时当作未确认。 */
+export function readUsageNoticeAckVersion(): string {
+  try {
+    return window.localStorage.getItem(USAGE_NOTICE_ACK_STORAGE_KEY)?.trim() ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/** 欢迎页据此要求「先阅读当前版本 + 勾选确认」后才能开始使用。 */
+export function hasAcknowledgedCurrentUsageNotice(): boolean {
+  return readUsageNoticeAckVersion() === USAGE_NOTICE_VERSION;
+}
+
+/** 记录/撤销「已查看使用须知」确认；只写本机 localStorage，不联网。 */
+export function setUsageNoticeAcknowledged(acknowledged: boolean): void {
+  try {
+    if (acknowledged) {
+      window.localStorage.setItem(USAGE_NOTICE_ACK_STORAGE_KEY, USAGE_NOTICE_VERSION);
+    } else {
+      window.localStorage.removeItem(USAGE_NOTICE_ACK_STORAGE_KEY);
+    }
+  } catch {
+    // 存储不可用时只在本次会话生效。
+  }
+}
+
 /** 是否已确认年龄条款。 */
 export function readAgeConfirmed(): boolean {
   try {
@@ -179,7 +208,7 @@ export function UsageNoticeDialog({
   adapter,
   onClose
 }: {
-  adapter: Pick<RuntimeAdapter, 'openExternal'>;
+  adapter: Pick<RuntimeAdapter, 'openExternal' | 'openUsageNotice'>;
   onClose(): void;
 }): JSX.Element {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -200,6 +229,19 @@ export function UsageNoticeDialog({
     if (!result.ok) {
       setLinkError(result.message ?? '无法打开链接，请手动复制地址在浏览器中打开。');
     }
+  };
+
+  /** 优先打开安装包内完整版；宿主未实现或失败时回退到仓库在线文档。 */
+  const openFullNotice = async (): Promise<void> => {
+    if (adapter.openUsageNotice) {
+      try {
+        const local = await adapter.openUsageNotice();
+        if (local.ok) return;
+      } catch {
+        // 回退到仓库文档
+      }
+    }
+    await openLink(USAGE_NOTICE_DOC_URL);
   };
 
   return (
@@ -261,7 +303,8 @@ export function UsageNoticeDialog({
           <button
             type="button"
             className="kr-secondary"
-            onClick={() => void openLink(USAGE_NOTICE_DOC_URL)}
+            title="优先打开安装包内的完整版；不可用时打开仓库文档"
+            onClick={() => void openFullNotice()}
           >
             打开完整版
           </button>

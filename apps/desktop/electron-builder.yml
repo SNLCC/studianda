@@ -36,6 +36,9 @@ files:
 extraResources:
   - from: ../../legal
     to: legal
+  # 完整版《使用须知与隐私说明》随安装包分发；安装包与源码仓库各自保留完整文件。
+  - from: ../../docs/USAGE-NOTICE.md
+    to: legal/USAGE-NOTICE.md
   - from: ../../LICENSE
     to: LICENSE
   - from: ../../NOTICE

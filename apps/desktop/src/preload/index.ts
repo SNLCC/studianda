@@ -20,6 +20,9 @@ contextBridge.exposeInMainWorld('studianda', {
   setupDataLocation: (): Promise<{ ok: boolean; message: string }> =>
     ipcRenderer.invoke('studianda:setup-data-location'),
   openLegalNotice: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('studianda:open-legal-notice'),
+  /** 打开安装包内完整版使用须知（legal/USAGE-NOTICE.md）。 */
+  openUsageNotice: (): Promise<{ ok: boolean; message?: string }> =>
+    ipcRenderer.invoke('studianda:open-usage-notice'),
   changeDataLocation: (): Promise<{ ok: boolean; message: string }> =>
     ipcRenderer.invoke('studianda:change-data-location'),
   /** 清空用户数据时顺带删除 userData 下的渲染/更新日志。 */

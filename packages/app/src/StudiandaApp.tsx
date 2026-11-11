@@ -121,8 +121,11 @@ import { useMediaQuery } from './use-media-query.js';
 import {
   USAGE_NOTICE_VERSION,
   UsageNoticeDialog,
+  hasAcknowledgedCurrentUsageNotice,
+  hasReadCurrentUsageNotice,
   markAgeConfirmed,
-  readAgeConfirmed
+  readAgeConfirmed,
+  setUsageNoticeAcknowledged
 } from './usage-notice.js';
 
 function BooksIcon({ collapsed }: { collapsed: boolean }): JSX.Element {
@@ -663,12 +666,18 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
   const [showSettings, setShowSettings] = useState(false);
   // 使用须知弹窗：欢迎引导页与设置页共用同一个精简版说明（localStorage 只记已读版本）。
   const [usageNoticeOpen, setUsageNoticeOpen] = useState(false);
+  // 当前版本须知的已读/已勾选确认状态：欢迎页要求先阅读并勾选，才能点「开始使用」。
+  const [usageNoticeRead, setUsageNoticeRead] = useState(() => hasReadCurrentUsageNotice());
+  const [noticeAcknowledged, setNoticeAcknowledged] = useState(() =>
+    hasAcknowledgedCurrentUsageNotice()
+  );
   // 年龄确认：首启未确认时「开始使用」保持禁用；同样只记本机 localStorage。
   const [ageConfirmed, setAgeConfirmed] = useState(() => readAgeConfirmed());
   const [showGuide, setShowGuide] = useState(() => {
     try {
-      // 年龄确认尚未记录时强制重新展示引导页（升级用户首次也要确认一次）；
-      // 已确认过的用户仍按原来的「引导只显示一次」逻辑。
+      // 使用须知未勾选确认（含升级到新版本的用户）时强制重新展示引导页；
+      // 确认过当前版本的，再按原来的「年龄确认 / 引导只显示一次」逻辑。
+      if (!hasAcknowledgedCurrentUsageNotice()) return true;
       if (window.localStorage.getItem('studianda.guide.seen') !== 'yes') return true;
       return !readAgeConfirmed();
     } catch {
@@ -2333,9 +2342,16 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     />
   ) : null;
 
-  // 使用须知弹窗（欢迎引导页 / 设置页共用）：关闭时记录已读版本，不强制阻断使用。
+  // 使用须知弹窗（欢迎引导页 / 设置页共用）：关闭时记录已读版本；
+  // 欢迎页据「已读当前版本」启用勾选确认框。
   const usageNoticeDialog = usageNoticeOpen ? (
-    <UsageNoticeDialog adapter={adapter} onClose={() => setUsageNoticeOpen(false)} />
+    <UsageNoticeDialog
+      adapter={adapter}
+      onClose={() => {
+        setUsageNoticeOpen(false);
+        setUsageNoticeRead(hasReadCurrentUsageNotice());
+      }}
+    />
   ) : null;
 
   if (showGuide) {
@@ -2343,66 +2359,100 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
       <>
         <div className="kr-guide">
           <div className="kr-guide__card">
-            <div className="kr-guide__seal">
-              <BrandMark size={64} />
-            </div>
-            <h1>欢迎使用勘读</h1>
-            <p className="kr-guide__lead">本地优先的学术空间：阅读、翻译、批注与会话。</p>
+            <header className="kr-guide__header">
+              <div className="kr-guide__seal">
+                <BrandMark size={52} />
+              </div>
+              <div className="kr-guide__intro">
+                <h1>欢迎使用勘读</h1>
+                <p className="kr-guide__lead">本地优先的学术空间：阅读、翻译、批注与会话。</p>
+              </div>
+            </header>
             <ol>
               <li>
                 <strong>导入 PDF</strong>
-                <span>文件复制到资料目录，原文件移动不会影响索引。</span>
+                <span>复制进资料目录</span>
               </li>
               <li>
                 <strong>阅读与提问</strong>
-                <span>左侧文献库、中间原文、右侧批注/笔记/会话与翻译。</span>
+                <span>批注、笔记、会话同页</span>
               </li>
               <li>
                 <strong>按需配置外部服务</strong>
-                <span>不配置模型也能本地检索；配置后才会把检索片段发给你选择的服务。</span>
+                <span>不配置也能本地检索</span>
               </li>
             </ol>
             <p className="kr-guide__notice">
-              本机数据与导出备份均为明文，未内置加密；导入内容只保存在本机，不会上传到 Studianda
-              服务器。请只导入您拥有合法权利或已获授权的资料；含个人信息、伦理审查或涉密内容时，
-              请自行使用磁盘加密、系统账户隔离等措施。AI
-              生成的回答、译文与摘要可能出错，请以文献原文为准。
+              本机数据与备份均为明文、未内置加密；内容只保存在本机，只有你主动使用外部服务时才会发送相应内容。请只导入你拥有合法权利或已获授权的资料；AI
+              生成的回答、译文与摘要可能出错，请以文献原文为准。文本层 PDF 不配置外部服务也能本地检索；扫描件需先在设置中下载本机
+              OCR 语言包，才能识别文字并检索。
             </p>
-            <p className="kr-guide__notice-link">
-              <button type="button" onClick={() => setUsageNoticeOpen(true)}>
-                查看使用须知与隐私说明
-              </button>
-              <span className="kr-muted"> · 版本 {USAGE_NOTICE_VERSION}（建议开始使用前阅读）</span>
-            </p>
-            <label className="kr-guide__consent">
-              <input
-                type="checkbox"
-                checked={ageConfirmed}
-                onChange={(event) => setAgeConfirmed(event.target.checked)}
-              />
-              <span>我已年满 18 周岁，并知悉本工具不面向未成年人。</span>
-            </label>
-            {!ageConfirmed ? (
-              <p className="kr-guide__consent-hint" role="status">
-                未满 18 周岁请勿使用；本工具不提供面向未成年人的功能或监护人模式。
+            <div className="kr-guide__consent-box">
+              <p className="kr-guide__notice-link">
+                <button type="button" onClick={() => setUsageNoticeOpen(true)}>
+                  查看使用须知与隐私说明
+                </button>
+                <span className="kr-muted">
+                  {' '}
+                  · 版本 {USAGE_NOTICE_VERSION}
+                  {usageNoticeRead ? '（已读）' : '（需先打开阅读）'}
+                </span>
               </p>
-            ) : null}
-            <button
-              type="button"
-              disabled={!ageConfirmed}
-              onClick={() => {
-                markAgeConfirmed();
-                setAgeConfirmed(true);
-                try {
-                  window.localStorage.setItem('studianda.guide.seen', 'yes');
-                } catch {
-                  // 存储不可用时只在本次会话关闭
-                }
-                setShowGuide(false);
-              }}
-            >
-              开始使用
-            </button>
+              <label className="kr-guide__consent">
+                <input
+                  type="checkbox"
+                  checked={noticeAcknowledged}
+                  disabled={!usageNoticeRead}
+                  onChange={(event) => {
+                    setNoticeAcknowledged(event.target.checked);
+                    setUsageNoticeAcknowledged(event.target.checked);
+                  }}
+                />
+                <span>已查看使用须知与隐私说明（版本 {USAGE_NOTICE_VERSION}）</span>
+              </label>
+              {!usageNoticeRead ? (
+                <p className="kr-guide__consent-hint" data-tone="info" role="status">
+                  先打开阅读须知，即可勾选此项。
+                </p>
+              ) : !noticeAcknowledged ? (
+                <p className="kr-guide__consent-hint" data-tone="info" role="status">
+                  勾选后才能开始使用。
+                </p>
+              ) : null}
+              <label className="kr-guide__consent">
+                <input
+                  type="checkbox"
+                  checked={ageConfirmed}
+                  onChange={(event) => setAgeConfirmed(event.target.checked)}
+                />
+                <span>我已年满 18 周岁，并知悉本工具不面向未成年人。</span>
+              </label>
+              {!ageConfirmed ? (
+                <p className="kr-guide__consent-hint" role="status">
+                  未满 18 周岁请勿使用。
+                </p>
+              ) : null}
+            </div>
+            <div className="kr-guide__actions">
+              <button
+                type="button"
+                disabled={!ageConfirmed || !usageNoticeRead || !noticeAcknowledged}
+                onClick={() => {
+                  markAgeConfirmed();
+                  setUsageNoticeAcknowledged(true);
+                  setAgeConfirmed(true);
+                  setNoticeAcknowledged(true);
+                  try {
+                    window.localStorage.setItem('studianda.guide.seen', 'yes');
+                  } catch {
+                    // 存储不可用时只在本次会话关闭
+                  }
+                  setShowGuide(false);
+                }}
+              >
+                开始使用
+              </button>
+            </div>
           </div>
         </div>
         {usageNoticeDialog}
@@ -2461,6 +2511,9 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
         } catch {
           // 存储不可用时只在本次会话显示
         }
+        // 用户在设置页可能刚读过/勾选过须知，重新展示引导页前同步一次本机状态。
+        setUsageNoticeRead(hasReadCurrentUsageNotice());
+        setNoticeAcknowledged(hasAcknowledgedCurrentUsageNotice());
         setShowSettings(false);
         setShowGuide(true);
       }}

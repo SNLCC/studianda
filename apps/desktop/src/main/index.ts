@@ -1205,6 +1205,32 @@ app.whenReady().then(async () => {
     if (error) dialog.showErrorBox('无法打开第三方声明', error);
     return { ok: !error };
   });
+  // 完整版《使用须知与隐私说明》：优先打开安装包内 legal/USAGE-NOTICE.md；
+  // .md 没有默认关联程序时退回浏览器打开本地文件（只读，不联网）。
+  ipcMain.handle('studianda:open-usage-notice', async (event) => {
+    if (!isTrustedIpcSender(event)) return { ok: false, message: '不可信的调用来源' };
+    const candidates = app.isPackaged
+      ? [path.join(process.resourcesPath, 'legal', 'USAGE-NOTICE.md')]
+      : [
+          path.join(app.getAppPath(), '..', '..', 'docs', 'USAGE-NOTICE.md'),
+          path.join(app.getAppPath(), 'docs', 'USAGE-NOTICE.md')
+        ];
+    const noticeFile = candidates.find((candidate) => existsSync(candidate));
+    if (!noticeFile) {
+      dialog.showErrorBox('使用须知完整版未找到', '安装包中缺少 legal/USAGE-NOTICE.md。');
+      return { ok: false, message: '使用须知完整版未找到' };
+    }
+    const error = await shell.openPath(noticeFile);
+    if (!error) return { ok: true };
+    try {
+      await shell.openExternal(pathToFileURL(noticeFile).href);
+      return { ok: true };
+    } catch (openError) {
+      const message = openError instanceof Error ? openError.message : String(openError);
+      dialog.showErrorBox('无法打开使用须知完整版', message || error);
+      return { ok: false, message: message || error };
+    }
+  });
   // 清空用户数据后，best-effort 删除 userData 下的渲染/更新日志（不在资料目录，但可能含路径/错误上下文）。
   ipcMain.handle('studianda:clear-user-logs', (event) => {
     if (!isTrustedIpcSender(event)) return { ok: false, removed: [] as string[] };

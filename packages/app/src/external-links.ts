@@ -1,8 +1,8 @@
 /**
- * 应用内统一的外部链接（使用须知完整版）与打开方式。
+ * 应用内统一的仓库文档链接（使用须知完整版的在线回退地址）。
  *
- * 只走壳已有的 `RuntimeAdapter.openExternal`（桌面端由主进程校验 http/https/mailto），
- * 不为这些入口新增 IPC；宿主未提供该能力或打开失败时退回浏览器新窗口。
+ * 完整版通常随安装包分发（resources/legal/USAGE-NOTICE.md），由宿主 `openUsageNotice` 打开；
+ * 这里只作为未实现该能力或打开失败时的回退，仍走已有的 `RuntimeAdapter.openExternal`。
  */
 import type { RuntimeAdapter } from './runtime.js';
 
