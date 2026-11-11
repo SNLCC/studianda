@@ -1,0 +1,1199 @@
+/* 独立会话页（kr-qa-*）：不依附任何文献，默认走库内检索会话。
+   样式单独放这里（而不是 styles.css），避免与本轮 ChatPanel 的样式改动互相覆盖。 */
+
+.kr-qa {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: calc(100vh - 180px);
+  min-height: 400px;
+}
+
+.kr-app-content--qa {
+  padding: 8px 14px 10px !important;
+}
+
+.kr-app-content--qa > .kr-workspace {
+  width: 100%;
+  max-width: none;
+  padding: 0;
+  gap: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.kr-app-content--qa .kr-workspace-heading {
+  align-items: center;
+  gap: var(--kr-sp-md);
+  margin-bottom: var(--kr-sp-sm);
+  padding: 0;
+}
+
+.kr-app-content--qa .kr-workspace-heading > div:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: var(--kr-sp-md);
+  min-width: 0;
+}
+
+.kr-app-content--qa .kr-workspace-heading h1 {
+  flex: none;
+  margin: 0;
+  font-size: var(--kr-fs-h3);
+  line-height: 1.3;
+}
+
+.kr-app-content--qa .kr-workspace-heading p {
+  margin: 0;
+  max-width: none;
+  overflow: hidden;
+  color: var(--kr-ink-faint);
+  font-size: var(--kr-fs-caption);
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 滚动后进入 .is-compact 时不再吸顶占位（会话页标题本来就一行）。 */
+.kr-app-content--qa .kr-workspace-heading.is-compact {
+  position: static;
+  padding: 0;
+  background: transparent;
+}
+
+.kr-app-content--qa .kr-workspace-heading__actions {
+  flex: none;
+}
+
+.kr-app-content--qa .kr-workspace-heading__actions button {
+  padding: 3px 10px;
+  font-size: var(--kr-fs-micro);
+}
+
+/* 会话页里 .kr-qa 直接撑满剩余高度（外层已改为 flex 列）。 */
+.kr-app-content--qa .kr-qa {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+
+.kr-qa__header {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  border: 1px solid var(--kr-line);
+  border-radius: 10px;
+  background: var(--kr-paper-raised);
+  box-shadow: 0 10px 30px rgb(70 55 30 / 7%);
+}
+
+.kr-qa__heading {
+  min-width: 0;
+}
+
+.kr-qa__heading h2 {
+  margin: 0 0 4px;
+  color: var(--kr-ink);
+  font-family: var(--kr-font-reading);
+  font-size: var(--kr-fs-h3);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.kr-qa__heading p {
+  max-width: 760px;
+  margin: 0;
+  color: var(--kr-ink-soft);
+  font-size: var(--kr-fs-caption);
+  line-height: 1.6;
+}
+
+.kr-qa__clear {
+  flex: none;
+  min-height: 30px;
+  padding: 5px 12px;
+  border: 1px solid var(--kr-line-strong);
+  border-radius: 7px;
+  background: var(--kr-paper);
+  color: var(--kr-ink-soft);
+  font: inherit;
+  font-size: var(--kr-fs-caption);
+  cursor: pointer;
+}
+
+.kr-qa__clear:hover:not(:disabled) {
+  border-color: var(--kr-vermilion);
+  background: var(--kr-vermilion-soft);
+  color: var(--kr-vermilion-deep);
+}
+
+.kr-qa__clear:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* 空态（文献库为空时）：仍可提问，但要如实说明库内检索没有材料。 */
+.kr-qa__empty {
+  flex: none;
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px dashed var(--kr-line-strong);
+  border-radius: 8px;
+  background: var(--kr-paper);
+  color: var(--kr-ink-faint);
+  font-size: var(--kr-fs-caption);
+  line-height: 1.6;
+}
+
+/* 对话区：高度交给 QaView 控制，ChatPanel 自己 flex 填满并滚动消息流。 */
+.kr-qa__panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 14px 20px 16px;
+  border: 1px solid var(--kr-line);
+  border-radius: 10px;
+  background: var(--kr-paper-raised);
+  box-shadow: 0 10px 30px rgb(70 55 30 / 7%);
+}
+
+/* 窄窗口：头部换行、页高改成内容撑开，避免标题与「清空对话」互相挤压。 */
+@media (max-width: 760px) {
+  .kr-qa__header {
+    flex-wrap: wrap;
+  }
+
+  .kr-qa {
+    height: auto;
+    min-height: 70vh;
+  }
+}
+
+.kr-qa__header {
+  padding: 0 0 var(--kr-sp-md);
+  border: 0;
+  border-bottom: 1px solid var(--kr-line);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.kr-qa__heading h2 {
+  font-size: var(--kr-fs-h3);
+}
+
+.kr-qa__heading p {
+  max-width: none;
+}
+
+.kr-qa__empty {
+  margin: var(--kr-sp-md) 0 0;
+  padding: var(--kr-sp-sm) var(--kr-sp-md);
+  border: 0;
+  border-left: 2px solid var(--kr-celadon);
+  border-radius: 0;
+  background: var(--kr-celadon-soft);
+  font-size: var(--kr-fs-caption);
+}
+
+.kr-qa__panel {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* ---- 独立会话 · 多会话（2026-11-07）----
+   左侧会话栏 + 右侧对话面：会话存在服务端本机数据库，上下文按完整会话历史构建。
+   版式与原独立会话页一致（宣纸底、发丝线），只是多一条可滚动的会话栏；
+   窄窗口（<=900px）会话栏变成顶部横向滚动条，避免挤压对话区。 */
+.kr-qa__layout {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  gap: var(--kr-sp-md);
+}
+
+/* 右侧对话面在 flex 行里允许收缩：长串来源/标题不会把会话栏挤出去。 */
+.kr-qa__layout > .kr-qa__panel {
+  min-width: 0;
+}
+
+.kr-qa__sessions {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--kr-sp-sm);
+  width: clamp(240px, 20vw, 300px);
+  min-height: 0;
+  padding: var(--kr-sp-sm);
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius-lg);
+  background: var(--kr-paper);
+  overflow: hidden;
+}
+
+.kr-qa__sessions-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--kr-sp-sm);
+  padding-bottom: var(--kr-sp-sm);
+  border-bottom: 1px solid var(--kr-line);
+}
+
+.kr-qa__sessions-title {
+  color: var(--kr-ink-soft);
+  font-size: var(--kr-fs-caption);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.kr-qa__new {
+  flex: none;
+  padding: 3px 8px;
+  border: 1px solid var(--kr-line-strong);
+  border-radius: var(--kr-radius-md);
+  background: var(--kr-paper-raised);
+  color: var(--kr-ink-soft);
+  font: inherit;
+  font-size: var(--kr-fs-micro);
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.kr-qa__new:hover:not(:disabled) {
+  border-color: var(--kr-celadon);
+  background: var(--kr-celadon-soft);
+  color: var(--kr-celadon-deep);
+}
+
+.kr-qa__new:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* 会话搜索：输入后 250ms 防抖再查询（按标题/消息内容词面过滤）。 */
+.kr-qa__sessions-search {
+  flex: none;
+}
+
+.kr-qa__sessions-search input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius-md);
+  background: var(--kr-paper-raised);
+  color: var(--kr-ink);
+  font: inherit;
+  font-size: var(--kr-fs-caption);
+  line-height: 1.4;
+}
+
+.kr-qa__sessions-search input::placeholder {
+  color: var(--kr-ink-faint);
+}
+
+.kr-qa__sessions-search input:focus {
+  border-color: var(--kr-celadon);
+  outline: 1px solid var(--kr-celadon-deep);
+  outline-offset: -1px;
+}
+
+.kr-qa__session-list {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--kr-sp-xs);
+  overflow-y: auto;
+  padding-right: var(--kr-sp-2xs);
+  scrollbar-color: var(--kr-line-strong) transparent;
+}
+
+.kr-qa__sessions-hint {
+  margin: 0;
+  padding: var(--kr-sp-sm) var(--kr-sp-xs);
+  color: var(--kr-ink-faint);
+  font-size: var(--kr-fs-caption);
+  line-height: 1.6;
+}
+
+.kr-qa__sessions-hint p {
+  margin: 0 0 var(--kr-sp-xs);
+}
+
+.kr-qa__session {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--kr-sp-2xs);
+  /* 会话卡片略紧凑：同样高度里能多放几条会话。 */
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--kr-radius-md);
+  background: transparent;
+  text-align: left;
+}
+
+.kr-qa__session:hover {
+  border-color: var(--kr-line);
+  background: var(--kr-paper-raised);
+}
+
+.kr-qa__session.is-active {
+  border-color: var(--kr-celadon);
+  background: var(--kr-celadon-soft);
+}
+
+.kr-qa__session--draft {
+  border-style: dashed;
+  border-color: var(--kr-line-strong);
+}
+
+.kr-qa__session-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--kr-sp-2xs);
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.kr-qa__session-main:disabled {
+  cursor: default;
+}
+
+.kr-qa__session-title {
+  display: block;
+  overflow: hidden;
+  color: var(--kr-ink);
+  font-size: var(--kr-fs-caption);
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kr-qa__session.is-active .kr-qa__session-title {
+  color: var(--kr-celadon-deep);
+  font-weight: 600;
+}
+
+.kr-qa__session-meta {
+  display: block;
+  color: var(--kr-ink-faint);
+  font-size: var(--kr-fs-micro);
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.kr-qa__session-badge {
+  align-self: flex-start;
+  padding: 0 5px;
+  border: 1px solid var(--kr-celadon);
+  border-radius: var(--kr-radius-pill);
+  background: var(--kr-paper-raised);
+  color: var(--kr-celadon-deep);
+  font-size: var(--kr-fs-micro);
+  line-height: 1.5;
+}
+
+/* 「置顶」小标记：实心青色，和「已压缩」的空心标记区分开。 */
+.kr-qa__session-badge--pinned {
+  border-color: var(--kr-celadon-deep);
+  background: var(--kr-celadon-deep);
+  color: var(--kr-paper-raised);
+}
+
+.kr-qa__session-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--kr-sp-xs);
+  margin-top: 0;
+}
+
+.kr-qa__session-actions button {
+  padding: 1px 6px;
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius-xs);
+  background: var(--kr-paper-raised);
+  color: var(--kr-ink-faint);
+  font: inherit;
+  font-size: var(--kr-fs-micro);
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.kr-qa__session-actions button:hover:not(:disabled) {
+  border-color: var(--kr-celadon);
+  background: var(--kr-celadon-soft);
+  color: var(--kr-celadon-deep);
+}
+
+/* 「置顶/取消置顶」二态：已置顶时保持青色高亮，便于扫视。 */
+.kr-qa__session-actions button.is-pinned {
+  border-color: var(--kr-celadon);
+  background: var(--kr-celadon-soft);
+  color: var(--kr-celadon-deep);
+}
+
+.kr-qa__session-actions button.is-danger:hover:not(:disabled) {
+  border-color: var(--kr-vermilion);
+  background: var(--kr-vermilion-soft);
+  color: var(--kr-vermilion-deep);
+}
+
+.kr-qa__session-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.kr-qa__session.is-editing {
+  padding: var(--kr-sp-xs);
+  border-color: var(--kr-line-strong);
+  background: var(--kr-paper-raised);
+}
+
+.kr-qa__session-edit {
+  width: 100%;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--kr-celadon);
+  border-radius: var(--kr-radius-sm);
+  background: var(--kr-paper-raised);
+  color: var(--kr-ink);
+  font: inherit;
+  font-size: var(--kr-fs-caption);
+}
+
+.kr-qa__session-edit:focus {
+  outline: 1px solid var(--kr-celadon-deep);
+  outline-offset: 1px;
+}
+
+/* 会话详情读取中的提示：只占一行，不改变对话面的高度规则。 */
+.kr-qa__loading {
+  flex: none;
+  margin: 0 0 var(--kr-sp-sm);
+  color: var(--kr-ink-faint);
+  font-size: var(--kr-fs-caption);
+}
+
+/* 会话压缩摘要（服务端把更早轮次压成摘要）：可折叠，展开后显示摘要正文与证据边界说明。
+   摘要是模型生成的上下文，不是文献原文；这里只做如实展示，不参与引用/证据。 */
+.kr-qa__summary {
+  flex: none;
+  margin: 0 0 var(--kr-sp-sm);
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius-md);
+  background: var(--kr-paper);
+}
+
+.kr-qa__summary > summary {
+  padding: var(--kr-sp-xs) var(--kr-sp-sm);
+  color: var(--kr-celadon-deep);
+  font-size: var(--kr-fs-caption);
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.kr-qa__summary > summary:focus-visible {
+  outline: 1px solid var(--kr-celadon-deep);
+  outline-offset: -1px;
+}
+
+.kr-qa__summary-body {
+  padding: 0 var(--kr-sp-sm) var(--kr-sp-sm);
+  border-top: 1px solid var(--kr-line);
+}
+
+.kr-qa__summary-text {
+  max-height: 220px;
+  overflow: auto;
+  margin: var(--kr-sp-sm) 0;
+  color: var(--kr-ink);
+  font-size: var(--kr-fs-caption);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  /* 摘要正文保留服务端生成的换行。 */
+  white-space: pre-wrap;
+}
+
+.kr-qa__summary-note {
+  margin: 0;
+  color: var(--kr-ink-faint);
+  font-size: var(--kr-fs-micro);
+  line-height: 1.6;
+}
+
+/* 独立会话每轮的上下文统计（仅 response.qa_context 存在时出现；阅读页不返回，不会显示）。 */
+.kr-chat__qa-context {
+  color: var(--kr-celadon-deep);
+}
+
+/* 「加载更早的消息」：消息流顶部的小胶囊按钮（独立会话分页用）。 */
+.kr-chat__load-earlier {
+  align-self: center;
+  flex: none;
+  margin: 2px 0 6px;
+  padding: 4px 12px;
+  border: 1px solid var(--kr-line-strong);
+  border-radius: var(--kr-radius-pill);
+  background: var(--kr-paper);
+  color: var(--kr-ink-soft);
+  font: inherit;
+  font-size: var(--kr-fs-micro);
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.kr-chat__load-earlier:hover:not(:disabled) {
+  border-color: var(--kr-celadon);
+  background: var(--kr-celadon-soft);
+  color: var(--kr-celadon-deep);
+}
+
+.kr-chat__load-earlier:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 助手消息操作区「重新生成」：沿用现有按钮样式，只做轻微强调（仅独立会话传 onRegenerate）。 */
+.kr-chat__message-actions button.kr-chat__regenerate {
+  border-color: var(--kr-celadon);
+  color: var(--kr-celadon-deep);
+}
+
+.kr-chat__message-actions button.kr-chat__regenerate:hover:not(:disabled) {
+  border-color: var(--kr-celadon-deep);
+  background: var(--kr-celadon-soft);
+}
+
+.kr-chat__message-actions button.kr-chat__regenerate:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* 回答耗时文本：放在操作区末尾，等宽数字对齐（仅独立会话计时后出现）。 */
+.kr-chat__duration {
+  align-self: center;
+  margin-left: auto;
+  color: var(--kr-ink-soft);
+  font-size: var(--kr-fs-micro);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 「存为笔记」按钮状态（传 onSaveAsNote 时出现；阅读页与独立会话共用）。 */
+.kr-chat__message-actions button.kr-chat__save-note.is-saved {
+  border-color: var(--kr-celadon);
+  color: var(--kr-celadon-deep);
+}
+
+/* 成功态保持可读：不要因为是 disabled 就变灰，但仍然不可重复点击。 */
+.kr-chat__message-actions button.kr-chat__save-note.is-saved:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
+.kr-chat__message-actions button.kr-chat__save-note.is-error {
+  border-color: var(--kr-vermilion);
+  color: var(--kr-vermilion-deep);
+}
+
+.kr-chat__message-actions button.kr-chat__save-note.is-error:hover:not(:disabled) {
+  border-color: var(--kr-vermilion-deep);
+  background: var(--kr-vermilion-soft);
+}
+
+/* 用户消息「编辑并重问」的内联编辑框（仅独立会话传 onEditUserMessage/onDeleteFromMessage 时出现）。 */
+.kr-chat__edit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--kr-sp-xs);
+  margin-top: var(--kr-sp-xs);
+}
+
+.kr-chat__edit-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 64px;
+  max-height: 220px;
+  padding: 6px 8px;
+  border: 1px solid var(--kr-celadon);
+  border-radius: var(--kr-radius-md);
+  background: var(--kr-paper-raised);
+  color: var(--kr-ink);
+  font: inherit;
+  font-size: var(--kr-fs-caption);
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.kr-chat__edit-input:focus {
+  border-color: var(--kr-celadon-deep);
+  outline: 1px solid var(--kr-celadon-deep);
+  outline-offset: -1px;
+}
+
+.kr-chat__edit-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--kr-sp-sm);
+}
+
+.kr-chat__edit-actions button {
+  padding: 3px 10px;
+  border: 1px solid var(--kr-celadon);
+  border-radius: var(--kr-radius-md);
+  background: var(--kr-paper);
+  color: var(--kr-celadon-deep);
+  font: inherit;
+  font-size: var(--kr-fs-micro);
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.kr-chat__edit-actions button:hover:not(:disabled) {
+  background: var(--kr-celadon-soft);
+}
+
+.kr-chat__edit-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.kr-chat__edit-hint {
+  color: var(--kr-ink-faint);
+  font-size: var(--kr-fs-micro);
+  line-height: 1.5;
+}
+
+.kr-chat__edit-error {
+  margin: 0;
+  color: var(--kr-vermilion-deep);
+  font-size: var(--kr-fs-micro);
+  line-height: 1.5;
+}
+
+/* 用户消息操作里的「删除此轮及之后」用朱色危险态（沿用 message-actions 基础按钮样式）。 */
+.kr-chat__message-actions button.is-danger:hover:not(:disabled) {
+  border-color: var(--kr-vermilion);
+  color: var(--kr-vermilion-deep);
+  background: var(--kr-vermilion-soft);
+}
+
+/* ChatPanel 在「完整会话」策略下的静态上下文说明（独立会话页专用）。 */
+.kr-chat__context-note {
+  margin-right: var(--kr-sp-xs);
+  color: var(--kr-ink-faint);
+  font-size: var(--kr-fs-micro);
+  white-space: nowrap;
+}
+
+/* ---- 输入区拖拽把手（ChatPanel 底部 composer 上边缘；阅读页与独立会话共用）----
+   拖拽只改变输入区高度，消息区 flex:1 同步伸缩；把手不占布局高度，避免挤压消息区。 */
+.kr-chat__composer {
+  position: relative;
+}
+
+.kr-chat__composer-resize {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  height: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: row-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.kr-chat__composer-resize::before {
+  content: "";
+  width: 48px;
+  height: 3px;
+  border-radius: var(--kr-radius-pill);
+  background: var(--kr-line-strong);
+  opacity: 0.65;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.kr-chat__composer-resize:hover::before,
+.kr-chat__composer-resize:focus-visible::before {
+  opacity: 1;
+  background: var(--kr-celadon-deep);
+}
+
+.kr-chat__composer-resize:focus-visible {
+  border-radius: var(--kr-radius-sm);
+  outline: 1px solid var(--kr-celadon);
+  outline-offset: -2px;
+}
+
+/* 高度由把手控制：关掉 textarea 原生 resize 与旧的 160px 上限，避免两个拖拽方式打架。 */
+.kr-chat__composer textarea {
+  max-height: min(360px, 42vh);
+  resize: none;
+}
+
+/* 窄窗口：会话栏变成顶部横向滚动条，不挤压对话区高度（.kr-qa 的高度规则不变）。 */
+@media (max-width: 900px) {
+  .kr-qa__layout {
+    flex-direction: column;
+    gap: var(--kr-sp-sm);
+  }
+
+  .kr-qa__sessions {
+    flex-direction: row;
+    align-items: center;
+    width: 100%;
+    padding: var(--kr-sp-xs) var(--kr-sp-sm);
+    overflow: hidden;
+  }
+
+  .kr-qa__sessions-head {
+    flex: none;
+    padding: 0 var(--kr-sp-sm) 0 0;
+    border-right: 1px solid var(--kr-line);
+    border-bottom: 0;
+  }
+
+  .kr-qa__sessions-title {
+    display: none;
+  }
+
+  /* 窄窗口的搜索框固定成一条，和「新对话」、横向会话条并排，不把会话栏撑高。 */
+  .kr-qa__sessions-search {
+    width: 150px;
+    flex: none;
+  }
+
+  .kr-qa__session-list {
+    flex: 1;
+    flex-direction: row;
+    align-items: stretch;
+    gap: var(--kr-sp-xs);
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 0 0 var(--kr-sp-2xs);
+    scrollbar-color: var(--kr-line-strong) transparent;
+  }
+
+  .kr-qa__session {
+    width: 180px;
+    flex: none;
+  }
+
+  .kr-qa__session-list .kr-qa__sessions-hint {
+    align-self: center;
+    flex: none;
+    white-space: nowrap;
+  }
+}
+
+
+/* ---- 阅读伙伴紧凑工具栏（阅读页 toolbarExtra）----
+   目标：窄侧栏里只占一行——会话下拉 flex:1 可截断 +「＋」新对话 +「搜索」+「更多」details 菜单；
+   搜索输入只在点「搜索」后展开成第二行；「更多」里放改名/删除与「完整会话」说明。 */
+.kr-chat__toolbar-extra {
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
+}
+
+.kr-chat__session-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
+}
+
+.kr-chat__session-row {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  width: 100%;
+}
+
+.kr-chat__session-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
+  height: 24px;
+  box-sizing: border-box;
+  padding: 0 4px;
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius-md);
+  background: var(--kr-paper-raised);
+  color: var(--kr-ink-soft);
+  font-size: var(--kr-fs-caption);
+  line-height: 1;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.kr-chat__session-row > button,
+.kr-chat__session-more-summary {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  box-sizing: border-box;
+  padding: 0 7px;
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius-md);
+  background: var(--kr-paper-raised);
+  color: var(--kr-ink-soft);
+  font: inherit;
+  font-size: var(--kr-fs-caption);
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  list-style: none;
+}
+
+.kr-chat__session-row > button:hover:not(:disabled),
+.kr-chat__session-more-summary:hover {
+  border-color: var(--kr-celadon);
+  background: var(--kr-celadon-soft);
+}
+
+.kr-chat__session-row > button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.kr-chat__session-search-toggle.is-active {
+  border-color: var(--kr-celadon);
+  background: var(--kr-celadon-soft);
+  color: var(--kr-ink);
+}
+
+.kr-chat__session-new {
+  width: 24px;
+  min-width: 24px;
+  padding: 0;
+  text-align: center;
+}
+
+.kr-chat__session-more {
+  position: relative;
+  flex: none;
+}
+
+.kr-chat__session-more-summary::-webkit-details-marker {
+  display: none;
+}
+
+.kr-chat__session-more-summary::marker {
+  content: "";
+}
+
+.kr-chat__session-more-menu {
+  position: absolute;
+  top: calc(100% + 2px);
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 148px;
+  max-width: min(240px, 80vw);
+  padding: 4px;
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius-md);
+  background: var(--kr-paper);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+}
+
+.kr-chat__session-more-menu button {
+  padding: 3px 8px;
+  border: 0;
+  border-radius: var(--kr-radius-sm);
+  background: transparent;
+  color: var(--kr-ink);
+  font: inherit;
+  font-size: var(--kr-fs-caption);
+  text-align: left;
+  cursor: pointer;
+}
+
+.kr-chat__session-more-menu button:hover:not(:disabled) {
+  background: var(--kr-celadon-soft);
+}
+
+.kr-chat__session-more-menu button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.kr-chat__session-more-menu .kr-chat__session-delete {
+  color: var(--kr-vermilion-deep);
+}
+
+.kr-chat__session-more-note {
+  margin: 2px 4px 0;
+  color: var(--kr-ink-faint);
+  font-size: calc(var(--kr-fs-caption) - 1px);
+  line-height: 1.45;
+}
+
+.kr-chat__session-search-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  width: 100%;
+}
+
+.kr-chat__session-search-row .kr-chat__message-search {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+
+.kr-chat__session-search-row .kr-chat__message-search-clear {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius-md);
+  background: var(--kr-paper);
+  color: var(--kr-ink-soft);
+  font: inherit;
+  font-size: var(--kr-fs-caption);
+  cursor: pointer;
+}
+
+.kr-chat__session-search-row .kr-chat__message-search-clear:hover:not(:disabled) {
+  border-color: var(--kr-celadon);
+  background: var(--kr-celadon-soft);
+}
+
+.kr-chat__session-search-row .kr-chat__message-search-clear:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* 极窄兜底：小于 340px 时允许这一行换行，会话下拉独占一行，其余按钮不溢出。 */
+@media (max-width: 340px) {
+  .kr-chat__session-row {
+    flex-wrap: wrap;
+  }
+
+  .kr-chat__session-select {
+    flex-basis: 100%;
+  }
+}
+
+/* ---- 阅读伙伴摘要压缩：会话早期摘要（模型生成，不是原文证据） ---- */
+.kr-chat__session-summary {
+  margin: 6px 8px 0;
+  padding: 6px 8px;
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius-md);
+  background: var(--kr-paper-soft, var(--kr-paper));
+  color: var(--kr-ink-soft);
+  font-size: var(--kr-fs-caption);
+}
+
+.kr-chat__session-summary summary {
+  cursor: pointer;
+  color: var(--kr-ink);
+}
+
+.kr-chat__session-summary p {
+  margin: 4px 0;
+  color: var(--kr-ink-faint, var(--kr-ink-soft));
+}
+
+.kr-chat__session-summary .kr-chat__session-summary-text {
+  white-space: pre-wrap;
+  max-height: 180px;
+  overflow: auto;
+  line-height: 1.55;
+}
+
+.kr-chat__session-summary-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 6px 0 0;
+  line-height: 1.6;
+  color: var(--kr-ink);
+  max-height: 180px;
+  overflow: auto;
+}
+
+.kr-chat__session-summary-note {
+  margin: 4px 0 0;
+  color: var(--kr-ink-faint);
+  font-size: calc(var(--kr-fs-caption) - 1px);
+}
+
+.kr-chat__context-note {
+  color: var(--kr-ink-faint);
+  font-size: var(--kr-fs-caption);
+  white-space: nowrap;
+}
+
+/* ---- 阅读伙伴：会话内搜索 / 历史分页 ---- */
+.kr-chat__message-search {
+  width: 9em;
+  min-width: 0;
+  max-width: 100%;
+  padding: 1px 4px;
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius-md);
+  background: var(--kr-paper);
+  color: var(--kr-ink-soft);
+  font: inherit;
+  font-size: var(--kr-fs-caption);
+}
+
+.kr-chat__search-panel {
+  margin: 0 0 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius-md);
+  background: var(--kr-paper);
+  color: var(--kr-ink-soft);
+  font-size: var(--kr-fs-caption);
+  max-width: 100%;
+}
+
+.kr-chat__search-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.kr-chat__search-panel-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.kr-chat__search-panel-list li + li {
+  border-top: 1px solid var(--kr-line);
+}
+
+.kr-chat__search-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  padding: 3px 4px;
+  border: 0;
+  border-radius: var(--kr-radius-sm);
+  background: transparent;
+  color: var(--kr-ink);
+  font: inherit;
+  font-size: var(--kr-fs-caption);
+  text-align: left;
+  cursor: pointer;
+}
+
+.kr-chat__search-hit:hover {
+  background: var(--kr-celadon-soft);
+}
+
+.kr-chat__search-hit-role {
+  color: var(--kr-celadon-deep);
+  font-weight: 600;
+}
+
+.kr-chat__search-hit-snippet {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+
+.kr-chat__search-hit-time {
+  color: var(--kr-ink-faint);
+  font-size: calc(var(--kr-fs-caption) - 1px);
+}
+
+.kr-chat__search-empty,
+.kr-chat__search-more {
+  margin: 4px 0 0;
+  color: var(--kr-ink-faint);
+  font-size: var(--kr-fs-caption);
+}
+
+.kr-chat__search-view-notice {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--kr-radius-sm);
+  background: var(--kr-celadon-soft);
+  color: var(--kr-ink-soft);
+  font-size: var(--kr-fs-caption);
+}
+
+.kr-chat__message.is-search-hit {
+  background: var(--kr-celadon-soft);
+  border-radius: var(--kr-radius-md);
+  transition: background 0.2s ease;
+}
+
+.kr-chat__load-earlier {
+  align-self: center;
+  margin: 0 auto 6px;
+  padding: 2px 10px;
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius-md);
+  background: var(--kr-paper);
+  color: var(--kr-ink-soft);
+  font: inherit;
+  font-size: var(--kr-fs-caption);
+  cursor: pointer;
+}
+
+.kr-chat__load-earlier:hover:not(:disabled) {
+  background: var(--kr-celadon-soft);
+  border-color: var(--kr-celadon);
+}
+
+.kr-chat__load-earlier:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 本轮 token 用量（供应商返回 usage 或按字符估算；仅供参考，不是账单）。 */
+.kr-chat__usage {
+  font-variant-numeric: tabular-nums;
+}

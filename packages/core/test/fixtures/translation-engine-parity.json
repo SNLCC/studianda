@@ -1,0 +1,119 @@
+{
+  "normalize": [
+    [
+      "　a b“c”–d",
+      "a b\"c\"-d"
+    ]
+  ],
+  "hash": "398b3f0201fe6f86",
+  "language": [
+    "zh",
+    "latin",
+    "zh",
+    "latin"
+  ],
+  "sentences": [
+    [
+      "第一句。",
+      "第二句！",
+      "第三句？"
+    ],
+    [
+      "U.S. policy changed in 2020.",
+      "Next sentence."
+    ],
+    [
+      "这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，这是一个很长的句子，结尾。"
+    ],
+    [
+      "Version 3.14 is out.",
+      "See Fig.",
+      "2."
+    ]
+  ],
+  "labels": [
+    "简体中文",
+    "English",
+    "日本語",
+    "Deutsch",
+    "xx",
+    "简体中文"
+  ],
+  "prompt": [
+    "请把下面这段英文文本翻译成简体中文。\n\n【原文】\nHello world.",
+    "请把下面这段文本翻译成English。\n\n【原文】\n你好世界。"
+  ],
+  "wrapper": [
+    "译文内容",
+    "内容",
+    "content",
+    "plain"
+  ],
+  "unfinished": [
+    true,
+    false,
+    false
+  ],
+  "sentence_span": [
+    [
+      1,
+      1
+    ],
+    [
+      2,
+      2
+    ]
+  ],
+  "map_span": [
+    [
+      8,
+      18,
+      true
+    ],
+    [
+      18,
+      25,
+      true
+    ]
+  ],
+  "map_sentences": [
+    [
+      "德尔塔艾普西隆泽塔。",
+      true
+    ],
+    [
+      "伊塔西塔约塔。",
+      true
+    ]
+  ],
+  "source": "Alpha beta gamma. Delta epsilon zeta. Eta theta iota.",
+  "translation": "阿尔法贝塔伽马。德尔塔艾普西隆泽塔。伊塔西塔约塔。",
+  "parts": [
+    "Delta epsilon zeta.",
+    "Eta theta iota."
+  ],
+  "reflow": "This is a long paragraph that is broken across lines for layout purposes and should be merged into one paragraph.\n\n3.1 Results\n\nThe next line is body text.\n\n• a list item",
+  "segments": [
+    {
+      "index": 0,
+      "text": "This is a long paragraph that is broken across lines for layout purposes and should be merged into one paragraph.",
+      "para": 0
+    },
+    {
+      "index": 1,
+      "text": "3.1 Results",
+      "para": 1
+    },
+    {
+      "index": 2,
+      "text": "The next line is body text.",
+      "para": 2
+    },
+    {
+      "index": 3,
+      "text": "• a list item",
+      "para": 3
+    }
+  ],
+  "reflow_text": "This is a long paragraph that is broken\nacross lines for layout purposes and should\nbe merged into one paragraph.\n\n3.1 Results\nThe next line is body text.\n• a list item\n"
+}

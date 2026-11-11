@@ -1,0 +1,191 @@
+name: Release
+
+# 发布流程：打 v* 标签 → Windows 打包 → 创建 draft Release（人工检查后手动发布）。
+# 详细步骤与回滚策略见 docs/RELEASE.md。
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # 手动重跑：第一次发版失败（还没产出 Release）时用。
+  # 在 Actions 页面选择本分支（main）+ 填写要发布的标签，构建当前分支并发布到该标签。
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的标签（必须已存在，形如 v0.1.0）'
+        required: true
+        default: 'v0.1.0'
+
+permissions:
+  contents: write
+
+# 同一 tag 的发布串行执行；不取消正在跑的发布，避免留下半个 Release。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # 说明：不使用第三方镜像源。electron-builder 默认从 GitHub 自己的 Release 资产
+      # 下载构建工具（NSIS 等），偶发 TLS/超时会让「--prepackaged 出安装包」失败，
+      # 因此打包步骤做了自动重试（见下）。若以后多次重试仍失败，再考虑设置
+      # ELECTRON_BUILDER_BINARIES_MIRROR 指向可信镜像。
+    steps:
+      - name: 解析发布标签
+        id: meta
+        shell: pwsh
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
+            $tag = $env:DISPATCH_TAG.Trim()
+            if ([string]::IsNullOrWhiteSpace($tag)) {
+              throw 'workflow_dispatch 必须提供 tag 输入（例如 v0.1.0）。'
+            }
+            "手动触发：构建当前 ref（$env:GITHUB_REF_NAME），发布到标签 $tag"
+          } else {
+            $tag = $env:GITHUB_REF_NAME
+            "标签触发：$tag"
+          }
+          if ($tag -notmatch '^v[0-9]') {
+            throw "发布标签必须形如 v0.1.0（当前：$tag）。"
+          }
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "tag=$tag" -Encoding utf8
+
+      - uses: actions/checkout@v5
+        with:
+          # 打 tag 的完整历史，便于 build-manifest.json 记录 commit。
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.30.3
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # 复用 Electron / electron-builder 的下载缓存，避免每次重下几十 MB 的 Electron 与 NSIS 工具。
+      # windows-latest 上 %LOCALAPPDATA% 即 ~/AppData/Local；YAML 不会展开 %VAR%，这里用 ~ 展开。
+      - name: 缓存 Electron 与 electron-builder 下载
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      # tag 由上一步解析：tag 触发用标签，手动触发用输入值。
+      - name: 校验版本
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: node scripts/check-version.mjs --tag $env:RELEASE_TAG
+
+      # 构建 + deploy core + --dir 打包 + legal 同步 + NSIS 安装包 + latest.yml / SHA256SUMS / manifest。
+      # 脚本内部 electron-builder 一律 --publish never，发布只由本 workflow 的 gh release 负责。
+      # 构建工具下载偶发失败（TLS/超时）：整步最多尝试 3 次，间隔 20 秒。
+      # 第 1 次完整构建；第 2、3 次复用已构建产物（--skip-build），只重试打包。
+      - name: 打包安装包与更新元数据
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $attempts = 3
+          for ($i = 1; $i -le $attempts; $i++) {
+            Write-Host "==> 打包尝试 $i/$attempts"
+            if ($i -eq 1) {
+              node scripts/package.mjs --installer
+            } else {
+              node scripts/package.mjs --installer --skip-build
+            }
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host '打包成功。'
+              exit 0
+            }
+            if ($i -lt $attempts) {
+              Write-Host "打包失败（exit $LASTEXITCODE），20 秒后重试…"
+              Start-Sleep -Seconds 20
+            }
+          }
+          throw '打包连续失败 3 次。若日志里是下载构建工具（NSIS/winCodeSign）失败，可能是 GitHub 资产 CDN 不稳定，稍后重跑；其它错误请看上面的日志。'
+
+      - name: 校验发布产物
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content apps/desktop/package.json -Raw | ConvertFrom-Json).version
+          $releaseDir = 'apps/desktop/release'
+          $installer = Join-Path $releaseDir "Studianda-Setup-$version.exe"
+          $blockmap = "$installer.blockmap"
+          $latest = Join-Path $releaseDir 'latest.yml'
+          $sums = Join-Path $releaseDir 'SHA256SUMS.txt'
+          $manifest = Join-Path $releaseDir 'build-manifest.json'
+          foreach ($file in @($installer, $blockmap, $latest, $sums, $manifest)) {
+            if (-not (Test-Path $file)) { throw "缺少发布产物：$file" }
+          }
+          $escapedVersion = [regex]::Escape($version)
+          $latestText = Get-Content $latest -Raw
+          if ($latestText -notmatch "version:\s*$escapedVersion") {
+            throw "latest.yml 的 version 与安装包版本 $version 不一致"
+          }
+          if ($latestText -notmatch "path:\s*Studianda-Setup-$escapedVersion\.exe") {
+            throw "latest.yml 的 path 不是 Studianda-Setup-$version.exe"
+          }
+          $sha256 = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expectedLine = "$sha256  Studianda-Setup-$version.exe"
+          if ((Get-Content $sums -Raw).Trim() -ne $expectedLine) {
+            throw "SHA256SUMS.txt 与安装包实际 sha256 不一致"
+          }
+          $manifestJson = Get-Content $manifest -Raw | ConvertFrom-Json
+          if ($manifestJson.version -ne $version) {
+            throw "build-manifest.json 的 version 是 $($manifestJson.version)，应为 $version"
+          }
+          if ($manifestJson.versions.root -ne $version -or $manifestJson.versions.desktop -ne $version) {
+            throw "build-manifest.json 的 versions 记录与 $version 不一致"
+          }
+          "发布产物校验通过：Studianda-Setup-$version.exe（$((Get-Item $installer).Length) 字节）"
+
+      - name: 创建 Draft Release
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = $env:RELEASE_TAG
+          if ([string]::IsNullOrWhiteSpace($tag)) { throw '缺少发布标签。' }
+          $version = (Get-Content apps/desktop/package.json -Raw | ConvertFrom-Json).version
+          $releaseDir = 'apps/desktop/release'
+          $notes = "docs/releases/$tag.md"
+          if (-not (Test-Path $notes)) {
+            $notes = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+            $body = @(
+              "## 勘读 Studianda $version",
+              '',
+              "- Windows x64 安装包：Studianda-Setup-$version.exe",
+              '- 应用内更新读取 latest.yml；安装包校验值见 SHA256SUMS.txt。',
+              '- 本版本未做代码签名，首次运行 Windows 可能提示「未知发布者」，属预期行为。',
+              '- 详细发版说明待补充：可编辑本 Release 正文后重新发布。'
+            )
+            Set-Content -Path $notes -Value $body -Encoding utf8
+            Write-Host "未找到 docs/releases/$tag.md，使用简短说明作为 Release 正文。"
+          }
+          $files = @(
+            (Join-Path $releaseDir "Studianda-Setup-$version.exe"),
+            (Join-Path $releaseDir "Studianda-Setup-$version.exe.blockmap"),
+            (Join-Path $releaseDir 'latest.yml'),
+            (Join-Path $releaseDir 'SHA256SUMS.txt'),
+            (Join-Path $releaseDir 'build-manifest.json')
+          )
+          gh release create $tag --draft --verify-tag --title "勘读 Studianda $version" --notes-file $notes @files
+          Write-Host "Draft Release 已创建：$tag。检查资产与安装测试后，在 GitHub 页面手动发布。"

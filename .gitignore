@@ -1,0 +1,36 @@
+node_modules/
+dist/
+out/
+*.log
+.DS_Store
+*.local
+coverage/
+.vite/
+.pnpm-store/
+*.tsbuildinfo
+release/
+__pycache__/
+*.pyc
+
+# 本地开发与证据（不发布）
+dev-notes/
+修改建议.txt
+测试用pdf.pdf
+
+# 本机环境与数据文件
+.env
+.env.*
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+*.pem
+*.key
+*.p12
+*.pfx
+.vscode/
+.idea/
+
+# 生成物
+.font-build-cache/
+studianda-src.zip

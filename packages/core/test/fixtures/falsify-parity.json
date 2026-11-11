@@ -1,0 +1,87 @@
+{
+  "rows": [
+    [
+      1,
+      "作者认为 X 成立。这是正文。"
+    ],
+    [
+      2,
+      "然而，这一结论只在样本足够大时成立。"
+    ],
+    [
+      3,
+      "不过这是一个较弱的标记。"
+    ],
+    [
+      4,
+      "However, the claim fails to generalize."
+    ]
+  ],
+  "scope": [
+    1,
+    2
+  ],
+  "extra_pages": [
+    5
+  ],
+  "limit": 2,
+  "queries": [
+    "X 的反面",
+    "X 的反面"
+  ],
+  "note": "demo",
+  "markersStrong": [
+    "然而"
+  ],
+  "markersWeakPage": [],
+  "contrast": {
+    "2": [
+      "然而"
+    ],
+    "4": [
+      "however",
+      "fails to"
+    ]
+  },
+  "counter": [
+    "然而，这一结论只在样本足够大时成立"
+  ],
+  "opposite": [
+    "理论与政策的反面与反例",
+    "理论与政策的限定条件",
+    "理论与政策受到的质疑与批评"
+  ],
+  "report": {
+    "source": "转折标记 + 反向语义",
+    "queries": [
+      "X 的反面"
+    ],
+    "scanned_pages": 4,
+    "contrast_pages": [
+      2,
+      4
+    ],
+    "semantic_pages": [
+      5
+    ],
+    "marked_pages": [
+      2,
+      4,
+      5
+    ],
+    "added_pages": [
+      4,
+      5
+    ],
+    "evidence": {
+      "2": [
+        "然而，这一结论只在样本足够大时成立"
+      ],
+      "4": [
+        "However, the claim fails to generalize."
+      ]
+    },
+    "truncated": 0,
+    "note": "demo"
+  }
+}

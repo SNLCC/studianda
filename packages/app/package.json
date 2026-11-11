@@ -1,0 +1,33 @@
+{
+  "name": "@studianda/app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "node ../../scripts/build-lib.mjs .",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@studianda/api-client": "workspace:*",
+    "@studianda/shared": "workspace:*",
+    "@studianda/ui": "workspace:*",
+    "@tanstack/react-query": "^5.90.0",
+    "pdfjs-dist": "^6.4.299",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "zustand": "^5.0.8"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "19.2.0",
+    "typescript": "^5.9.3"
+  }
+}

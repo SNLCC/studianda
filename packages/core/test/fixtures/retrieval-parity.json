@@ -1,0 +1,71 @@
+{
+  "query": "local retrieval annotations",
+  "chunks": [
+    {
+      "id": "c1",
+      "document_id": "doc-a",
+      "page": 1,
+      "name": "a.pdf",
+      "text": "Local first reading with semantic retrieval and annotations."
+    },
+    {
+      "id": "c2",
+      "document_id": "doc-a",
+      "page": 3,
+      "name": "a.pdf",
+      "text": "Annotations and evidence stay on this machine. Retrieval is local."
+    },
+    {
+      "id": "c3",
+      "document_id": "doc-b",
+      "page": 2,
+      "name": "b.pdf",
+      "text": "本地优先的文献阅读器，支持检索、批注与证据核对。"
+    },
+    {
+      "id": "c4",
+      "document_id": "doc-b",
+      "page": 5,
+      "name": "b.pdf",
+      "text": "无关的一页：烹饪与旅行。"
+    }
+  ],
+  "rank": [
+    {
+      "id": "c1",
+      "score": 1.71
+    },
+    {
+      "id": "c2",
+      "score": 1.4019
+    }
+  ],
+  "local_vectors": [
+    {
+      "id": "c1",
+      "score": 0.4737
+    },
+    {
+      "id": "c2",
+      "score": 0.4102
+    },
+    {
+      "id": "c3",
+      "score": 0.0
+    },
+    {
+      "id": "c4",
+      "score": 0.0
+    }
+  ],
+  "local_rerank": [
+    {
+      "id": "c1",
+      "score": 1.71
+    },
+    {
+      "id": "c2",
+      "score": 1.4019
+    }
+  ]
+}

@@ -1,0 +1,75 @@
+appId: com.studianda.app
+productName: Studianda
+# 安装包文件名固定为 Studianda-Setup-<version>.exe：electron-updater 的 latest.yml 里
+# path / files[0].url 都指向它，改名会导致旧版本找不到更新包；scripts/package.mjs 按此名校验。
+artifactName: Studianda-Setup-${version}.${ext}
+# 生成 electron-updater 2.16+ 格式的 latest.yml（不再写 electron-updater 1.x 的 sha2 字段）。
+electronUpdaterCompatibility: '>= 2.16'
+# 自动更新渠道：应用内更新从 GitHub Releases 读取 latest.yml 与安装包。
+# owner / repo 必须显式写出：应用内更新只依赖安装包里的 resources/app-update.yml
+# （由 scripts/package.mjs 按这段配置生成），不依赖仓库的 git remote。
+# releaseType: draft 只影响 electron-builder 自己发布时建 draft；本仓库的 Release 由
+# .github/workflows/release.yml 用 gh release create 创建，打包脚本始终带 --publish never。
+publish:
+  provider: github
+  owner: SNLCC
+  repo: studianda
+  releaseType: draft
+directories:
+  output: release
+files:
+  - out/**/*
+  - package.json
+  - LICENSE
+  - NOTICE
+  - "!**/*.map"
+  - "!**/*.test.*"
+  - "!**/out/core/src/**"
+  - "!**/test/**"
+  - "!**/tests/**"
+  - "!**/docs/**"
+  - "!**/benchmark/**"
+  - "!**/benchmarks/**"
+  - "!**/pdfjs-dist/standard_fonts/Liberation*"
+  - "!**/pdfjs-dist/standard_fonts/LICENSE_LIBERATION"
+  - "!**/pdfjs-dist/wasm/quickjs*"
+extraResources:
+  - from: ../../legal
+    to: legal
+  - from: ../../LICENSE
+    to: LICENSE
+  - from: ../../NOTICE
+    to: NOTICE
+  # 运行期窗口 / 任务栏图标（开卷版）；ico 给 Windows 用，png 作为其它平台/兜底。
+  - from: build/icon-open.ico
+    to: icon-open.ico
+  - from: build/icon-open.png
+    to: icon-open.png
+asar: true
+asarUnpack:
+  - "**/*.node"
+  - "**/@napi-rs/canvas/**"
+  - "**/tesseract.js/**"
+  - "**/tesseract.js-core/**"
+win:
+  executableName: Studianda
+  # 安装包、卸载程序、安装后的 exe / 桌面快捷方式 / 开始菜单统一用「叠书版」；
+  # 打开之后窗口与任务栏图标由 BrowserWindow.icon 换成「开卷版」（见 src/main/index.ts）。
+  icon: build/icon.ico
+  target:
+    - nsis
+nsis:
+  license: build/INSTALLER-NOTICE.txt
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: 勘读Studianda
+mac:
+  target:
+    - dmg
+  category: public.app-category.productivity

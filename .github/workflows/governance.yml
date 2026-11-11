@@ -1,0 +1,24 @@
+name: governance
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  governance:
+    # 只跑静态 Node 脚本（不构建 Electron、不依赖 Windows API），ubuntu 更快更省；
+    # Windows 侧的完整构建与 pnpm verify 由 ci.yml 的 windows-latest 覆盖。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # P1-13：禁止遥测/统计/崩溃上报 SDK 与调用。
+      - run: node scripts/check-telemetry.mjs
+      # P2-16：本地监听、无硬编码密钥、无训练/微调、无崩溃上报。
+      - run: node scripts/check-governance.mjs

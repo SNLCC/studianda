@@ -1,0 +1,19 @@
+{
+  "note": "tesseract.js 预构建 dist 内嵌的 buffer/ieee754 许可证原文（源自各自 npm 官方包）。",
+  "items": [
+    {
+      "file": "buffer-MIT.txt",
+      "url": "https://registry.npmjs.org/buffer/-/buffer-6.0.3.tgz",
+      "note": "buffer@6.0.3 (Feross Aboukhadijeh, MIT)",
+      "sha256": "06bafa45fdad2579ba0e43b0c9b2c6290287c99c4203c300254a462b38a307f6",
+      "size": 1106
+    },
+    {
+      "file": "ieee754-BSD-3-Clause.txt",
+      "url": "https://registry.npmjs.org/ieee754/-/ieee754-1.2.1.tgz",
+      "note": "ieee754@1.2.1 (Feross Aboukhadijeh, BSD-3-Clause)",
+      "sha256": "18d45466ba3253deae04667e267a91ea8de8548f18c1125264d1c9db28194cc1",
+      "size": 1465
+    }
+  ]
+}

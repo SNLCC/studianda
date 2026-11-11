@@ -1,0 +1,96 @@
+{
+  "findings": [
+    {
+      "analysis": "第一批",
+      "evidence": [
+        {
+          "source": 1,
+          "quote": "Alpha",
+          "evidence_key": "k1",
+          "page": 1,
+          "dimension": "D1"
+        }
+      ],
+      "dimension_hits": [
+        "D1"
+      ],
+      "dimension_reported": true
+    },
+    {
+      "analysis": "第二批",
+      "evidence": [
+        {
+          "source": 1,
+          "quote": "Beta",
+          "evidence_key": "k2",
+          "page": 2,
+          "dimension": "D1"
+        }
+      ],
+      "dimension_hits": [
+        "D1",
+        "D2"
+      ],
+      "dimension_reported": true
+    },
+    {
+      "analysis": "第三批",
+      "evidence": [],
+      "dimension_hits": [],
+      "dimension_reported": false
+    }
+  ],
+  "dimensions": [
+    {
+      "code": "D1",
+      "label": "概念界定"
+    },
+    {
+      "code": "D2",
+      "label": "理论依据"
+    }
+  ],
+  "expected": {
+    "dimensions": [
+      "D1",
+      "D2"
+    ],
+    "batch_reports": [
+      {
+        "D1": "FOUND",
+        "D2": "NOT_FOUND_IN_BATCH"
+      },
+      {
+        "D1": "FOUND",
+        "D2": "FOUND"
+      },
+      {
+        "D1": "NOT_FOUND_IN_BATCH",
+        "D2": "NOT_FOUND_IN_BATCH"
+      }
+    ],
+    "batches": 3,
+    "recorded_batches": 2,
+    "hits": [
+      "D1",
+      "D2"
+    ],
+    "states": {
+      "D1": "FOUND",
+      "D2": "FOUND"
+    },
+    "evidence": {
+      "D1": [
+        "k1",
+        "k2"
+      ],
+      "D2": [
+        "k2"
+      ]
+    },
+    "evidence_pages": {
+      "k1": 1,
+      "k2": 2
+    }
+  }
+}

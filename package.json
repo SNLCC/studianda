@@ -1,0 +1,35 @@
+{
+  "name": "studianda",
+  "private": true,
+  "version": "0.1.0",
+  "description": "勘读 Studianda — 一站式人文社科学术空间（Electron + Node/TypeScript Core）",
+  "license": "SEE LICENSE IN LICENSE",
+  "packageManager": "pnpm@10.30.3",
+  "scripts": {
+    "build": "pnpm --filter @studianda/shared build && pnpm --filter @studianda/ui build && pnpm --filter @studianda/api-client build && pnpm --filter @studianda/app build && pnpm --filter @studianda/core build && pnpm --filter @studianda/desktop build",
+    "build:core": "pnpm --filter @studianda/shared build && pnpm --filter @studianda/core build",
+    "dev": "pnpm build:core && pnpm --filter @studianda/desktop dev",
+    "dev:core": "pnpm --filter @studianda/core dev",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "verify": "pnpm typecheck && pnpm test && pnpm check:contract && pnpm check:ui && pnpm check:telemetry && pnpm check:governance && pnpm build",
+    "check:telemetry": "node scripts/check-telemetry.mjs",
+    "check:governance": "node scripts/check-governance.mjs",
+    "export:source": "git archive --format=zip --output=studianda-src.zip HEAD",
+    "check:contract": "node scripts/check-contract.mjs",
+    "check:ui": "pnpm --filter @studianda/ui build && node scripts/check-ui-consumable.mjs",
+    "check:version": "node scripts/check-version.mjs",
+    "bump": "node scripts/bump-version.mjs",
+    "package": "node scripts/package.mjs",
+    "test": "pnpm --filter @studianda/shared build && pnpm --filter @studianda/core test",
+    "legal:generate": "node scripts/audit-packaged-legal.mjs",
+    "legal:registry": "node scripts/audit-registry-licenses.mjs",
+    "legal:upstream": "node scripts/audit-upstream-licenses.mjs",
+    "legal:canvas": "node scripts/audit-napi-canvas-sbom.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.0"
+  }
+}

@@ -1,0 +1,133 @@
+/* ---- 字体（与 packages/ui/src/styles/styles.css 完全同源）---- */
+@font-face {
+  font-family: "Studianda Serif";
+  src: url("../../../../packages/ui/src/styles/assets/fonts/StudiandaSerifSC-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-display: block;
+}
+@font-face {
+  font-family: "Studianda Serif";
+  src: url("../../../../packages/ui/src/styles/assets/fonts/StudiandaSerifSC-SemiBold.woff2") format("woff2");
+  font-weight: 600;
+  font-display: block;
+}
+@font-face {
+  font-family: "Studianda Sans";
+  src: url("../../../../packages/ui/src/styles/assets/fonts/StudiandaSansSC-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-display: block;
+}
+@font-face {
+  font-family: "Studianda Sans";
+  src: url("../../../../packages/ui/src/styles/assets/fonts/StudiandaSansSC-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-display: block;
+}
+@font-face {
+  font-family: "Studianda Kai";
+  src: url("../../../../packages/ui/src/styles/assets/fonts/StudiandaKaiSC-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-display: block;
+}
+@font-face {
+  font-family: "Studianda Serif Latin";
+  src: url("../../../../packages/ui/src/styles/assets/fonts/StudiandaSerifLatin-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-display: block;
+}
+@font-face {
+  font-family: "Studianda Serif Latin";
+  src: url("../../../../packages/ui/src/styles/assets/fonts/StudiandaSerifLatin-SemiBold.woff2") format("woff2");
+  font-weight: 600;
+  font-display: block;
+}
+@font-face {
+  font-family: "Studianda Sans Latin";
+  src: url("../../../../packages/ui/src/styles/assets/fonts/StudiandaSansLatin-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-display: block;
+}
+@font-face {
+  font-family: "Studianda Sans Latin";
+  src: url("../../../../packages/ui/src/styles/assets/fonts/StudiandaSansLatin-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-display: block;
+}
+
+:root {
+  --paper: #fbf7ec;
+  --paper-mid: #f4eedf;
+  --page: #e2d7c3;
+  --celadon: #4f6f5a;
+  --celadon-mid: #7fa38a;
+  --celadon-soft: #e4ede2;
+  --vermilion: #b23b2e;
+  --vermilion-soft: #f4ddd6;
+  --ink: #2c2a24;
+  --ink-soft: #6f6759;
+  --ink-faint: #9a8f7d;
+  --line: #d8cbb2;
+  --line-strong: #bfae90;
+  --serif: "Studianda Serif", "Microsoft YaHei", serif;
+  --sans: "Studianda Sans", "Microsoft YaHei", sans-serif;
+  --kai: "Studianda Kai", "Studianda Serif", "Microsoft YaHei", serif;
+  --serif-latin: "Studianda Serif Latin", "Studianda Serif", Georgia, serif;
+  --sans-latin: "Studianda Sans Latin", "Studianda Sans", sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--paper);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+}
+
+/* 宣纸底：三层极淡的暖色光晕 + 横向帘纹，全部为可压缩的重复/渐变，不用噪点 */
+.paper {
+  background-color: var(--paper);
+  background-image:
+    radial-gradient(1200px 520px at 12% -12%, #fffdf6 0%, rgba(255, 253, 246, 0) 62%),
+    radial-gradient(1000px 620px at 108% 118%, #f2e9d6 0%, rgba(242, 233, 214, 0) 64%),
+    repeating-linear-gradient(
+      0deg,
+      rgba(122, 100, 68, 0.02) 0px,
+      rgba(122, 100, 68, 0.02) 1px,
+      rgba(255, 255, 255, 0) 1px,
+      rgba(255, 255, 255, 0) 4px
+    );
+}
+
+/* 通用文字工具 */
+.serif { font-family: var(--serif); }
+.sans { font-family: var(--sans); }
+.kai { font-family: var(--kai); }
+.latin { font-family: var(--serif-latin); }
+
+/* 胶囊标签 */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 27px;
+  padding: 0 13px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 253, 246, 0.58);
+  color: #4a4740;
+  font-family: var(--sans);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.pill .dot {
+  width: 4.5px;
+  height: 4.5px;
+  border-radius: 50%;
+  background: var(--celadon-mid);
+}
+.pill.accent .dot { background: var(--vermilion); }

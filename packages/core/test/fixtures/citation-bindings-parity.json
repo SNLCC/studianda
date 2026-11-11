@@ -1,0 +1,49 @@
+{
+  "answer": "第一段 [1]\n第二段 [2]",
+  "report": {
+    "claims": [
+      {
+        "claim": 1,
+        "evidence": [
+          {
+            "source": 1,
+            "quote": "第一段原文"
+          }
+        ]
+      },
+      {
+        "claim": 2,
+        "evidence": [
+          {
+            "source": 2,
+            "quote": "第二段原文"
+          }
+        ]
+      }
+    ]
+  },
+  "sources": [
+    {
+      "quotes": [
+        "第一段原文"
+      ]
+    },
+    {
+      "quotes": [
+        "第二段原文"
+      ]
+    }
+  ],
+  "expected": [
+    {
+      "index": 1,
+      "line": 1,
+      "quote": "第一段原文"
+    },
+    {
+      "index": 2,
+      "line": 2,
+      "quote": "第二段原文"
+    }
+  ]
+}

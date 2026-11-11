@@ -1,0 +1,83 @@
+[
+  {
+    "file": "StudiandaSerifSC-Regular.woff2",
+    "bytes": 11169136,
+    "sha256": "8BF92AB4CE64ED303C7A3B57B72C3D72B504084A342338D3523DB7EB6EF87CDE",
+    "weight": 400,
+    "tier": "full",
+    "codepoints": 44777,
+    "renamed": false
+  },
+  {
+    "file": "StudiandaSerifSC-SemiBold.woff2",
+    "bytes": 11267092,
+    "sha256": "E9D86C3C3CC53486400FDCC8E40B35BE82DF27AFCB51726E5CD83180F3D4087E",
+    "weight": 600,
+    "tier": "full",
+    "codepoints": 44777,
+    "renamed": false
+  },
+  {
+    "file": "StudiandaSansSC-Regular.woff2",
+    "bytes": 7559228,
+    "sha256": "3856BE309A751F4A831261845D1A9CE57ADD26686EA23614964E568CC431DBEE",
+    "weight": 400,
+    "tier": "full",
+    "codepoints": 44810,
+    "renamed": false
+  },
+  {
+    "file": "StudiandaSansSC-Medium.woff2",
+    "bytes": 7691828,
+    "sha256": "5C3A2A6AB0096D0AFA22B365E003DBEE79D02ED80C7D17729B965E4282B6A02B",
+    "weight": 500,
+    "tier": "full",
+    "codepoints": 44810,
+    "renamed": false
+  },
+  {
+    "file": "StudiandaKaiSC-Regular.woff2",
+    "bytes": 1683820,
+    "sha256": "D0ED8FC6C6C80DE00BD644BF2D007269DA2534D98250EBF94C179DFA28F6AFD7",
+    "weight": null,
+    "tier": "gb2312",
+    "codepoints": 8648,
+    "renamed": true
+  },
+  {
+    "file": "StudiandaSerifLatin-Regular.woff2",
+    "bytes": 101616,
+    "sha256": "1BDF7779C9027B28CF6025BCE7768916301DBC1F8270843190382A36E1E84BC6",
+    "weight": 400,
+    "tier": "latin",
+    "codepoints": 1847,
+    "renamed": false
+  },
+  {
+    "file": "StudiandaSerifLatin-SemiBold.woff2",
+    "bytes": 111388,
+    "sha256": "2890601D563A222A85BACBF76A589F5653E1C6B5C4E89B57A9EFBB3D96DD84CC",
+    "weight": 600,
+    "tier": "latin",
+    "codepoints": 1847,
+    "renamed": false
+  },
+  {
+    "file": "StudiandaSansLatin-Regular.woff2",
+    "bytes": 97264,
+    "sha256": "DA4B32B11F57697C4B530E7075B765C51CE8BD753493EB2DDCAD1DDEC764C875",
+    "weight": 400,
+    "tier": "latin",
+    "codepoints": 1847,
+    "renamed": false
+  },
+  {
+    "file": "StudiandaSansLatin-Medium.woff2",
+    "bytes": 103096,
+    "sha256": "A92D9F6227E18FB4C2ADAB4AF30D66A2F4327222E665A0EB3089B61211D383AC",
+    "weight": 500,
+    "tier": "latin",
+    "codepoints": 1847,
+    "renamed": false
+  }
+]

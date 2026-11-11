@@ -1,0 +1,439 @@
+[
+  {
+    "name": "single-d1",
+    "query": "alpha",
+    "documents": [
+      {
+        "id": "d1",
+        "name": "One",
+        "pages": 2,
+        "storage_kind": "copy",
+        "tags": [
+          "alpha",
+          "common"
+        ],
+        "deleted": 0
+      },
+      {
+        "id": "d2",
+        "name": "Two",
+        "pages": 2,
+        "storage_kind": "copy",
+        "tags": [
+          "beta",
+          "common"
+        ],
+        "deleted": 0
+      },
+      {
+        "id": "d3",
+        "name": "Three",
+        "pages": 1,
+        "storage_kind": "copy",
+        "tags": [],
+        "deleted": 0
+      }
+    ],
+    "chunks": [
+      {
+        "id": "c1",
+        "document_id": "d1",
+        "page": 1,
+        "text": "alpha common first page evidence"
+      },
+      {
+        "id": "c2",
+        "document_id": "d1",
+        "page": 2,
+        "text": "beta second page evidence"
+      },
+      {
+        "id": "c3",
+        "document_id": "d2",
+        "page": 1,
+        "text": "alpha other document evidence"
+      },
+      {
+        "id": "c4",
+        "document_id": "d2",
+        "page": 2,
+        "text": "common other page evidence"
+      },
+      {
+        "id": "c5",
+        "document_id": "d3",
+        "page": 1,
+        "text": "gamma isolated evidence"
+      }
+    ],
+    "crossBook": false,
+    "scope": "all",
+    "scopeTags": [],
+    "scopeDocuments": [],
+    "expected": [
+      {
+        "id": "c1",
+        "document_id": "d1",
+        "page": 1
+      }
+    ]
+  },
+  {
+    "name": "all-alpha",
+    "query": "alpha",
+    "documents": [
+      {
+        "id": "d1",
+        "name": "One",
+        "pages": 2,
+        "storage_kind": "copy",
+        "tags": [
+          "alpha",
+          "common"
+        ],
+        "deleted": 0
+      },
+      {
+        "id": "d2",
+        "name": "Two",
+        "pages": 2,
+        "storage_kind": "copy",
+        "tags": [
+          "beta",
+          "common"
+        ],
+        "deleted": 0
+      },
+      {
+        "id": "d3",
+        "name": "Three",
+        "pages": 1,
+        "storage_kind": "copy",
+        "tags": [],
+        "deleted": 0
+      }
+    ],
+    "chunks": [
+      {
+        "id": "c1",
+        "document_id": "d1",
+        "page": 1,
+        "text": "alpha common first page evidence"
+      },
+      {
+        "id": "c2",
+        "document_id": "d1",
+        "page": 2,
+        "text": "beta second page evidence"
+      },
+      {
+        "id": "c3",
+        "document_id": "d2",
+        "page": 1,
+        "text": "alpha other document evidence"
+      },
+      {
+        "id": "c4",
+        "document_id": "d2",
+        "page": 2,
+        "text": "common other page evidence"
+      },
+      {
+        "id": "c5",
+        "document_id": "d3",
+        "page": 1,
+        "text": "gamma isolated evidence"
+      }
+    ],
+    "crossBook": true,
+    "scope": "all",
+    "scopeTags": [],
+    "scopeDocuments": [],
+    "expected": [
+      {
+        "id": "c3",
+        "document_id": "d2",
+        "page": 1
+      },
+      {
+        "id": "c1",
+        "document_id": "d1",
+        "page": 1
+      }
+    ]
+  },
+  {
+    "name": "tags-common",
+    "query": "common",
+    "documents": [
+      {
+        "id": "d1",
+        "name": "One",
+        "pages": 2,
+        "storage_kind": "copy",
+        "tags": [
+          "alpha",
+          "common"
+        ],
+        "deleted": 0
+      },
+      {
+        "id": "d2",
+        "name": "Two",
+        "pages": 2,
+        "storage_kind": "copy",
+        "tags": [
+          "beta",
+          "common"
+        ],
+        "deleted": 0
+      },
+      {
+        "id": "d3",
+        "name": "Three",
+        "pages": 1,
+        "storage_kind": "copy",
+        "tags": [],
+        "deleted": 0
+      }
+    ],
+    "chunks": [
+      {
+        "id": "c1",
+        "document_id": "d1",
+        "page": 1,
+        "text": "alpha common first page evidence"
+      },
+      {
+        "id": "c2",
+        "document_id": "d1",
+        "page": 2,
+        "text": "beta second page evidence"
+      },
+      {
+        "id": "c3",
+        "document_id": "d2",
+        "page": 1,
+        "text": "alpha other document evidence"
+      },
+      {
+        "id": "c4",
+        "document_id": "d2",
+        "page": 2,
+        "text": "common other page evidence"
+      },
+      {
+        "id": "c5",
+        "document_id": "d3",
+        "page": 1,
+        "text": "gamma isolated evidence"
+      }
+    ],
+    "crossBook": true,
+    "scope": "tags",
+    "scopeTags": [
+      "common"
+    ],
+    "scopeDocuments": [],
+    "expected": [
+      {
+        "id": "c4",
+        "document_id": "d2",
+        "page": 2
+      },
+      {
+        "id": "c1",
+        "document_id": "d1",
+        "page": 1
+      }
+    ]
+  },
+  {
+    "name": "documents-d2",
+    "query": "evidence",
+    "documents": [
+      {
+        "id": "d1",
+        "name": "One",
+        "pages": 2,
+        "storage_kind": "copy",
+        "tags": [
+          "alpha",
+          "common"
+        ],
+        "deleted": 0
+      },
+      {
+        "id": "d2",
+        "name": "Two",
+        "pages": 2,
+        "storage_kind": "copy",
+        "tags": [
+          "beta",
+          "common"
+        ],
+        "deleted": 0
+      },
+      {
+        "id": "d3",
+        "name": "Three",
+        "pages": 1,
+        "storage_kind": "copy",
+        "tags": [],
+        "deleted": 0
+      }
+    ],
+    "chunks": [
+      {
+        "id": "c1",
+        "document_id": "d1",
+        "page": 1,
+        "text": "alpha common first page evidence"
+      },
+      {
+        "id": "c2",
+        "document_id": "d1",
+        "page": 2,
+        "text": "beta second page evidence"
+      },
+      {
+        "id": "c3",
+        "document_id": "d2",
+        "page": 1,
+        "text": "alpha other document evidence"
+      },
+      {
+        "id": "c4",
+        "document_id": "d2",
+        "page": 2,
+        "text": "common other page evidence"
+      },
+      {
+        "id": "c5",
+        "document_id": "d3",
+        "page": 1,
+        "text": "gamma isolated evidence"
+      }
+    ],
+    "crossBook": true,
+    "scope": "documents",
+    "scopeTags": [],
+    "scopeDocuments": [
+      "d2"
+    ],
+    "expected": [
+      {
+        "id": "c4",
+        "document_id": "d2",
+        "page": 2
+      },
+      {
+        "id": "c1",
+        "document_id": "d1",
+        "page": 1
+      },
+      {
+        "id": "c3",
+        "document_id": "d2",
+        "page": 1
+      },
+      {
+        "id": "c2",
+        "document_id": "d1",
+        "page": 2
+      }
+    ]
+  },
+  {
+    "name": "documents-d1-d3",
+    "query": "evidence",
+    "documents": [
+      {
+        "id": "d1",
+        "name": "One",
+        "pages": 2,
+        "storage_kind": "copy",
+        "tags": [
+          "alpha",
+          "common"
+        ],
+        "deleted": 0
+      },
+      {
+        "id": "d2",
+        "name": "Two",
+        "pages": 2,
+        "storage_kind": "copy",
+        "tags": [
+          "beta",
+          "common"
+        ],
+        "deleted": 0
+      },
+      {
+        "id": "d3",
+        "name": "Three",
+        "pages": 1,
+        "storage_kind": "copy",
+        "tags": [],
+        "deleted": 0
+      }
+    ],
+    "chunks": [
+      {
+        "id": "c1",
+        "document_id": "d1",
+        "page": 1,
+        "text": "alpha common first page evidence"
+      },
+      {
+        "id": "c2",
+        "document_id": "d1",
+        "page": 2,
+        "text": "beta second page evidence"
+      },
+      {
+        "id": "c3",
+        "document_id": "d2",
+        "page": 1,
+        "text": "alpha other document evidence"
+      },
+      {
+        "id": "c4",
+        "document_id": "d2",
+        "page": 2,
+        "text": "common other page evidence"
+      },
+      {
+        "id": "c5",
+        "document_id": "d3",
+        "page": 1,
+        "text": "gamma isolated evidence"
+      }
+    ],
+    "crossBook": true,
+    "scope": "documents",
+    "scopeTags": [],
+    "scopeDocuments": [
+      "d1",
+      "d3"
+    ],
+    "expected": [
+      {
+        "id": "c5",
+        "document_id": "d3",
+        "page": 1
+      },
+      {
+        "id": "c1",
+        "document_id": "d1",
+        "page": 1
+      },
+      {
+        "id": "c2",
+        "document_id": "d1",
+        "page": 2
+      }
+    ]
+  }
+]

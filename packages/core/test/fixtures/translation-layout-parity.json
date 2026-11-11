@@ -1,0 +1,182 @@
+{
+  "page": {
+    "width": 600,
+    "height": 800,
+    "spans": [
+      {
+        "bbox": [
+          40,
+          20,
+          200,
+          32
+        ],
+        "size": 9
+      },
+      {
+        "bbox": [
+          40,
+          700,
+          240,
+          715
+        ],
+        "size": 11
+      },
+      {
+        "bbox": [
+          320,
+          700,
+          520,
+          715
+        ],
+        "size": 11
+      },
+      {
+        "bbox": [
+          40,
+          100,
+          250,
+          115
+        ],
+        "size": 11
+      },
+      {
+        "bbox": [
+          40,
+          300,
+          250,
+          315
+        ],
+        "size": 11
+      },
+      {
+        "bbox": [
+          320,
+          300,
+          520,
+          315
+        ],
+        "size": 11
+      }
+    ]
+  },
+  "segments": [
+    {
+      "index": 1,
+      "text": "Journal of Studies, Vol. 3",
+      "source": ""
+    },
+    {
+      "index": 2,
+      "text": "This is a long body paragraph that should be translated fully.",
+      "source": ""
+    },
+    {
+      "index": 3,
+      "text": "Left column body paragraph.",
+      "source": ""
+    },
+    {
+      "index": 4,
+      "text": "Right column body paragraph.",
+      "source": ""
+    },
+    {
+      "index": 5,
+      "text": "作者简介：测试",
+      "source": ""
+    },
+    {
+      "index": 6,
+      "text": "Short body tail",
+      "source": ""
+    }
+  ],
+  "boxes": [
+    [
+      0.06,
+      0.02,
+      0.4,
+      0.04
+    ],
+    [
+      0.06,
+      0.55,
+      0.55,
+      0.58
+    ],
+    [
+      0.06,
+      0.3,
+      0.3,
+      0.33
+    ],
+    [
+      0.55,
+      0.3,
+      0.8,
+      0.33
+    ],
+    [
+      0.06,
+      0.88,
+      0.3,
+      0.91
+    ],
+    [
+      0.06,
+      0.9,
+      0.3,
+      0.92
+    ]
+  ],
+  "before": {
+    "header_kind": "furniture",
+    "body_kind": "body",
+    "note_kind": "note",
+    "columns": [
+      "left",
+      "left",
+      "left",
+      "right",
+      "left",
+      "left"
+    ]
+  },
+  "summary": {
+    "body_line_height": 24.0,
+    "body_font_size": 0,
+    "columns": 1
+  },
+  "after": [
+    {
+      "index": 1,
+      "column": "left",
+      "kind": "furniture"
+    },
+    {
+      "index": 2,
+      "column": "left",
+      "kind": "body"
+    },
+    {
+      "index": 3,
+      "column": "left",
+      "kind": "body"
+    },
+    {
+      "index": 4,
+      "column": "right",
+      "kind": "body"
+    },
+    {
+      "index": 5,
+      "column": "left",
+      "kind": "note"
+    },
+    {
+      "index": 6,
+      "column": "left",
+      "kind": "note"
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+[
+  {
+    "name": "mixed",
+    "answer": "第一句 [1]，第二句 [2]，第三句 [3]，越界 [4]。",
+    "sources": [
+      {
+        "quotes": [
+          "alpha"
+        ]
+      },
+      {
+        "anchor": {
+          "page": 2
+        }
+      },
+      {}
+    ],
+    "expected": {
+      "citations": 4,
+      "verified": 1,
+      "anchor_only": 1,
+      "page_only": [
+        3
+      ]
+    }
+  },
+  {
+    "name": "no-citations",
+    "answer": "没有引用。",
+    "sources": [
+      {
+        "quotes": [
+          "alpha"
+        ]
+      }
+    ],
+    "expected": {
+      "citations": 0,
+      "verified": 0,
+      "anchor_only": 0,
+      "page_only": []
+    }
+  }
+]

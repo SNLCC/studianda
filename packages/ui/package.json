@@ -1,0 +1,35 @@
+{
+  "name": "@studianda/ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "style": "./src/styles/styles.css",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./styles.css": "./src/styles/styles.css",
+    "./qa.css": "./src/styles/qa.css"
+  },
+  "scripts": {
+    "build": "node ../../scripts/build-lib.mjs .",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@studianda/shared": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "19.2.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "typescript": "^5.9.3"
+  }
+}

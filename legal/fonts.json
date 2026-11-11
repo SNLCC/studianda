@@ -1,0 +1,125 @@
+{
+  "note": "随安装包分发的字体清单。woff2 由 scripts/build-fonts.py 从官方 TTF 生成；scripts/audit-packaged-legal.mjs 读取本文件，把字体并入 legal/THIRD-PARTY.md、legal/NOTICE.html 与 legal/inventory.json。修改字体来源或版本时必须同步更新本文件。",
+  "generatedBy": "scripts/build-fonts.py",
+  "fonts": [
+    {
+      "id": "noto-serif-cjk-sc",
+      "name": "Noto Serif CJK SC",
+      "alias": "Studianda Serif",
+      "weights": [
+        400,
+        600
+      ],
+      "version": "2.003",
+      "upstream": "https://github.com/notofonts/noto-cjk/releases",
+      "sourceFile": "Variable/TTF/NotoSerifCJKsc-VF.ttf",
+      "sourceSha256": "DBF8AC0523DC19FA6294C52CE127A81C1B5B43DDC2E0915942BFD50AA58F4C53",
+      "license": "SIL Open Font License 1.1",
+      "licenseFile": "legal/font-licenses/NotoSerifCJK-OFL-1.1.txt",
+      "copyright": "© 2017-2024 Adobe (http://www.adobe.com/).",
+      "reservedFontName": null,
+      "renamed": false,
+      "files": [
+        "packages/ui/src/styles/assets/fonts/StudiandaSerifSC-Regular.woff2",
+        "packages/ui/src/styles/assets/fonts/StudiandaSerifSC-SemiBold.woff2"
+      ]
+    },
+    {
+      "id": "noto-sans-cjk-sc",
+      "name": "Noto Sans CJK SC",
+      "alias": "Studianda Sans",
+      "weights": [
+        400,
+        500
+      ],
+      "version": "2.004",
+      "upstream": "https://github.com/notofonts/noto-cjk/releases",
+      "sourceFile": "Variable/TTF/NotoSansCJKsc-VF.ttf",
+      "sourceSha256": "990C807E79C25662A5A9ECF7F971BAEB2BF2EAB9A559E5ECF15CDFDB8561D21F",
+      "license": "SIL Open Font License 1.1",
+      "licenseFile": "legal/font-licenses/NotoSansCJK-OFL-1.1.txt",
+      "copyright": "© 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'.",
+      "reservedFontName": "Source",
+      "renamed": false,
+      "files": [
+        "packages/ui/src/styles/assets/fonts/StudiandaSansSC-Regular.woff2",
+        "packages/ui/src/styles/assets/fonts/StudiandaSansSC-Medium.woff2"
+      ]
+    },
+    {
+      "id": "lxgw-wenkai-gb",
+      "name": "Studianda Kai",
+      "alias": "Studianda Kai",
+      "weights": [
+        400
+      ],
+      "version": "1.530",
+      "upstream": "https://github.com/lxgw/LxgwWenKaiGB/releases",
+      "sourceFile": "LxgwWenkaiGB-1.530/fonts/TTF/LXGWWenKaiGB-Regular.ttf",
+      "sourceSha256": "5561D48097D92E5AB99FE7B1459D381BBCDFF533BFC479207B089C6860C3990E",
+      "upstreamName": "LXGW WenKai GB（霞鹜文楷 GB）",
+      "upstreamAuthor": "LXGW (@lxgw)，基于 Fontworks / Monotype KK 的 Klee One",
+      "license": "SIL Open Font License 1.1",
+      "licenseFile": "legal/font-licenses/LXGWWenKaiGB-OFL-1.1.txt",
+      "copyright": "Copyright 2022-2026 LXGW, with Reserved Font Name '霞鹜', '霞鶩', '落霞孤鹜', '落霞孤鶩' and 'LXGW'. / Copyright 2020 The Klee Project Authors.",
+      "reservedFontName": "霞鹜 / 霞鶩 / 落霞孤鹜 / 落霞孤鶩 / LXGW",
+      "renamed": true,
+      "renameNote": "子集化与格式转换构成 OFL 定义的 Modified Version；原家族名含保留名 LXGW，故按 OFL 第 3 条改为 Studianda Kai。版权声明、作者与许可字段原样保留。",
+      "files": [
+        "packages/ui/src/styles/assets/fonts/StudiandaKaiSC-Regular.woff2"
+      ]
+    },
+    {
+      "id": "noto-serif-latin",
+      "name": "Noto Serif",
+      "alias": "Studianda Serif Latin",
+      "role": "拉丁伴随字体（独立族名）：只覆盖 CJK 版缺失的拉丁扩展 / IPA / 组合符号 / 希腊 / 西里尔 / 上下标，通过 unicode-range 局部生效",
+      "weights": [
+        400,
+        600
+      ],
+      "version": "2.015",
+      "upstream": "https://github.com/notofonts/latin-greek-cyrillic",
+      "sourceFile": "NotoSerif-VF.ttf",
+      "sourceSha256": "4D8E6761424656867019081A1A01336F3CB086982682698714054FC33F782713",
+      "license": "SIL Open Font License 1.1",
+      "licenseFile": "legal/font-licenses/NotoLatin-OFL-1.1.txt",
+      "copyright": "Copyright 2022 The Noto Project Authors (https://github.com/notofonts/latin-greek-cyrillic)",
+      "reservedFontName": null,
+      "renamed": false,
+      "files": [
+        "packages/ui/src/styles/assets/fonts/StudiandaSerifLatin-Regular.woff2",
+        "packages/ui/src/styles/assets/fonts/StudiandaSerifLatin-SemiBold.woff2"
+      ]
+    },
+    {
+      "id": "noto-sans-latin",
+      "name": "Noto Sans",
+      "alias": "Studianda Sans Latin",
+      "role": "拉丁伴随字体（独立族名）：同上，与无衬线界面字体配对",
+      "weights": [
+        400,
+        500
+      ],
+      "version": "2.015",
+      "upstream": "https://github.com/notofonts/latin-greek-cyrillic",
+      "sourceFile": "NotoSans-VF.ttf",
+      "sourceSha256": "BFB7BB691513F12E734DC346C03A03F784912432D7E3FA8E56EFCF906FE86B3D",
+      "license": "SIL Open Font License 1.1",
+      "licenseFile": "legal/font-licenses/NotoLatin-OFL-1.1.txt",
+      "copyright": "Copyright 2022 The Noto Project Authors (https://github.com/notofonts/latin-greek-cyrillic)",
+      "reservedFontName": null,
+      "renamed": false,
+      "files": [
+        "packages/ui/src/styles/assets/fonts/StudiandaSansLatin-Regular.woff2",
+        "packages/ui/src/styles/assets/fonts/StudiandaSansLatin-Medium.woff2"
+      ]
+    }
+  ],
+  "coverage": {
+    "serifSans": "CJK 字体取全部码位（CJK 基本区/扩展 A/扩展 B/兼容区/谚文/假名/拉丁/希腊/西里尔/数学与符号），用于承载用户输入与 AI 回答文本",
+    "latinCompanion": "Noto Serif / Noto Sans（latin-greek-cyrillic）子集，仅通过 unicode-range 补充 CJK 字体缺失的拉丁扩展 A/B、IPA、组合附加符号、完整希腊/西里尔、上下标；通用标点留在 CJK 字体以保持中文标点宽度",
+    "kai": "GB2312 + 常用符号块；仅用于固定装饰文案，缺字时回退到 Studianda Serif（仍在随包字体链内）",
+    "knownFallback": "emoji（彩色字形）、生僻数学/符号扩展、阿拉伯/泰/天城文等未随包的文字系统仍会回退到系统字体；这属于渲染使用，不构成字体随包分发"
+  }
+}

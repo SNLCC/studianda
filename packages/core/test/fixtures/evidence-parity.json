@@ -1,0 +1,190 @@
+[
+  {
+    "name": "valid",
+    "json": "{\"analysis\": \"要点\", \"evidence\": [{\"source\": 1, \"quote\": \"Alpha exact quote.\"}]}",
+    "sources": [
+      {
+        "document_id": "d1",
+        "page": 1,
+        "name": "paper.pdf",
+        "text": "Alpha exact quote. Second sentence."
+      },
+      {
+        "document_id": "d1",
+        "page": 2,
+        "name": "paper.pdf",
+        "text": "Beta other page quote."
+      }
+    ],
+    "expected": {
+      "ok": true,
+      "result": {
+        "analysis": "要点",
+        "evidence": [
+          {
+            "source": 1,
+            "quote": "Alpha exact quote.",
+            "evidence_key": "726dd0f6131551f4",
+            "page": 1
+          }
+        ],
+        "no_relevant_evidence": false
+      }
+    }
+  },
+  {
+    "name": "wrong-source",
+    "json": "{\"analysis\": \"要点\", \"evidence\": [{\"source\": 1, \"quote\": \"Beta other page quote.\"}]}",
+    "sources": [
+      {
+        "document_id": "d1",
+        "page": 1,
+        "name": "paper.pdf",
+        "text": "Alpha exact quote. Second sentence."
+      },
+      {
+        "document_id": "d1",
+        "page": 2,
+        "name": "paper.pdf",
+        "text": "Beta other page quote."
+      }
+    ],
+    "expected": {
+      "ok": false,
+      "message": "证据无法在原文中核验",
+      "repair": "上一次返回里有 1 条摘引没有通过核对，逐条修正后**重新返回完整的 JSON**：\n1. 你写的摘引：“”\n   原因：摘引不属于 [1]（它逐字出现在 [2]）\n   怎么改：把 source 改成 2，或改引 [1] 里真实存在的句子",
+      "foreign": null,
+      "faults": [
+        [
+          "摘引不属于 [1]（它逐字出现在 [2]）",
+          "把 source 改成 2，或改引 [1] 里真实存在的句子",
+          ""
+        ]
+      ]
+    }
+  },
+  {
+    "name": "invented",
+    "json": "{\"analysis\": \"要点\", \"evidence\": [{\"source\": 1, \"quote\": \"INVENTED QUOTE\"}]}",
+    "sources": [
+      {
+        "document_id": "d1",
+        "page": 1,
+        "name": "paper.pdf",
+        "text": "Alpha exact quote. Second sentence."
+      },
+      {
+        "document_id": "d1",
+        "page": 2,
+        "name": "paper.pdf",
+        "text": "Beta other page quote."
+      }
+    ],
+    "expected": {
+      "ok": false,
+      "message": "证据无法在原文中核验",
+      "repair": "上一次返回里有 1 条摘引没有通过核对，逐条修正后**重新返回完整的 JSON**：\n1. 你写的摘引：“INVENTED QUOTE”\n   原因：摘引在原文里找不到（可能是改写或翻译）\n   怎么改：只复制 material 里出现过的连续原文，一字不改、不翻译、不补全",
+      "foreign": null,
+      "faults": [
+        [
+          "摘引在原文里找不到（可能是改写或翻译）",
+          "只复制 material 里出现过的连续原文，一字不改、不翻译、不补全",
+          "INVENTED QUOTE"
+        ]
+      ]
+    }
+  },
+  {
+    "name": "missing-evidence-flag",
+    "json": "{\"analysis\": \"要点\", \"evidence\": []}",
+    "sources": [
+      {
+        "document_id": "d1",
+        "page": 1,
+        "name": "paper.pdf",
+        "text": "Alpha exact quote. Second sentence."
+      },
+      {
+        "document_id": "d1",
+        "page": 2,
+        "name": "paper.pdf",
+        "text": "Beta other page quote."
+      }
+    ],
+    "expected": {
+      "ok": false,
+      "message": "阅读记录缺少证据或明确的无相关证据说明",
+      "repair": "本批确实与问题无关时必须显式返回 \"no_relevant_evidence\": true；否则请给出本批的逐字摘引",
+      "foreign": null,
+      "faults": []
+    }
+  },
+  {
+    "name": "salvage-invented",
+    "json": "{\"analysis\": \"要点\", \"evidence\": [{\"source\": 1, \"quote\": \"INVENTED QUOTE\"}]}",
+    "salvage": true,
+    "sources": [
+      {
+        "document_id": "d1",
+        "page": 1,
+        "name": "paper.pdf",
+        "text": "Alpha exact quote. Second sentence."
+      },
+      {
+        "document_id": "d1",
+        "page": 2,
+        "name": "paper.pdf",
+        "text": "Beta other page quote."
+      }
+    ],
+    "expected": {
+      "ok": true,
+      "result": {
+        "analysis": "要点",
+        "evidence": [],
+        "no_relevant_evidence": true,
+        "quotes_rejected": [
+          {
+            "reason": "摘引在原文里找不到（可能是改写或翻译）",
+            "quote": "INVENTED QUOTE"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "foreign",
+    "json": "{\"analysis\": \"要点\", \"evidence\": [{\"source\": 1, \"quote\": \"INVENTED QUOTE\"}]}",
+    "foreign_page": 4,
+    "sources": [
+      {
+        "document_id": "d1",
+        "page": 1,
+        "name": "paper.pdf",
+        "text": "Alpha exact quote. Second sentence."
+      },
+      {
+        "document_id": "d1",
+        "page": 2,
+        "name": "paper.pdf",
+        "text": "Beta other page quote."
+      }
+    ],
+    "expected": {
+      "ok": false,
+      "message": "证据无法在原文中核验",
+      "repair": "上一次返回里有 1 条摘引没有通过核对，逐条修正后**重新返回完整的 JSON**：\n1. 你写的摘引：“INVENTED QUOTE”\n   原因：摘引在原文里找不到（可能是改写或翻译）（这一句写在第 4 页）\n   怎么改：只复制 material 里出现过的连续原文，一字不改、不翻译、不补全",
+      "foreign": [
+        4,
+        "INVENTED QUOTE"
+      ],
+      "faults": [
+        [
+          "摘引在原文里找不到（可能是改写或翻译）（这一句写在第 4 页）",
+          "只复制 material 里出现过的连续原文，一字不改、不翻译、不补全",
+          "INVENTED QUOTE"
+        ]
+      ]
+    }
+  }
+]

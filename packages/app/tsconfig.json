@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@studianda/api-client": ["../api-client/src/index.ts"],
+      "@studianda/shared": ["../shared/src/index.ts"],
+      "@studianda/ui": ["../ui/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
+}

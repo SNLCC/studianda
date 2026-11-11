@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node", "electron"],
+    "baseUrl": ".",
+    "paths": {
+      "@studianda/app": ["../../packages/app/src/index.ts"],
+      "@studianda/ui": ["../../packages/ui/src/index.ts"],
+      "@studianda/api-client": ["../../packages/api-client/src/index.ts"],
+      "@studianda/shared": ["../../packages/shared/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "electron.vite.config.ts"]
+}

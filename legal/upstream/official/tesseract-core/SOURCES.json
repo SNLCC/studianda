@@ -1,0 +1,59 @@
+{
+  "fetchedAt": "2026-10-28T06:32:44.648Z",
+  "items": [
+    {
+      "file": "DanBloomberg-leptonica.txt",
+      "url": "https://raw.githubusercontent.com/DanBloomberg/leptonica/master/COPYING",
+      "sha256": "87829abb5bbb00b55a107365da89e9a33f86c4250169e5a1e5588505be7d5806",
+      "size": 1521
+    },
+    {
+      "file": "giflib-COPYING.txt",
+      "url": "https://sourceforge.net/p/giflib/code/ci/master/tree/COPYING?format=raw",
+      "sha256": "ed5d90cb4a041bddad679470a071302ab05ae5d0ec2cf8f9c97ad7b2708751e6",
+      "size": 1039
+    },
+    {
+      "file": "libjpeg-turbo-LICENSE.md",
+      "url": "https://raw.githubusercontent.com/libjpeg-turbo/libjpeg-turbo/main/LICENSE.md",
+      "sha256": "ba6bceebcba0fdd35488477c2cca8c4632ce82c74dbfbc87d886ce6fc4433579",
+      "size": 6077
+    },
+    {
+      "file": "libpng-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/pnggroup/libpng/libpng16/LICENSE",
+      "sha256": "bdb0a645ea18c60507d0368379b1ac5474b92255fcc2d115e07486a7672ba526",
+      "size": 5345
+    },
+    {
+      "file": "libtiff-LICENSE.md",
+      "url": "https://raw.githubusercontent.com/libsdl-org/libtiff/master/LICENSE.md",
+      "sha256": "0e27c2382d7b8147972bbb746e04059a1152c8d0fda9d03ef1399d1a433c4ade",
+      "size": 2416
+    },
+    {
+      "file": "libwebp-COPYING.txt",
+      "url": "https://raw.githubusercontent.com/webmproject/libwebp/main/COPYING",
+      "sha256": "5aec868f669e384a22372a4e8a1a6cd7d44c64cd451f960ca69cc170d1e13acf",
+      "size": 1496
+    },
+    {
+      "file": "openlibm-LICENSE.md",
+      "url": "https://raw.githubusercontent.com/JuliaMath/openlibm/master/LICENSE.md",
+      "sha256": "b1843fbf5b03f519a5f0a44fce751bdd1022ae7148614923f9d6293e17a18b17",
+      "size": 5857
+    },
+    {
+      "file": "tesseract-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/tesseract-ocr/tesseract/main/LICENSE",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "size": 11358
+    },
+    {
+      "file": "zlib-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/madler/zlib/master/LICENSE",
+      "sha256": "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2",
+      "size": 1002
+    }
+  ]
+}

@@ -1,0 +1,271 @@
+{
+  "costs": {
+    "s1": 528,
+    "s2": 591,
+    "s3": 431
+  },
+  "splitBudget": 600,
+  "split": [
+    {
+      "id": "s1",
+      "text": "Alpha first sentence. padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding pad",
+      "offset_start": 0,
+      "offset_end": 193
+    },
+    {
+      "id": "s1",
+      "text": "ding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding \nSecond line of page one.",
+      "offset_start": 193,
+      "offset_end": 527
+    },
+    {
+      "id": "s2",
+      "text": "中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK ",
+      "offset_start": 0,
+      "offset_end": 193
+    },
+    {
+      "id": "s2",
+      "text": "容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。",
+      "offset_start": 193,
+      "offset_end": 440
+    },
+    {
+      "id": "s3",
+      "text": "Another document begins here. more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more mor",
+      "offset_start": 0,
+      "offset_end": 193
+    },
+    {
+      "id": "s3",
+      "text": "e more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more ",
+      "offset_start": 193,
+      "offset_end": 430
+    }
+  ],
+  "batches": {
+    "1500-0": [
+      [
+        {
+          "index": 1,
+          "id": "s1",
+          "page": 1
+        },
+        {
+          "index": 2,
+          "id": "s2",
+          "page": 2
+        }
+      ],
+      [
+        {
+          "index": 3,
+          "id": "s3",
+          "page": 1
+        }
+      ]
+    ],
+    "1500-1": [
+      [
+        {
+          "index": 1,
+          "id": "s1",
+          "page": 1
+        },
+        {
+          "index": 2,
+          "id": "s2",
+          "page": 2
+        }
+      ],
+      [
+        {
+          "index": 3,
+          "id": "s3",
+          "page": 1
+        }
+      ]
+    ],
+    "900-0": [
+      [
+        {
+          "index": 1,
+          "id": "s1",
+          "page": 1
+        }
+      ],
+      [
+        {
+          "index": 2,
+          "id": "s2",
+          "page": 2
+        }
+      ],
+      [
+        {
+          "index": 3,
+          "id": "s3",
+          "page": 1
+        }
+      ]
+    ],
+    "700-0": [
+      [
+        {
+          "index": 1,
+          "id": "s1",
+          "page": 1
+        }
+      ],
+      [
+        {
+          "index": 2,
+          "id": "s2",
+          "page": 2
+        }
+      ],
+      [
+        {
+          "index": 3,
+          "id": "s3",
+          "page": 1
+        }
+      ]
+    ],
+    "700-1": [
+      [
+        {
+          "index": 1,
+          "id": "s1",
+          "page": 1
+        }
+      ],
+      [
+        {
+          "index": 2,
+          "id": "s2",
+          "page": 2
+        }
+      ],
+      [
+        {
+          "index": 3,
+          "id": "s3",
+          "page": 1
+        }
+      ]
+    ]
+  },
+  "sources": [
+    {
+      "id": "s1",
+      "document_id": "d1",
+      "name": "paper-one.pdf",
+      "page": 1,
+      "text": "Alpha first sentence. padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding \nSecond line of page one."
+    },
+    {
+      "id": "s2",
+      "document_id": "d1",
+      "name": "paper-one.pdf",
+      "page": 2,
+      "text": "中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。中文第二页文本，用来验证 CJK 容量估算。"
+    },
+    {
+      "id": "s3",
+      "document_id": "d2",
+      "name": "paper-two.pdf",
+      "page": 1,
+      "text": "Another document begins here. more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more more "
+    }
+  ],
+  "overlapSources": [
+    {
+      "id": "o1",
+      "document_id": "d3",
+      "name": "overlap.pdf",
+      "page": 1,
+      "text": "overlap row 1 word word word word word word word word "
+    },
+    {
+      "id": "o2",
+      "document_id": "d3",
+      "name": "overlap.pdf",
+      "page": 2,
+      "text": "overlap row 2 word word word word word word word word "
+    },
+    {
+      "id": "o3",
+      "document_id": "d3",
+      "name": "overlap.pdf",
+      "page": 3,
+      "text": "overlap row 3 word word word word word word word word "
+    },
+    {
+      "id": "o4",
+      "document_id": "d3",
+      "name": "overlap.pdf",
+      "page": 4,
+      "text": "overlap row 4 word word word word word word word word "
+    }
+  ],
+  "overlapBatches": {
+    "300-0": [
+      [
+        {
+          "index": 1,
+          "id": "o1",
+          "page": 1
+        },
+        {
+          "index": 2,
+          "id": "o2",
+          "page": 2
+        },
+        {
+          "index": 3,
+          "id": "o3",
+          "page": 3
+        }
+      ],
+      [
+        {
+          "index": 4,
+          "id": "o4",
+          "page": 4
+        }
+      ]
+    ],
+    "300-1": [
+      [
+        {
+          "index": 1,
+          "id": "o1",
+          "page": 1
+        },
+        {
+          "index": 2,
+          "id": "o2",
+          "page": 2
+        },
+        {
+          "index": 3,
+          "id": "o3",
+          "page": 3
+        }
+      ],
+      [
+        {
+          "index": 3,
+          "id": "o3",
+          "page": 3
+        },
+        {
+          "index": 4,
+          "id": "o4",
+          "page": 4
+        }
+      ]
+    ]
+  }
+}

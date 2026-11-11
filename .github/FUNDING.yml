@@ -1,0 +1,21 @@
+# 赞助/打赏入口（可选）
+#
+# 本文件只控制 GitHub 仓库页是否显示 “Sponsor” 按钮，不改变项目许可证，
+# 也不构成商业许可或任何付款承诺。
+#
+# 启用方式：取消对应行注释并填写你的账号/链接。
+# 不需要打赏时，保持全部注释即可（GitHub 不会显示赞助按钮）。
+#
+# GitHub Sponsors 需要先在 https://github.com/sponsors 开通资格。
+# github: [your-github-username]
+#
+# 其他平台示例（按需启用）：
+# patreon: your-patreon-name
+# ko_fi: your-kofi-name
+# tidelift: npm/package-name
+# custom: ["https://your-donation-page.example"]
+#
+# 注意：
+# - 打赏是自愿支持，不是购买商业使用权；
+# - 如提供付费商业许可，请另写商业许可协议，不要用打赏页面代替；
+# - 收入可能涉及税务与平台条款，请按所在地规则处理。

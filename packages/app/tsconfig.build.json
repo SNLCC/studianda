@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "paths": {
+      "@studianda/api-client": ["../api-client/dist/index.d.ts"],
+      "@studianda/shared": ["../shared/dist/index.d.ts"],
+      "@studianda/ui": ["../ui/dist/index.d.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
+}

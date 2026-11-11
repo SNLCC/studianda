@@ -1,0 +1,179 @@
+{
+  "fetchedAt": "2026-10-28T06:40:53.861Z",
+  "items": [
+    {
+      "file": "anstyle-LICENSE-APACHE.txt",
+      "url": "https://crates.io/api/v1/crates/anstyle/1.0.14/download",
+      "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08",
+      "size": 11358
+    },
+    {
+      "file": "anstyle-LICENSE-MIT.txt",
+      "url": "https://crates.io/api/v1/crates/anstyle/1.0.14/download",
+      "sha256": "6efb0476a1cc085077ed49357026d8c173bf33017278ef440f222fb9cbcb66e6",
+      "size": 1062
+    },
+    {
+      "file": "canvas-LICENSE.txt",
+      "url": "https://github.com/Brooooooklyn/canvas",
+      "sha256": "0b8e3b4f0042f33677406344854c1dcce3a2878eb3a3f6baee58c6f5752655ce",
+      "size": 2705
+    },
+    {
+      "file": "clap-LICENSE-APACHE.txt",
+      "url": "https://raw.githubusercontent.com/clap-rs/clap/master/LICENSE-APACHE",
+      "sha256": "249fdb6694467dd615b259f7ddde07be3f8ae5a72cecebb0e24f6629af4215fe",
+      "size": 11349
+    },
+    {
+      "file": "clap-LICENSE-MIT.txt",
+      "url": "https://raw.githubusercontent.com/clap-rs/clap/master/LICENSE-MIT",
+      "sha256": "6efb0476a1cc085077ed49357026d8c173bf33017278ef440f222fb9cbcb66e6",
+      "size": 1062
+    },
+    {
+      "file": "cxx-LICENSE-APACHE.txt",
+      "url": "https://raw.githubusercontent.com/dtolnay/cxx/master/LICENSE-APACHE",
+      "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+      "size": 9723
+    },
+    {
+      "file": "cxx-LICENSE-MIT.txt",
+      "url": "https://raw.githubusercontent.com/dtolnay/cxx/master/LICENSE-MIT",
+      "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+      "size": 1023
+    },
+    {
+      "file": "fontations-LICENSE.txt",
+      "url": "https://api.github.com/repos/googlefonts/fontations/license",
+      "sha256": "eba684204073ed715c4abb48129acdfd2bff8ae48339e6a7da3b341d3027b7f0",
+      "size": 9701
+    },
+    {
+      "file": "ICU-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/unicode-org/icu/main/LICENSE",
+      "sha256": "e09827667e0bb3c808b2a463548ba814a5e6249b67353234d70c8dfc2bcc417d",
+      "size": 27718
+    },
+    {
+      "file": "MPL-2.0.txt",
+      "url": "https://www.mozilla.org/media/MPL/2.0/index.txt",
+      "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+      "size": 16726
+    },
+    {
+      "file": "NAPI-CANVAS-THIRD-PARTY.md",
+      "url": "",
+      "sha256": "122ccc670118737943c1f8f4a7cc11092675e609a90e49fa11161003a656f504",
+      "size": 3825
+    },
+    {
+      "file": "sbom.cdx.json",
+      "url": "",
+      "sha256": "61c3c58b03c786877a4a493c48151b2dcadb1f3043b8f8be1d350b045207f501",
+      "size": 92909
+    },
+    {
+      "file": "Skia-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/google/skia/main/LICENSE",
+      "sha256": "5f787c1dee3c56547f09ccc2906ab5f5293c4d8dd6c8654e573216c38e908dbd",
+      "size": 1507
+    },
+    {
+      "file": "strsim-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/rapidfuzz/strsim-rs/master/LICENSE",
+      "sha256": "1e697ce8d21401fbf1bddd9b5c3fd4c4c79ae1e3bdf51f81761c85e11d5a89cd",
+      "size": 1166
+    },
+    {
+      "file": "libavif-BSD-2-Clause.txt",
+      "url": "https://crates.io/api/v1/crates/libavif/0.14.0/download",
+      "sha256": "fe490679de7d4c113698ef4a4f130b10c2b561f6b847db87efbaefa64b9ac057",
+      "size": 1317
+    },
+    {
+      "file": "libavif-sys-BSD-2-Clause.txt",
+      "url": "https://crates.io/api/v1/crates/libavif-sys/0.17.0+libavif.1.0.4/download",
+      "sha256": "10952217a6d404de8bf8a997fbea9b88f682df1fe98cb9b9f467ade641525639",
+      "size": 18799
+    },
+    {
+      "file": "libaom-sys-BSD-2-Clause.txt",
+      "url": "https://crates.io/api/v1/crates/libaom-sys/0.17.2+libaom.3.11.0/download",
+      "sha256": "4764a286d8b2faeaf42f4418e7d7a28d58fc8fd4d00a3d0a7f44b0a4099de7f2",
+      "size": 1316
+    },
+    {
+      "file": "libloading-ISC.txt",
+      "url": "https://crates.io/api/v1/crates/libloading/0.9.0/download",
+      "sha256": "b29f8b01452350c20dd1af16ef83b598fea3053578ccc1c7a0ef40e57be2620f",
+      "size": 736
+    },
+    {
+      "file": "foldhash-Zlib.txt",
+      "url": "https://crates.io/api/v1/crates/foldhash/0.2.0/download",
+      "sha256": "b1181a40b2a7b25cf66fd01481713bc1005df082c53ef73e851e55071b102744",
+      "size": 856
+    },
+    {
+      "file": "bytemuck-Zlib.txt",
+      "url": "https://crates.io/api/v1/crates/bytemuck/1.25.2/download",
+      "sha256": "84b34dd7608f7fb9b17bd588a6bf392bf7de504e2716f024a77d89f1b145a151",
+      "size": 851
+    },
+    {
+      "file": "FTL.txt",
+      "url": "https://gitlab.freedesktop.org/freetype/freetype/-/raw/master/docs/FTL.TXT",
+      "sha256": "5a5ee54c5001bbad1cdc1a57cc3dd4c42199b2da09d39c7ee41fab002d02967f",
+      "size": 6743
+    },
+    {
+      "file": "IJG.txt",
+      "url": "https://github.com/libjpeg-turbo/libjpeg-turbo/raw/main/LICENSE.md",
+      "sha256": "ba6bceebcba0fdd35488477c2cca8c4632ce82c74dbfbc87d886ce6fc4433579",
+      "size": 6077
+    },
+    {
+      "file": "libpng-2.0.txt",
+      "url": "https://github.com/pnggroup/libpng/raw/libpng16/LICENSE",
+      "sha256": "bdb0a645ea18c60507d0368379b1ac5474b92255fcc2d115e07486a7672ba526",
+      "size": 5345
+    },
+    {
+      "file": "Unicode-3.0.txt",
+      "url": "https://www.unicode.org/license.txt",
+      "sha256": "e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96",
+      "size": 1995
+    },
+    {
+      "file": "Unlicense.txt",
+      "url": "https://unlicense.org/UNLICENSE",
+      "sha256": "0bdebfeda07d45dada625ae1317c6f833186e798b171d0db640bcf32e92a8240",
+      "size": 1211
+    },
+    {
+      "file": "COMPONENTS.md",
+      "url": "https://github.com/napi-rs/canvas (SBOM 派生)",
+      "sha256": "07485964fe6d1d6b0d4a07319cd04d1b20647400658490d1d1be1fcb792c1080",
+      "size": 24466
+    },
+    {
+      "file": "COMPONENTS.json",
+      "url": "https://github.com/napi-rs/canvas (SBOM 派生)",
+      "sha256": "33daa4fbf7f03a7ad0342f819c2b9a774186480255eb13406523025b1fa0ca0b",
+      "size": 40771
+    },
+    {
+      "file": "COMPONENT-LICENSES.md",
+      "url": "https://github.com/napi-rs/canvas (SBOM 派生)",
+      "sha256": "fb6cdbe7d3713c082b1441c41ea0a4d0a406bc11a81158a3b35d7836917ca184",
+      "size": 1201003
+    },
+    {
+      "file": "COMPONENT-COMPLIANCE.md",
+      "url": "https://github.com/napi-rs/canvas (SBOM 派生)",
+      "sha256": "5d0b4d03a1cda23f534966892d5651bbcaeff80f5a21a7bae41b48114dc7d811",
+      "size": 13263
+    }
+  ]
+}

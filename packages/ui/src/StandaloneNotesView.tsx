@@ -1,0 +1,2068 @@
+import { useEffect, useRef, useState } from 'react';
+import type React from 'react';
+import type {
+  AnnotationRecord,
+  BacklinkRecord,
+  DocumentSummary,
+  MarkdownInternalTarget,
+  NoteFolderRecord,
+  NoteRecord,
+  MarkdownImportJob,
+  MarkdownImportReport,
+  MarkdownImportReportPage,
+  MarkdownJobSnapshot,
+  MarkdownScanJob,
+  MarkdownScanSearchResult,
+  MarkdownScanTreePage,
+  MarkdownSelectionInput,
+  MarkdownSelectionResult,
+  MarkdownVaultScan
+} from '@studianda/shared';
+import { Backlinks, type BacklinkTarget } from './Backlinks.js';
+import { MarkdownEditor, type MarkdownImageUpload } from './MarkdownEditor.js';
+import { MarkdownImportDialog } from './MarkdownImportDialog.js';
+import { confirmPurgeNote } from './note-purge.js';
+import type { ConfirmAction } from './dialog-utils.js';
+import {
+  buildStandaloneFolderTree,
+  collectFolderPaths,
+  filterStandaloneFolderTree,
+  filterStandaloneNotesByTags,
+  type StandaloneFolder
+} from './standalone-folders.js';
+
+export interface StandaloneNotesViewProps {
+  /** 独立笔记列表（documentId=''），由 app 传入 api.listStandaloneNotes 的结果。 */
+  notes: NoteRecord[];
+  loading?: boolean;
+  error?: string;
+  creating?: boolean;
+  saving?: boolean;
+  deleting?: boolean;
+  selectedId: string | null;
+  /** 内部引用弹窗的文献列表。 */
+  documents?: DocumentSummary[];
+  loadAnnotations?(documentId: string): Promise<AnnotationRecord[]>;
+  loadNotes?(documentId: string): Promise<NoteRecord[]>;
+  /** 图片上传器（studianda-asset 资源）。 */
+  uploadImage?: MarkdownImageUpload;
+  loadBacklinks?(target: BacklinkTarget): Promise<BacklinkRecord[]>;
+  onOpenBacklink?(backlink: BacklinkRecord): void;
+  onOpenInternal?(target: MarkdownInternalTarget): void;
+  /** 点击 studianda-asset: 附件链接时回调（app 用 adapter.openNoteAsset）。 */
+  onOpenAsset?(url: string): void | Promise<void>;
+  onSelect(id: string): void;
+  onCreate(): void;
+  onSave(id: string, content: string): void;
+  /** 软删除：移入回收站（可恢复）。 */
+  onDelete(id: string): void;
+  /** 从回收站恢复。 */
+  onRestore(id: string): void;
+  /** 彻底删除独立笔记（不可恢复，同时回收只被它引用的图片资源）。 */
+  onPurge(id: string): void;
+  /** 确认框实现（宿主注入；默认浏览器原生 confirm）。 */
+  confirmAction?: ConfirmAction;
+  /** 回收站中的独立笔记（按需加载）。 */
+  trashNotes?: NoteRecord[];
+  trashLoading?: boolean;
+  /** 切换回收站视图：上层据此按需请求 trash 列表。 */
+  onTrashChange?(showTrash: boolean): void;
+  /** 初始是否显示回收站（默认 false，主要便于测试/恢复视图状态）。 */
+  defaultShowTrash?: boolean;
+  /** 选择 Markdown 库目录（取消返回 null）；不提供表示当前环境不支持。 */
+  onPickMarkdownVault?(): Promise<string | null>;
+  /** 扫描 Markdown 库（兼容 fallback；优先使用后台扫描）。 */
+  scanMarkdownVault?(vaultPath: string): Promise<MarkdownVaultScan>;
+  /** 启动后台扫描（app 包装 api.startMarkdownScan）。 */
+  startMarkdownScan?(vaultPath: string): Promise<MarkdownScanJob>;
+  /** 轮询扫描状态。 */
+  getMarkdownScanStatus?(): Promise<MarkdownScanJob>;
+  /** 取消扫描。 */
+  cancelMarkdownScan?(): Promise<MarkdownScanJob>;
+  /** 读取上次导入状态（用于恢复 running/done/interrupted 提示）。 */
+  getMarkdownImportStatus?(): Promise<MarkdownImportJob>;
+  /** 一次性读取扫描+导入完整状态（终态优先使用，失败回退两次 status）。 */
+  getMarkdownJobs?(): Promise<MarkdownJobSnapshot>;
+  /** 一次读取任务摘要（lite，不含完整 scan/report）；终态优先使用。 */
+  getMarkdownJobsSummary?(): Promise<MarkdownJobSnapshot>;
+  /** 按目录分页读取扫描树（懒加载）。 */
+  getMarkdownScanTree?(
+    vaultPath: string,
+    parent: string,
+    offset: number,
+    limit: number
+  ): Promise<MarkdownScanTreePage>;
+  /** 服务端解析选择。 */
+  resolveMarkdownSelection?(input: MarkdownSelectionInput): Promise<MarkdownSelectionResult>;
+  /** 导入报告明细分页。 */
+  getMarkdownImportReportPage?(offset: number, limit: number): Promise<MarkdownImportReportPage>;
+  /** 服务端搜索扫描结果。 */
+  searchMarkdownScan?(
+    vaultPath: string,
+    query: string,
+    limit: number,
+    offset?: number
+  ): Promise<MarkdownScanSearchResult>;
+  /** 服务端虚拟文件夹列表（含空文件夹）。 */
+  folders?: NoteFolderRecord[];
+  /** 全部笔记标签（用于顶部筛选）。 */
+  tags?: string[];
+  onCreateFolder?(path: string): void;
+  onRenameFolder?(from: string, to: string): void;
+  onDeleteFolder?(path: string): void;
+  onMoveNote?(noteId: string, folderPath: string): void;
+  /** 保存笔记标签（app 包装 api.setNoteTags），成功后刷新列表与标签查询。 */
+  onSetTags?(noteId: string, tags: string[]): Promise<void>;
+  /** 初始扫描任务（主要便于测试/恢复界面）。 */
+  initialScanJob?: MarkdownScanJob | null;
+  /** 初始文件夹内联编辑状态（主要便于测试）。 */
+  initialFolderEditor?:
+    | { mode: 'create'; parent: string }
+    | { mode: 'rename'; path: string }
+    | null;
+  initialFolderDelete?: string | null;
+  /** 初始上次导入任务与提示（主要便于测试/恢复界面）。 */
+  initialRestoredImportJob?: MarkdownImportJob | null;
+  initialImportRestoreNotice?: string;
+  /** SSE 实时任务快照订阅；不可用/失败时回退轮询。 */
+  subscribeMarkdownJobs?(
+    handler: (snapshot: MarkdownJobSnapshot) => void,
+    options?: { onError?: (error: Event) => void; onOpen?: () => void }
+  ): () => void;
+  /** 启动后台导入任务（app 包装 api.startMarkdownImport）。 */
+  startMarkdownImport?(input: {
+    vaultPath: string;
+    files: string[];
+  }): Promise<MarkdownImportJob>;
+  /** 轮询后台导入状态（app 包装 api.getMarkdownImportStatus）。 */
+  getMarkdownImportStatus?(): Promise<MarkdownImportJob>;
+  /** 取消后台导入（app 包装 api.cancelMarkdownImport）。 */
+  cancelMarkdownImport?(): Promise<MarkdownImportJob>;
+  /** 关闭导入报告后回调：app 用于刷新列表并选中第一条新导入笔记。 */
+  onMarkdownImported?(report: MarkdownImportReport): void;
+  onRetry?(): void;
+}
+
+/** 状态轮询失败后的最大重试次数与退避上限。 */
+export const STATUS_POLL_MAX_RETRIES = 5;
+
+/** 状态轮询失败退避：0.5s、1s、2s、4s…（最多 8s）。 */
+export function statusPollRetryDelayMs(attempt: number): number {
+  return Math.min(8000, 500 * 2 ** Math.max(0, attempt));
+}
+
+/**
+ * 任务结果过期提示：只有存在上次成功结果时才显示；
+ * resultStale 或最近一次尝试为失败（error/failed）/取消/中断时提示旧结果时间。
+ */
+export function markdownJobStaleHint(job: {
+  resultCompletedAt?: string | null;
+  resultStale?: boolean;
+  lastAttemptStatus?: string;
+}): string {
+  if (!job.resultCompletedAt) return '';
+  const last = job.lastAttemptStatus;
+  const stale =
+    job.resultStale ||
+    last === 'error' ||
+    last === 'failed' ||
+    last === 'cancelled' ||
+    last === 'interrupted';
+  if (!stale) return '';
+  const time = new Date(job.resultCompletedAt).toLocaleString();
+  const lastLabel =
+    last === 'error' || last === 'failed'
+      ? '失败'
+      : last === 'cancelled'
+        ? '取消'
+        : last === 'interrupted'
+          ? '中断'
+          : '';
+  return `上次成功结果：${time}；最近一次尝试${lastLabel ? `已${lastLabel}` : '未成功'}。`;
+}
+
+/** 结果缺失/损坏：resultMissing 或 error 含「损坏/缺失」时视为缺失。 */
+export function isMarkdownResultMissing(job: {
+  status?: string;
+  resultMissing?: boolean;
+  error?: string;
+}): boolean {
+  if (job.resultMissing) return true;
+  const message = job.error ?? '';
+  return message.includes('损坏') || message.includes('缺失');
+}
+
+/** 合并 lite 快照：只更新进度字段，保留已有完整 scan/report。 */
+export function mergeLiteMarkdownJob<
+  T extends { scan?: MarkdownVaultScan | null; report?: MarkdownImportReport | null }
+>(previous: T | null, next: T): T {
+  return {
+    ...next,
+    scan: next.scan ?? previous?.scan ?? null,
+    report: next.report ?? previous?.report ?? null
+  };
+}
+
+/** 任务终态（兼容旧数据里的 failed）。 */
+export function isMarkdownJobTerminal(status: string): boolean {
+  return (
+    status === 'done' ||
+    status === 'error' ||
+    status === 'failed' ||
+    status === 'cancelled' ||
+    status === 'interrupted'
+  );
+}
+
+/**
+ * 独立笔记标题：取内容第一个非空行，去掉常见 Markdown 标记与内部引用语法，截断到 40 字。
+ * 导出为纯函数便于 SSR/冒烟测试。
+ */
+export function standaloneNoteTitle(content: string): string {
+  const lines = (content ?? '').replace(/\r\n?/g, '\n').split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const plain = trimmed
+      .replace(/^\s*#{1,6}\s+/, '')
+      .replace(/^\s*>\s?/, '')
+      .replace(/^\s*[-*+]\s+\[[ xX]\]\s+/, '')
+      .replace(/^\s*([-*+]|\d+[.)])\s+/, '')
+      .replace(/[*_~=+`]{1,3}/g, '')
+      .replace(/<c:#[0-9a-fA-F]{3,8}>|<\/c>/g, '')
+      .replace(/\[\[([^\]]*)\]\]/g, (_match, raw: string) => {
+        const separator = raw.indexOf('|');
+        const label = separator >= 0 ? raw.slice(separator + 1).trim() : '';
+        return label || '内部引用';
+      })
+      .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!plain) continue;
+    return plain.length > 40 ? `${plain.slice(0, 40)}…` : plain;
+  }
+  return '（未命名笔记）';
+}
+
+/**
+ * 独立笔记本地搜索：标题（首行）与全文内容，大小写不敏感；空关键词返回全部。
+ * 导出为纯函数便于测试。
+ */
+export function filterStandaloneNotes(notes: NoteRecord[], keyword: string): NoteRecord[] {
+  const query = keyword.trim().toLowerCase();
+  if (!query) return notes;
+  return notes.filter(
+    (note) =>
+      standaloneNoteTitle(note.content).toLowerCase().includes(query) ||
+      note.content.toLowerCase().includes(query)
+  );
+}
+
+/**
+ * 独立笔记工作区：左侧笔记列表 + 右侧 Markdown 编辑器；每条笔记下方可展开反向链接。
+ *
+ * 未保存内容按笔记 id 存在组件本地 drafts 里：切换笔记不会丢草稿，保存按钮只在有改动时可用。
+ */
+export function StandaloneNotesView({
+  notes,
+  loading = false,
+  error = '',
+  creating = false,
+  saving = false,
+  deleting = false,
+  selectedId,
+  documents = [],
+  loadAnnotations,
+  loadNotes,
+  uploadImage,
+  loadBacklinks,
+  onOpenBacklink,
+  onOpenInternal,
+  onOpenAsset,
+  onSelect,
+  onCreate,
+  onSave,
+  onDelete,
+  onRestore,
+  onPurge,
+  confirmAction,
+  trashNotes = [],
+  trashLoading = false,
+  onTrashChange,
+  defaultShowTrash = false,
+  onPickMarkdownVault,
+  scanMarkdownVault,
+  startMarkdownScan,
+  getMarkdownScanStatus,
+  cancelMarkdownScan,
+  getMarkdownImportStatus,
+  getMarkdownJobs,
+  getMarkdownJobsSummary,
+  getMarkdownScanTree,
+  resolveMarkdownSelection,
+  getMarkdownImportReportPage,
+  searchMarkdownScan,
+  folders = [],
+  tags = [],
+  onCreateFolder,
+  onRenameFolder,
+  onDeleteFolder,
+  onMoveNote,
+  onSetTags,
+  initialScanJob = null,
+  initialFolderEditor = null,
+  initialFolderDelete = null,
+  initialRestoredImportJob = null,
+  initialImportRestoreNotice = '',
+  subscribeMarkdownJobs,
+  startMarkdownImport,
+  cancelMarkdownImport,
+  onMarkdownImported,
+  onRetry
+}: StandaloneNotesViewProps): React.JSX.Element {
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [search, setSearch] = useState('');
+  const [showTrash, setShowTrash] = useState(defaultShowTrash);
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
+  const [tagFilter, setTagFilter] = useState<Set<string>>(new Set());
+  const [folderMessage, setFolderMessage] = useState('');
+  const [folderEditor, setFolderEditor] = useState<
+    | { mode: 'create'; parent: string; value: string; error: string }
+    | { mode: 'rename'; path: string; value: string; error: string; merging: boolean }
+    | null
+  >(
+    initialFolderEditor
+      ? initialFolderEditor.mode === 'create'
+        ? { mode: 'create', parent: initialFolderEditor.parent, value: '', error: '' }
+        : {
+            mode: 'rename',
+            path: initialFolderEditor.path,
+            value: initialFolderEditor.path,
+            error: '',
+            merging: false
+          }
+      : null
+  );
+  const [folderDelete, setFolderDelete] = useState<string | null>(initialFolderDelete);
+  const [dragNoteId, setDragNoteId] = useState<string | null>(null);
+  const [dragTarget, setDragTarget] = useState<string | null>(null);
+  const [tagInput, setTagInput] = useState('');
+  const [tagError, setTagError] = useState('');
+  const [tagSaving, setTagSaving] = useState(false);
+  const [tagEditorOpen, setTagEditorOpen] = useState(false);
+  const [markdownScan, setMarkdownScan] = useState<MarkdownVaultScan | null>(null);
+  const [markdownDialogOpen, setMarkdownDialogOpen] = useState(false);
+  const [markdownBusy, setMarkdownBusy] = useState<'picking' | 'scanning' | null>(null);
+  const [markdownError, setMarkdownError] = useState('');
+  const [scanJob, setScanJob] = useState<MarkdownScanJob | null>(initialScanJob);
+  const [scanRetryNonce, setScanRetryNonce] = useState(0);
+  const [scanPollExhausted, setScanPollExhausted] = useState(false);
+  const autoRestartedScanRef = useRef(false);
+  const autoRestartedImportRef = useRef(false);
+  const autoRecoveryRunningRef = useRef(false);
+  const pendingAutoImportInputRef = useRef<{ vaultPath: string; files: string[] } | null>(null);
+  const sseAvailableRef = useRef(false);
+  const sseLastEventRef = useRef(0);
+  const jobsRunningRef = useRef(false);
+  const [sseFallback, setSseFallback] = useState(!subscribeMarkdownJobs);
+  const [sseNotice, setSseNotice] = useState('');
+  const [statusFetchError, setStatusFetchError] = useState('');
+  const [fullResultError, setFullResultError] = useState('');
+  const fullResultRetryRef = useRef<(() => void) | null>(null);
+  const [restoredImportJob, setRestoredImportJob] = useState<MarkdownImportJob | null>(
+    initialRestoredImportJob
+  );
+  const [importRestoreNotice, setImportRestoreNotice] = useState(initialImportRestoreNotice);
+  jobsRunningRef.current =
+    scanJob?.status === 'running' || restoredImportJob?.status === 'running';
+  const selectedNote = notes.find((note) => note.id === selectedId) ?? null;
+  const draft = selectedNote ? (drafts[selectedNote.id] ?? selectedNote.content) : '';
+  const dirty = selectedNote ? draft !== selectedNote.content : false;
+
+  // 切换笔记时收起标签输入，避免把上一条的编辑状态带到下一条。
+  useEffect(() => {
+    setTagEditorOpen(false);
+    setTagInput('');
+  }, [selectedId]);
+
+  // 本地搜索：标题（首行）/全文内容/文件夹路径，大小写不敏感；不影响草稿与选中状态。
+  // 顶部标签筛选优先于文件夹/搜索（标签为 OR 匹配）。
+  const tagFilteredNotes = filterStandaloneNotesByTags(notes, tagFilter);
+  const fullFolderTree = buildStandaloneFolderTree(
+    tagFilteredNotes,
+    folders.map((folder) => folder.path)
+  );
+  const folderTree = filterStandaloneFolderTree(fullFolderTree, search);
+  const scanPercent =
+    scanJob && scanJob.total > 0
+      ? Math.min(100, Math.round((scanJob.done / scanJob.total) * 100))
+      : 0;
+  const allFolderPaths = collectFolderPaths(fullFolderTree);
+  const knownFolderPaths = new Set(allFolderPaths);
+
+  const toggleTag = (tag: string): void => {
+    setTagFilter((current) => {
+      const next = new Set(current);
+      if (next.has(tag)) next.delete(tag);
+      else next.add(tag);
+      return next;
+    });
+  };
+
+  const validateNewFolderPath = (path: string, isRenameFrom?: string): string => {
+    if (!path) return '文件夹路径不能为空。';
+    if (path.startsWith('/') || path.endsWith('/')) return '文件夹路径不能以 / 开头或结尾。';
+    if (path.includes('\\')) return '文件夹路径请使用 / 分隔。';
+    const segments = path.split('/');
+    if (segments.some((segment) => !segment.trim() || segment === '.' || segment === '..')) {
+      return '文件夹路径包含非法片段。';
+    }
+    if (knownFolderPaths.has(path) && path !== isRenameFrom) return '同名文件夹已存在。';
+    return '';
+  };
+
+  const openCreateFolderEditor = (parentPath = ''): void => {
+    if (!onCreateFolder) return;
+    setFolderMessage('');
+    setFolderEditor({ mode: 'create', parent: parentPath, value: '', error: '' });
+  };
+
+  const openRenameFolderEditor = (path: string): void => {
+    if (!onRenameFolder) return;
+    setFolderMessage('');
+    setFolderEditor({ mode: 'rename', path, value: path, error: '', merging: false });
+  };
+
+  const submitFolderEditor = (): void => {
+    if (!folderEditor) return;
+    if (folderEditor.mode === 'create') {
+      const path = (folderEditor.parent
+        ? `${folderEditor.parent}/${folderEditor.value}`
+        : folderEditor.value
+      )
+        .replace(/\\/g, '/')
+        .replace(/^\/+|\/+$/g, '')
+        .trim();
+      const message = validateNewFolderPath(path);
+      if (message) {
+        setFolderEditor({ ...folderEditor, error: message });
+        return;
+      }
+      onCreateFolder?.(path);
+      setFolderEditor(null);
+      return;
+    }
+    const normalized = folderEditor.value
+      .replace(/\\/g, '/')
+      .replace(/^\/+|\/+$/g, '')
+      .trim();
+    const message = validateNewFolderPath(normalized, folderEditor.path);
+    if (message) {
+      setFolderEditor({ ...folderEditor, error: message });
+      return;
+    }
+    if (normalized === folderEditor.path) {
+      setFolderEditor(null);
+      return;
+    }
+    // 目标已存在：明确提示这是合并（core 用 rename 合并到目标）。
+    if (knownFolderPaths.has(normalized)) {
+      setFolderEditor({ ...folderEditor, value: normalized, merging: true, error: '' });
+      return;
+    }
+    onRenameFolder?.(folderEditor.path, normalized);
+    setFolderEditor(null);
+  };
+
+  const confirmFolderMerge = (): void => {
+    if (!folderEditor || folderEditor.mode !== 'rename') return;
+    onRenameFolder?.(folderEditor.path, folderEditor.value);
+    setFolderEditor(null);
+  };
+
+  const confirmDeleteFolder = (): void => {
+    if (!folderDelete || !onDeleteFolder) return;
+    onDeleteFolder(folderDelete);
+    setFolderDelete(null);
+  };
+
+  const moveNoteToFolder = (noteId: string, folderPath: string): void => {
+    if (!onMoveNote) return;
+    const note = notes.find((item) => item.id === noteId);
+    if (note && (note.folderPath ?? '') === folderPath) return;
+    onMoveNote(noteId, folderPath);
+    setFolderMessage('');
+  };
+
+  const saveNoteTags = async (tags: string[]): Promise<void> => {
+    if (!selectedNote || !onSetTags) return;
+    setTagSaving(true);
+    setTagError('');
+    try {
+      await onSetTags(selectedNote.id, tags);
+      setTagInput('');
+    } catch (error) {
+      // 不做乐观更新：失败时界面保持服务端旧标签。
+      setTagError(
+        `保存标签失败：${error instanceof Error ? error.message : String(error)}`
+      );
+    } finally {
+      setTagSaving(false);
+    }
+  };
+
+  const addTag = (): void => {
+    if (!selectedNote) return;
+    const raw = tagInput.trim();
+    if (!raw) return;
+    if ((selectedNote.tags ?? []).includes(raw)) {
+      setTagInput('');
+      return;
+    }
+    void saveNoteTags([...(selectedNote.tags ?? []), raw]);
+  };
+
+  const removeTag = (tag: string): void => {
+    if (!selectedNote) return;
+    void saveNoteTags((selectedNote.tags ?? []).filter((item) => item !== tag));
+  };
+
+  const cancelRestoredImport = async (): Promise<void> => {
+    if (!cancelMarkdownImport) return;
+    try {
+      const job = await cancelMarkdownImport();
+      setRestoredImportJob(job);
+      setImportRestoreNotice(
+        job.status === 'cancelled' ? '上次导入已取消。' : `导入任务状态：${job.status}`
+      );
+    } catch (error) {
+      setImportRestoreNotice(
+        `取消导入失败：${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  };
+
+  const isFolderCollapsed = (path: string): boolean =>
+    !search.trim() && collapsedFolders.has(path);
+
+  const toggleFolderCollapsed = (path: string): void => {
+    setCollapsedFolders((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  const updateDraft = (value: string): void => {
+    if (!selectedNote) return;
+    setDrafts((current) => ({ ...current, [selectedNote.id]: value }));
+  };
+
+  const save = (): void => {
+    if (!selectedNote || !dirty || saving) return;
+    onSave(selectedNote.id, draft);
+  };
+
+  const remove = (): void => {
+    if (!selectedNote) return;
+    onDelete(selectedNote.id);
+  };
+
+  const purge = (id: string): void => {
+    if (confirmPurgeNote(confirmAction)) onPurge(id);
+  };
+
+  const toggleTrash = (next: boolean): void => {
+    setShowTrash(next);
+    onTrashChange?.(next);
+  };
+
+  const beginMarkdownImport = async (): Promise<void> => {
+    if (!onPickMarkdownVault) {
+      setMarkdownError('当前运行环境不支持选择笔记文件夹，请在桌面应用中使用导入功能。');
+      return;
+    }
+    if (!startMarkdownScan && !scanMarkdownVault) {
+      setMarkdownError('当前运行环境不支持扫描笔记库。');
+      return;
+    }
+    setMarkdownError('');
+    setMarkdownScan(null);
+    setMarkdownBusy('picking');
+    try {
+      const vaultPath = await onPickMarkdownVault();
+      if (!vaultPath) return; // 用户取消，不报错
+      setMarkdownBusy('scanning');
+      // 手动启动优先：清空自动队列，避免并行自动任务。
+      pendingAutoImportInputRef.current = null;
+      autoRecoveryRunningRef.current = true;
+      // 手动扫描也检查上次未完成的导入：扫描终态后继续排队导入。
+      try {
+        if (getMarkdownJobs) {
+          const snapshot = await getMarkdownJobs();
+          if (
+            snapshot.importJob.status === 'interrupted' &&
+            snapshot.importJob.input
+          ) {
+            pendingAutoImportInputRef.current = snapshot.importJob.input;
+          }
+        } else if (getMarkdownImportStatus) {
+          const importJob = await getMarkdownImportStatus();
+          if (importJob.status === 'interrupted' && importJob.input) {
+            pendingAutoImportInputRef.current = importJob.input;
+          }
+        }
+      } catch {
+        // 状态不可读时不影响手动扫描。
+      }
+      if (startMarkdownScan && getMarkdownScanStatus) {
+        const job = await startMarkdownScan(vaultPath);
+        setScanJob(job);
+        if (job.status === 'done' && job.scan) {
+          setMarkdownScan(job.scan);
+          setMarkdownDialogOpen(true);
+          setScanJob(null);
+        } else if (job.status === 'error') {
+          setMarkdownError(`扫描失败：${job.error || '未知错误'}`);
+          setScanJob(null);
+        }
+      } else if (scanMarkdownVault) {
+        // 兼容旧 core：没有后台扫描时退回同步扫描。
+        const scan = await scanMarkdownVault(vaultPath);
+        setMarkdownScan(scan);
+        setMarkdownDialogOpen(true);
+      }
+    } catch (error) {
+      setMarkdownError(
+        `扫描笔记文件夹失败：${error instanceof Error ? error.message : String(error)}`
+      );
+    } finally {
+      setMarkdownBusy(null);
+    }
+  };
+
+  // 扫描任务 running 时 600ms 轮询；done 后打开选择弹窗。
+  useEffect(() => {
+    if (!scanJob || scanJob.status !== 'running' || !getMarkdownScanStatus) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let failures = 0;
+    const poll = async (): Promise<void> => {
+      try {
+        const job = await getMarkdownScanStatus();
+        if (cancelled) return;
+        failures = 0;
+        setScanPollExhausted(false);
+        setMarkdownError('');
+        setScanJob(job);
+        if (job.status === 'running') {
+          timer = setTimeout(poll, 600);
+          return;
+        }
+        if (job.status === 'done') {
+          if (job.scan) {
+            setMarkdownScan(job.scan);
+            setMarkdownDialogOpen(true);
+          } else {
+            setMarkdownError('扫描完成但没有返回结果，请重试。');
+          }
+          setScanJob(null);
+          return;
+        }
+        if (job.status === 'cancelled') {
+          setMarkdownError('扫描已取消。');
+          setScanJob(null);
+          return;
+        }
+        if (job.status === 'interrupted') {
+          setMarkdownError('上次扫描任务因进程重启中断，请重新选择目录。');
+          setScanJob(null);
+          return;
+        }
+        if (job.status === 'error') {
+          setMarkdownError(`扫描失败：${job.error || '未知错误'}`);
+          setScanJob(null);
+        }
+      } catch (error) {
+        if (cancelled) return;
+        failures += 1;
+        if (failures > STATUS_POLL_MAX_RETRIES) {
+          setScanPollExhausted(true);
+          setMarkdownError(
+            `读取扫描进度失败：${error instanceof Error ? error.message : String(error)}`
+          );
+          return;
+        }
+        setMarkdownError(
+          `状态查询失败，正在重试…（${failures}/${STATUS_POLL_MAX_RETRIES}）`
+        );
+        timer = setTimeout(poll, statusPollRetryDelayMs(failures - 1));
+      }
+    };
+    timer = setTimeout(poll, 500);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [scanJob?.status, scanRetryNonce]);
+
+  const retryScanStatus = (): void => {
+    setScanPollExhausted(false);
+    setMarkdownError('');
+    setScanRetryNonce((value) => value + 1);
+  };
+
+  /** 终态取状态：优先摘要（lite，不拉完整 /jobs），失败回退完整/两次 status。 */
+  const fetchFullMarkdownJobs = async (): Promise<void> => {
+    if (getMarkdownJobsSummary) {
+      try {
+        const snapshot = await getMarkdownJobsSummary();
+        setScanJob((previous) => mergeLiteMarkdownJob(previous, snapshot.scanJob));
+        setRestoredImportJob((previous) =>
+          mergeLiteMarkdownJob(previous, snapshot.importJob)
+        );
+        setStatusFetchError('');
+        return;
+      } catch {
+        // 回退完整 /jobs 或两次 status
+      }
+    }
+    if (getMarkdownJobs) {
+      try {
+        const snapshot = await getMarkdownJobs();
+        setScanJob((previous) => mergeLiteMarkdownJob(previous, snapshot.scanJob));
+        setRestoredImportJob((previous) =>
+          mergeLiteMarkdownJob(previous, snapshot.importJob)
+        );
+        setStatusFetchError('');
+        return;
+      } catch {
+        // 回退到两次 status 请求
+      }
+    }
+    let scanOk = false;
+    let importOk = false;
+    let scanError = '';
+    let importError = '';
+    let lastError = '';
+    if (getMarkdownScanStatus) {
+      try {
+        const job = await getMarkdownScanStatus();
+        setScanJob((previous) => mergeLiteMarkdownJob(previous, job));
+        scanOk = true;
+      } catch (error) {
+        scanError = error instanceof Error ? error.message : String(error);
+        lastError = scanError;
+      }
+    }
+    if (getMarkdownImportStatus) {
+      try {
+        const job = await getMarkdownImportStatus();
+        setRestoredImportJob((previous) => mergeLiteMarkdownJob(previous, job));
+        importOk = true;
+      } catch (error) {
+        importError = error instanceof Error ? error.message : String(error);
+        lastError = importError;
+      }
+    }
+    const anyAttempted = Boolean(getMarkdownScanStatus || getMarkdownImportStatus);
+    if (anyAttempted && (!scanOk || !importOk)) {
+      const failed: string[] = [];
+      if (getMarkdownScanStatus && !scanOk) failed.push('扫描任务');
+      if (getMarkdownImportStatus && !importOk) failed.push('导入任务');
+      setStatusFetchError(
+        `任务状态读取失败（${failed.join('、')}）${
+          lastError ? `：${lastError}` : '，请重试'
+        }。`
+      );
+    } else if (anyAttempted) {
+      setStatusFetchError('');
+    }
+  };
+
+  const retryStatusFetch = (): void => {
+    setStatusFetchError('');
+    void fetchFullMarkdownJobs();
+  };
+
+  const cancelCurrentScan = async (): Promise<void> => {
+    if (!cancelMarkdownScan || !scanJob) return;
+    try {
+      const job = await cancelMarkdownScan();
+      setScanJob(job);
+      if (job.status !== 'running') {
+        setMarkdownError(
+          job.status === 'cancelled'
+            ? '扫描已取消。'
+            : `扫描未完成：${job.error || job.status}`
+        );
+        setScanJob(null);
+      }
+    } catch (error) {
+      setMarkdownError(
+        `取消扫描失败：${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  };
+
+  // 视图挂载 / 窗口 focus 时刷新上次任务状态；自动恢复按队列串行（先扫描后导入）。
+  const refreshJobStatuses = async (): Promise<void> => {
+    let scanResult: MarkdownScanJob | null = null;
+    let importResult: MarkdownImportJob | null = null;
+    if (getMarkdownScanStatus) {
+      try {
+        scanResult = await getMarkdownScanStatus();
+      } catch {
+        // 忽略
+      }
+    }
+    if (getMarkdownImportStatus) {
+      try {
+        importResult = await getMarkdownImportStatus();
+      } catch {
+        // 忽略
+      }
+    }
+
+    if (scanResult && scanResult.status !== 'idle') {
+      setScanJob(scanResult);
+      if (scanResult.status === 'running') {
+        autoRecoveryRunningRef.current = true;
+      } else if (isMarkdownJobTerminal(scanResult.status)) {
+        autoRecoveryRunningRef.current = false;
+      }
+      if (scanResult.status === 'interrupted') {
+        setMarkdownError('上次扫描任务因进程重启中断。');
+      }
+    }
+    if (importResult && importResult.status !== 'idle') {
+      setRestoredImportJob(importResult);
+      if (importResult.status === 'running') {
+        autoRecoveryRunningRef.current = true;
+        setImportRestoreNotice('上次导入任务仍在运行，可查看进度或取消。');
+      } else if (importResult.status === 'done' && importResult.report) {
+        setImportRestoreNotice(
+          `上次导入完成：导入 ${importResult.report.imported} 篇、更新 ${importResult.report.updated} 篇。`
+        );
+      } else if (importResult.status === 'interrupted') {
+        setImportRestoreNotice('上次导入任务因进程重启中断。');
+      }
+    }
+
+    const scanInterrupted =
+      scanResult?.status === 'interrupted' && scanResult.input?.vaultPath;
+    const importInterrupted =
+      importResult?.status === 'interrupted' && importResult.input;
+    if (importInterrupted && !pendingAutoImportInputRef.current) {
+      pendingAutoImportInputRef.current = importResult!.input ?? null;
+    }
+
+    // 1) 先自动恢复扫描（如果同时中断，导入先排队）。
+    if (
+      scanInterrupted &&
+      !autoRestartedScanRef.current &&
+      !autoRecoveryRunningRef.current &&
+      startMarkdownScan
+    ) {
+      autoRestartedScanRef.current = true;
+      autoRecoveryRunningRef.current = true;
+      setMarkdownError('检测到中断，正在自动重新开始上次扫描…');
+      try {
+        setScanJob(await startMarkdownScan(scanResult!.input!.vaultPath));
+      } catch (error) {
+        autoRecoveryRunningRef.current = false;
+        setMarkdownError(
+          `自动重新开始扫描失败：${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+      return;
+    }
+
+    // 2) 扫描终态后，自动启动排队的导入。
+    if (
+      scanResult &&
+      isMarkdownJobTerminal(scanResult.status) &&
+      autoRestartedScanRef.current &&
+      pendingAutoImportInputRef.current &&
+      !autoRestartedImportRef.current &&
+      !autoRecoveryRunningRef.current &&
+      startMarkdownImport
+    ) {
+      const input = pendingAutoImportInputRef.current;
+      pendingAutoImportInputRef.current = null;
+      autoRestartedImportRef.current = true;
+      autoRecoveryRunningRef.current = true;
+      setImportRestoreNotice('检测到中断，正在自动重新开始上次导入…');
+      try {
+        setRestoredImportJob(await startMarkdownImport(input));
+      } catch (error) {
+        autoRecoveryRunningRef.current = false;
+        setImportRestoreNotice(
+          `自动重新开始导入失败：${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+      return;
+    }
+
+    // 3) 只有导入中断（或扫描不需要自动恢复）时直接自动恢复导入。
+    if (importInterrupted && !autoRestartedImportRef.current && !autoRecoveryRunningRef.current) {
+      if (!startMarkdownImport) return;
+      autoRestartedImportRef.current = true;
+      autoRecoveryRunningRef.current = true;
+      setImportRestoreNotice('检测到中断，正在自动重新开始上次导入…');
+      try {
+        setRestoredImportJob(await startMarkdownImport(importResult!.input!));
+      } catch (error) {
+        autoRecoveryRunningRef.current = false;
+        setImportRestoreNotice(
+          `自动重新开始导入失败：${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+  };
+
+  useEffect(() => {
+    void refreshJobStatuses();
+    const onFocus = (): void => {
+      void refreshJobStatuses();
+    };
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'visible') void refreshJobStatuses();
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, []);
+
+  // SSE 不可用/中断时的 10s 兜底轮询；onOpen 恢复后停止。
+  useEffect(() => {
+    if (!sseFallback) return;
+    const timer = setInterval(() => {
+      void refreshJobStatuses();
+    }, 10_000);
+    return () => clearInterval(timer);
+  }, [sseFallback]);
+
+  // SSE 实时任务快照：事件到达即更新两张任务卡片；onError 立即回退轮询，onOpen 恢复。
+  useEffect(() => {
+    if (!subscribeMarkdownJobs) {
+      setSseFallback(true);
+      return;
+    }
+    let unsubscribe: (() => void) | undefined;
+    try {
+      unsubscribe = subscribeMarkdownJobs(
+        (snapshot) => {
+          sseLastEventRef.current = Date.now();
+          setSseFallback(false);
+          setSseNotice('');
+          // SSE 事件一律按 lite 合并：只更新进度，保留已有 scan/report。
+          setScanJob((previous) => mergeLiteMarkdownJob(previous, snapshot.scanJob));
+          setRestoredImportJob((previous) =>
+            mergeLiteMarkdownJob(previous, snapshot.importJob)
+          );
+          // terminal/interrupted（含 lite 终态）立即读取完整结果与 input。
+          const forceFull =
+            Boolean(snapshot.terminal) ||
+            snapshot.scanJob.status === 'interrupted' ||
+            snapshot.importJob.status === 'interrupted' ||
+            (snapshot.lite &&
+              (isMarkdownJobTerminal(snapshot.scanJob.status) ||
+                isMarkdownJobTerminal(snapshot.importJob.status)));
+          if (forceFull) {
+            void fetchFullMarkdownJobs();
+          }
+        },
+        {
+          onOpen: () => {
+            sseAvailableRef.current = true;
+            sseLastEventRef.current = Date.now();
+            setSseFallback(false);
+            setSseNotice('');
+          },
+          onError: () => {
+            sseAvailableRef.current = false;
+            setSseFallback(true);
+            setSseNotice('实时连接已达上限/中断，已切换轮询。');
+          }
+        }
+      );
+    } catch {
+      setSseFallback(true);
+      setSseNotice('实时连接已达上限/中断，已切换轮询。');
+    }
+    return () => {
+      unsubscribe?.();
+    };
+  }, []);
+
+  // running 时 10s 无 SSE 事件视为静默失效，回退轮询并提示。
+  useEffect(() => {
+    if (!subscribeMarkdownJobs) return;
+    const timer = setInterval(() => {
+      const running =
+        jobsRunningRef.current || scanJob?.status === 'running' || restoredImportJob?.status === 'running';
+      if (!running) return;
+      if (sseAvailableRef.current && Date.now() - sseLastEventRef.current > 10_000) {
+        sseAvailableRef.current = false;
+        setSseFallback(true);
+        setSseNotice('实时连接中断，已切换轮询。');
+      }
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [scanJob?.status, restoredImportJob?.status]);
+
+  // 扫描终态时显式触发排队的自动导入（手动扫描也会继续未完成导入）。
+  useEffect(() => {
+    if (!scanJob || !isMarkdownJobTerminal(scanJob.status)) return;
+    const input = pendingAutoImportInputRef.current;
+    if (!input) {
+      autoRecoveryRunningRef.current = false;
+      return;
+    }
+    if (autoRestartedImportRef.current || !startMarkdownImport) return;
+    autoRecoveryRunningRef.current = true;
+    pendingAutoImportInputRef.current = null;
+    autoRestartedImportRef.current = true;
+    void (async () => {
+      // 排队期间状态可能已变化；启动前重新校验，避免用过期 input 多跑一次。
+      if (getMarkdownImportStatus) {
+        try {
+          const current = await getMarkdownImportStatus();
+          if (current && current.status !== 'interrupted') {
+            autoRecoveryRunningRef.current = false;
+            setImportRestoreNotice('上次导入状态已变化，已跳过自动重开。');
+            return;
+          }
+        } catch {
+          // 状态查询失败仍按原队列尝试，启动失败会显示错误。
+        }
+      }
+      setImportRestoreNotice('扫描完成，继续上次未完成的导入…');
+      try {
+        const job = await startMarkdownImport(input);
+        setRestoredImportJob((previous) => mergeLiteMarkdownJob(previous, job));
+      } catch (error) {
+        autoRecoveryRunningRef.current = false;
+        setImportRestoreNotice(
+          `自动重新开始导入失败：${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    })();
+  }, [scanJob?.status, getMarkdownImportStatus, startMarkdownImport]);
+
+  const restartInterruptedScan = async (): Promise<void> => {
+    let input = scanJob?.input;
+    if (!input?.vaultPath && getMarkdownScanStatus) {
+      try {
+        const job = await getMarkdownScanStatus();
+        setScanJob((previous) => mergeLiteMarkdownJob(previous, job));
+        input = job.input;
+      } catch {
+        // 使用现有状态
+      }
+    }
+    if (!startMarkdownScan || !input?.vaultPath) return;
+    pendingAutoImportInputRef.current = null;
+    autoRecoveryRunningRef.current = true;
+    try {
+      setMarkdownError('');
+      const job = await startMarkdownScan(input.vaultPath);
+      setScanJob(job);
+    } catch (error) {
+      autoRecoveryRunningRef.current = false;
+      setMarkdownError(
+        `重新开始扫描失败：${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  };
+
+  const restartInterruptedImport = async (): Promise<void> => {
+    let input = restoredImportJob?.input;
+    if (!input && getMarkdownImportStatus) {
+      try {
+        const job = await getMarkdownImportStatus();
+        setRestoredImportJob((previous) => mergeLiteMarkdownJob(previous, job));
+        input = job.input;
+      } catch {
+        // 使用现有状态
+      }
+    }
+    if (!startMarkdownImport || !input) return;
+    pendingAutoImportInputRef.current = null;
+    autoRecoveryRunningRef.current = true;
+    try {
+      const job = await startMarkdownImport(input);
+      setRestoredImportJob(job);
+      setImportRestoreNotice('已重新开始上次导入。');
+    } catch (error) {
+      autoRecoveryRunningRef.current = false;
+      setImportRestoreNotice(
+        `重新开始导入失败：${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  };
+
+  const openRestoredImport = async (): Promise<void> => {
+    setFullResultError('');
+    let job = restoredImportJob;
+    if (job && job.status === 'done' && !job.report && getMarkdownImportStatus) {
+      try {
+        job = await getMarkdownImportStatus();
+        setRestoredImportJob((previous) => mergeLiteMarkdownJob(previous, job!));
+      } catch (error) {
+        setFullResultError(
+          `读取完整导入结果失败：${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+        fullResultRetryRef.current = () => void openRestoredImport();
+        return;
+      }
+    }
+    const report = job?.report ?? null;
+    const vaultPath = report?.vaultPath ?? '';
+    setMarkdownScan({
+      vaultPath,
+      vaultName: '',
+      notes: [],
+      attachments: []
+    });
+    setMarkdownDialogOpen(true);
+  };
+
+  const openScanSelection = async (): Promise<void> => {
+    setFullResultError('');
+    let job = scanJob;
+    if (job && job.status === 'done' && !job.scan && getMarkdownScanStatus) {
+      try {
+        job = await getMarkdownScanStatus();
+        setScanJob((previous) => mergeLiteMarkdownJob(previous, job!));
+      } catch (error) {
+        setFullResultError(
+          `读取完整扫描结果失败：${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+        fullResultRetryRef.current = () => void openScanSelection();
+        return;
+      }
+    }
+    if (job?.scan) {
+      setMarkdownScan(job.scan);
+      setMarkdownDialogOpen(true);
+    }
+  };
+
+  const closeMarkdownDialog = (report?: MarkdownImportReport | null): void => {
+    setMarkdownDialogOpen(false);
+    setMarkdownScan(null);
+    setMarkdownError('');
+    if (report) {
+      setRestoredImportJob({
+        status: 'done',
+        phase: 'finalizing',
+        total: report.requested,
+        done: report.requested,
+        currentPath: '',
+        report,
+        error: ''
+      });
+      setImportRestoreNotice(
+        `上次导入完成：导入 ${report.imported} 篇、更新 ${report.updated} 篇。`
+      );
+      onMarkdownImported?.(report);
+    }
+  };
+
+  const renderFolderInlineEditor = (
+    mode: 'create' | 'rename',
+    targetPath: string,
+    parentPath = ''
+  ): React.JSX.Element | null => {
+    if (!folderEditor) return null;
+    if (mode === 'create') {
+      if (folderEditor.mode !== 'create' || folderEditor.parent !== parentPath) return null;
+    } else if (folderEditor.mode !== 'rename' || folderEditor.path !== targetPath) {
+      return null;
+    }
+    const value = folderEditor.value;
+    const error = folderEditor.error;
+    const merging = folderEditor.mode === 'rename' && folderEditor.merging;
+    return (
+      <div className="kr-standalone__inline-editor">
+        <input
+          autoFocus
+          value={value}
+          aria-label={mode === 'create' ? '新文件夹名' : '新文件夹路径'}
+          placeholder="文件夹名（可含 / 多级）"
+          onChange={(event) =>
+            setFolderEditor(
+              folderEditor.mode === 'create'
+                ? { ...folderEditor, value: event.target.value, error: '' }
+                : {
+                    ...folderEditor,
+                    value: event.target.value,
+                    error: '',
+                    merging: false
+                  }
+            )
+          }
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              submitFolderEditor();
+            } else if (event.key === 'Escape') {
+              event.preventDefault();
+              setFolderEditor(null);
+            }
+          }}
+        />
+        {merging ? (
+          <span className="kr-standalone__inline-warning">
+            目标文件夹已存在，确认会「合并到目标文件夹」；同路径笔记会共存，不会自动合并内容。
+          </span>
+        ) : null}
+        {error ? <span className="kr-page-error">{error}</span> : null}
+        {merging ? (
+          <button type="button" className="kr-primary" onClick={confirmFolderMerge}>
+            确认合并
+          </button>
+        ) : (
+          <button type="button" className="kr-primary" onClick={submitFolderEditor}>
+            确定
+          </button>
+        )}
+        <button type="button" onClick={() => setFolderEditor(null)}>
+          取消
+        </button>
+      </div>
+    );
+  };
+
+  const renderNoteItem = (note: NoteRecord): React.JSX.Element => {
+    const title = standaloneNoteTitle(note.content);
+    const isActive = note.id === selectedId;
+    return (
+      <li
+        key={note.id}
+        className="kr-standalone__item"
+        draggable={Boolean(onMoveNote)}
+        onDragStart={(event) => {
+          setDragNoteId(note.id);
+          event.dataTransfer.effectAllowed = 'move';
+          event.dataTransfer.setData('text/plain', note.id);
+        }}
+        onDragEnd={() => {
+          setDragNoteId(null);
+          setDragTarget(null);
+        }}
+      >
+        <button
+          type="button"
+          className={`kr-standalone__open${isActive ? ' is-active' : ''}`}
+          title={title}
+          onClick={() => onSelect(note.id)}
+        >
+          <span className="kr-standalone__title">{title}</span>
+          <small>
+            {new Date(note.created).toLocaleDateString()} ·{' '}
+            {note.content.replace(/\s+/g, '').length} 字
+            {note.folderPath ? ` · ${note.folderPath}` : ''}
+          </small>
+          {(note.tags ?? []).length > 0 ? (
+            <span className="kr-standalone__tags">
+              {(note.tags ?? []).map((tag) => (
+                <span key={tag} className="kr-standalone__tag">
+                  {tag}
+                </span>
+              ))}
+            </span>
+          ) : null}
+        </button>
+        {loadBacklinks ? (
+          <Backlinks
+            target={{ kind: 'note', documentId: '', id: note.id }}
+            loadBacklinks={loadBacklinks}
+            onOpenBacklink={onOpenBacklink}
+          />
+        ) : null}
+      </li>
+    );
+  };
+
+  const renderFolder = (folder: StandaloneFolder, depth: number): React.JSX.Element => {
+    const collapsed = isFolderCollapsed(folder.path);
+    const renameEditor = renderFolderInlineEditor('rename', folder.path);
+    const dropActive = dragTarget === folder.path;
+    const childCreateEditor = renderFolderInlineEditor('create', '', folder.path);
+    return (
+      <li
+        key={`folder:${folder.path}`}
+        className={`kr-standalone__folder${dropActive ? ' is-drop-target' : ''}`}
+        onDragOver={(event) => {
+          if (!dragNoteId) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = 'move';
+          setDragTarget(folder.path);
+        }}
+        onDragLeave={(event) => {
+          if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+          setDragTarget((current) => (current === folder.path ? null : current));
+        }}
+        onDrop={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const noteId = dragNoteId || event.dataTransfer.getData('text/plain');
+          if (noteId) moveNoteToFolder(noteId, folder.path);
+          setDragNoteId(null);
+          setDragTarget(null);
+        }}
+      >
+        {renameEditor ? (
+          renameEditor
+        ) : (
+          <div
+            className="kr-standalone__folder-row"
+            style={{ paddingLeft: `${depth * 14}px` }}
+          >
+            <button
+              type="button"
+              className="kr-standalone__folder-head"
+              aria-expanded={!collapsed}
+              onClick={() => toggleFolderCollapsed(folder.path)}
+              title={folder.path}
+            >
+              <span className="kr-standalone__folder-caret" aria-hidden="true">
+                {collapsed ? '▸' : '▾'}
+              </span>
+              <span className="kr-standalone__folder-name">{folder.name}</span>
+              <small className="kr-muted">{folder.totalCount} 篇</small>
+            </button>
+            <span className="kr-standalone__folder-actions">
+              {onCreateFolder ? (
+                <button
+                  type="button"
+                  title="新建子文件夹"
+                  aria-label={`在 ${folder.path} 下新建子文件夹`}
+                  onClick={() => openCreateFolderEditor(folder.path)}
+                >
+                  ＋
+                </button>
+              ) : null}
+              {onRenameFolder ? (
+                <button
+                  type="button"
+                  title="重命名文件夹"
+                  aria-label={`重命名 ${folder.path}`}
+                  onClick={() => openRenameFolderEditor(folder.path)}
+                >
+                  ✎
+                </button>
+              ) : null}
+              {onDeleteFolder ? (
+                <button
+                  type="button"
+                  title="删除文件夹"
+                  aria-label={`删除 ${folder.path}`}
+                  onClick={() => setFolderDelete(folder.path)}
+                >
+                  ×
+                </button>
+              ) : null}
+            </span>
+          </div>
+        )}
+        {folderDelete === folder.path ? (
+          <div className="kr-standalone__inline-confirm" role="alert">
+            <span>
+              删除文件夹「{folder.path}」？
+              {folder.totalCount > 0
+                ? `其中 ${folder.totalCount} 篇笔记会被移到上一级/根目录。`
+                : '这是空文件夹。'}
+            </span>
+            <button type="button" className="kr-primary" onClick={confirmDeleteFolder}>
+              删除
+            </button>
+            <button type="button" onClick={() => setFolderDelete(null)}>
+              取消
+            </button>
+          </div>
+        ) : null}
+        {collapsed ? null : (
+          <ul className="kr-standalone__sublist">
+            {childCreateEditor}
+            {folder.notes.map(renderNoteItem)}
+            {folder.children.map((child) => renderFolder(child, depth + 1))}
+          </ul>
+        )}
+      </li>
+    );
+  };
+
+  return (
+    <section
+      className="kr-standalone"
+      aria-label="独立笔记"
+      onKeyDown={(event) => {
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+          event.preventDefault();
+          save();
+        }
+      }}
+    >
+      <header className="kr-standalone__head">
+        <span
+          className="kr-muted kr-standalone__hint"
+          title="删除的笔记/批注会进入回收站，可恢复或彻底删除；只有彻底删除才会清理仅被它引用的图片。"
+        >
+          删除的笔记/批注会进入回收站，可恢复或彻底删除；只有彻底删除才会清理仅被它引用的图片。
+        </span>
+        <div className="kr-standalone__head-actions">
+          <button
+            type="button"
+            className="kr-ghost"
+            onClick={() => void beginMarkdownImport()}
+            disabled={markdownBusy !== null}
+            title="选择笔记文件夹并导入 Markdown 笔记（图片会自动复制，其他附件会复制为本地附件）"
+          >
+            {markdownBusy === 'picking'
+              ? '选择目录…'
+              : markdownBusy === 'scanning'
+                ? '扫描文件夹…'
+                : '导入 Markdown 笔记'}
+          </button>
+          <button type="button" className="kr-primary" onClick={onCreate} disabled={creating}>
+            {creating ? '新建中…' : '+ 新建笔记'}
+          </button>
+        </div>
+      </header>
+      {markdownError ? (
+        <p className="kr-page-error" role="alert">
+          {markdownError}
+          {scanPollExhausted ? (
+            <button type="button" className="kr-link-button" onClick={retryScanStatus}>
+              重试状态
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="kr-link-button"
+            onClick={() => {
+              setMarkdownError('');
+              setScanPollExhausted(false);
+            }}
+          >
+            关闭
+          </button>
+        </p>
+      ) : null}
+      {sseNotice ? (
+        <p className="kr-job-stream-notice" role="status">
+          {sseNotice}
+        </p>
+      ) : null}
+      {statusFetchError ? (
+        <p className="kr-job-status-error" role="alert">
+          {statusFetchError}
+          <button type="button" className="kr-link-button" onClick={retryStatusFetch}>
+            重试
+          </button>
+          <button
+            type="button"
+            className="kr-link-button"
+            onClick={() => setStatusFetchError('')}
+            aria-label="忽略状态读取错误"
+          >
+            忽略
+          </button>
+        </p>
+      ) : null}
+      {fullResultError ? (
+        <p className="kr-job-status-error" role="alert">
+          {fullResultError}
+          <button
+            type="button"
+            className="kr-link-button"
+            onClick={() => fullResultRetryRef.current?.()}
+          >
+            重试
+          </button>
+        </p>
+      ) : null}
+      {scanJob && scanJob.status !== 'idle' ? (
+        <div className={`kr-job-card kr-job-card--scan is-${scanJob.status}`} role="status">
+          <div className="kr-job-card__head">
+            <strong>扫描任务</strong>
+            <span className="kr-muted">
+              {scanJob.status === 'running'
+                ? '运行中'
+                : scanJob.status === 'done'
+                  ? '已完成'
+                  : scanJob.status === 'interrupted'
+                    ? '因重启中断'
+                    : scanJob.status === 'cancelled'
+                      ? '已取消'
+                      : '失败'}
+            </span>
+            <button
+              type="button"
+              className="kr-link-button"
+              onClick={() => {
+                setScanJob(null);
+                setMarkdownError('');
+                setScanPollExhausted(false);
+              }}
+            >
+              关闭
+            </button>
+          </div>
+          {scanJob.status === 'running' ? (
+            <>
+              <p>
+                正在扫描：{scanJob.currentPath || '准备中'}（{scanJob.done}/{scanJob.total}，
+                {scanPercent}%）
+              </p>
+              <progress
+                value={Math.min(scanJob.done, Math.max(1, scanJob.total))}
+                max={Math.max(1, scanJob.total)}
+                aria-label="扫描笔记库进度"
+              />
+              <button
+                type="button"
+                onClick={() => void cancelCurrentScan()}
+                disabled={!cancelMarkdownScan}
+              >
+                取消扫描
+              </button>
+            </>
+          ) : scanJob.status === 'done' || isMarkdownResultMissing(scanJob) ? (
+            isMarkdownResultMissing(scanJob) ? (
+              <p className="kr-page-error" role="alert">
+                任务已完成，但结果文件缺失/损坏。
+                {scanJob.input && startMarkdownScan ? (
+                  <button
+                    type="button"
+                    className="kr-link-button"
+                    onClick={() => void restartInterruptedScan()}
+                  >
+                    重新扫描
+                  </button>
+                ) : null}
+              </p>
+            ) : (
+              <p>
+                扫描完成：{scanJob.scan?.notes.length ?? scanJob.total ?? 0} 篇 Markdown、
+                {scanJob.scan?.attachments.length ?? 0} 个附件。
+                <button
+                  type="button"
+                  className="kr-link-button"
+                  onClick={() => void openScanSelection()}
+                >
+                  查看选择
+                </button>
+              </p>
+            )
+          ) : (
+            <p className="kr-page-error" role="alert">
+              {scanJob.status === 'interrupted'
+                ? '上次扫描任务因进程重启中断。'
+                : scanJob.status === 'cancelled'
+                  ? '扫描已取消。'
+                  : `扫描失败：${scanJob.error || '未知错误'}`}
+              {scanJob.input && startMarkdownScan ? (
+                <button
+                  type="button"
+                  className="kr-link-button"
+                  onClick={() => void restartInterruptedScan()}
+                >
+                  重新开始上次扫描
+                </button>
+              ) : null}
+            </p>
+          )}
+          {markdownJobStaleHint(scanJob) ? (
+            <p className="kr-muted">{markdownJobStaleHint(scanJob)}</p>
+          ) : null}
+        </div>
+      ) : null}
+      {restoredImportJob && restoredImportJob.status !== 'idle' ? (
+        <div
+          className={`kr-job-card kr-job-card--import is-${restoredImportJob.status}`}
+          role="status"
+        >
+          <div className="kr-job-card__head">
+            <strong>导入任务</strong>
+            <span className="kr-muted">
+              {restoredImportJob.status === 'running'
+                ? '运行中'
+                : restoredImportJob.status === 'done'
+                  ? '已完成'
+                  : restoredImportJob.status === 'interrupted'
+                    ? '因重启中断'
+                    : restoredImportJob.status === 'cancelled'
+                      ? '已取消'
+                      : '失败'}
+            </span>
+            <button
+              type="button"
+              className="kr-link-button"
+              onClick={() => {
+                setRestoredImportJob(null);
+                setImportRestoreNotice('');
+              }}
+            >
+              关闭
+            </button>
+          </div>
+          {importRestoreNotice ? <p className="kr-muted">{importRestoreNotice}</p> : null}
+          {restoredImportJob.status === 'running' ? (
+            <p>
+              导入进行中（{restoredImportJob.done}/{restoredImportJob.total}
+              {restoredImportJob.total > 0
+                ? `，${Math.round(
+                    (restoredImportJob.done / restoredImportJob.total) * 100
+                  )}%`
+                : ''}
+              ）。
+              <button
+                type="button"
+                className="kr-link-button"
+                onClick={() => void openRestoredImport()}
+              >
+                查看导入进度
+              </button>
+              {cancelMarkdownImport ? (
+                <button
+                  type="button"
+                  className="kr-link-button"
+                  onClick={() => void cancelRestoredImport()}
+                >
+                  取消导入
+                </button>
+              ) : null}
+            </p>
+          ) : restoredImportJob.status === 'done' || isMarkdownResultMissing(restoredImportJob) ? (
+            isMarkdownResultMissing(restoredImportJob) ? (
+              <p className="kr-page-error" role="alert">
+                任务已完成，但结果文件缺失/损坏。
+                {restoredImportJob.input && startMarkdownImport ? (
+                  <button
+                    type="button"
+                    className="kr-link-button"
+                    onClick={() => void restartInterruptedImport()}
+                  >
+                    重新导入
+                  </button>
+                ) : null}
+              </p>
+            ) : (
+              <p>
+                上次导入完成：
+                {restoredImportJob.report
+                  ? `导入 ${restoredImportJob.report.imported} 篇、更新 ${restoredImportJob.report.updated} 篇。`
+                  : '结果已生成。'}
+                <button
+                  type="button"
+                  className="kr-link-button"
+                  onClick={() => void openRestoredImport()}
+                >
+                  查看上次导入
+                </button>
+              </p>
+            )
+          ) : (
+            <p className="kr-page-error" role="alert">
+              {restoredImportJob.status === 'interrupted'
+                ? '上次导入任务因进程重启中断。'
+                : restoredImportJob.status === 'cancelled'
+                  ? '导入已取消。'
+                  : `导入失败：${restoredImportJob.error || '未知错误'}`}
+              {restoredImportJob.input && startMarkdownImport ? (
+                <button
+                  type="button"
+                  className="kr-link-button"
+                  onClick={() => void restartInterruptedImport()}
+                >
+                  重新开始上次导入
+                </button>
+              ) : null}
+            </p>
+          )}
+          {markdownJobStaleHint(restoredImportJob) ? (
+            <p className="kr-muted">{markdownJobStaleHint(restoredImportJob)}</p>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="kr-standalone__body">
+        <div className="kr-standalone__sidebar">
+          <div className="kr-standalone__sidebar-head">
+            <span className="kr-standalone__sidebar-label">笔记文件夹</span>
+            <div className="kr-standalone__sidebar-actions">
+              {onCreateFolder ? (
+                <button
+                  type="button"
+                  className="kr-ghost"
+                  onClick={() => openCreateFolderEditor('')}
+                  title="新建文件夹（可含 / 多级）"
+                >
+                  新建文件夹
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="kr-ghost"
+                onClick={() => toggleTrash(!showTrash)}
+                aria-pressed={showTrash}
+                title="查看已移入回收站的独立笔记"
+              >
+                {showTrash ? '返回笔记' : '回收站'}
+              </button>
+            </div>
+          </div>
+          {folderMessage ? (
+            <p className="kr-page-error" role="alert">
+              {folderMessage}
+            </p>
+          ) : null}
+          {!showTrash ? renderFolderInlineEditor('create', '', '') : null}
+          {!showTrash && dragNoteId ? (
+            <div
+              className={`kr-standalone__drop-root${
+                dragTarget === '' ? ' is-drop-target' : ''
+              }`}
+              onDragOver={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = 'move';
+                setDragTarget('');
+              }}
+              onDragLeave={() =>
+                setDragTarget((current) => (current === '' ? null : current))
+              }
+              onDrop={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                const noteId = dragNoteId || event.dataTransfer.getData('text/plain');
+                if (noteId) moveNoteToFolder(noteId, '');
+                setDragNoteId(null);
+                setDragTarget(null);
+              }}
+            >
+              拖到此处移动到根目录
+            </div>
+          ) : null}
+          {showTrash ? (
+            <div className="kr-standalone__trash">
+              {trashLoading ? (
+                <p className="kr-muted kr-standalone__hint">正在读取回收站…</p>
+              ) : trashNotes.length === 0 ? (
+                <div className="kr-standalone__empty">
+                  <p>回收站为空。</p>
+                  <p className="kr-muted">移入回收站的独立笔记会显示在这里。</p>
+                </div>
+              ) : (
+                <ul className="kr-standalone__list">
+                  {trashNotes.map((note) => {
+                    const title = standaloneNoteTitle(note.content);
+                    return (
+                      <li key={note.id} className="kr-standalone__item">
+                        <div className="kr-standalone__open kr-standalone__open--trash" title={title}>
+                          <span className="kr-standalone__title">{title}</span>
+                          <small>已移入回收站 · {new Date(note.created).toLocaleDateString()}</small>
+                        </div>
+                        <div className="kr-standalone__trash-actions">
+                          <button type="button" onClick={() => onRestore(note.id)}>
+                            恢复
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => purge(note.id)}
+                            title="彻底删除这条独立笔记（不可恢复，并回收只被它引用的图片资源）"
+                          >
+                            彻底删除
+                          </button>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          ) : loading ? (
+            <p className="kr-muted kr-standalone__hint">正在读取独立笔记…</p>
+          ) : error ? (
+            <p className="kr-page-error" role="alert">
+              {error}
+              {onRetry ? (
+                <button type="button" className="kr-link-button" onClick={onRetry}>
+                  重试
+                </button>
+              ) : null}
+            </p>
+          ) : notes.length === 0 && folders.length === 0 ? (
+            <div className="kr-standalone__empty">
+              <p>还没有独立笔记。</p>
+              <p className="kr-muted">点右上角「新建笔记」记录不依附文献的想法。</p>
+            </div>
+          ) : (
+            <>
+              <label className="kr-standalone__search">
+                <input
+                  type="search"
+                  value={search}
+                  placeholder="搜索独立笔记标题或内容"
+                  aria-label="搜索独立笔记"
+                  onChange={(event) => setSearch(event.target.value)}
+                />
+              </label>
+              {tags.length > 0 ? (
+                <div className="kr-standalone__tag-filter" role="group" aria-label="按标签筛选笔记">
+                  <span className="kr-standalone__tag-filter-label">标签</span>
+                  {tags.map((tag) => (
+                    <button
+                      key={tag}
+                      type="button"
+                      className={`kr-standalone__tag-filter-item${
+                        tagFilter.has(tag) ? ' is-active' : ''
+                      }`}
+                      aria-pressed={tagFilter.has(tag)}
+                      onClick={() => toggleTag(tag)}
+                    >
+                      {tag}
+                    </button>
+                  ))}
+                  {tagFilter.size > 0 ? (
+                    <button
+                      type="button"
+                      className="kr-link-button"
+                      onClick={() => setTagFilter(new Set())}
+                    >
+                      清除标签筛选
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+              {!folderTree || folderTree.totalCount === 0 ? (
+                <div className="kr-standalone__empty">
+                  <p>没有匹配的独立笔记。</p>
+                  <p className="kr-muted">换个关键词，或清除搜索查看全部笔记。</p>
+                  <button
+                    type="button"
+                    className="kr-ghost"
+                    onClick={() => setSearch('')}
+                  >
+                    清除搜索
+                  </button>
+                </div>
+              ) : (
+                <ul className="kr-standalone__list">
+                  {folderTree?.notes.map(renderNoteItem)}
+                  {folderTree?.children.map((child) => renderFolder(child, 0))}
+                </ul>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="kr-standalone__editor">
+          {showTrash ? (
+            <div className="kr-standalone__placeholder">
+              <p>回收站中的独立笔记不可编辑。</p>
+              <p className="kr-muted">可在左侧「恢复」回笔记列表，或「彻底删除」并回收仅被它引用的图片。</p>
+            </div>
+          ) : selectedNote ? (
+            <>
+              <div className="kr-standalone__editor-head">
+                <span
+                  className="kr-standalone__editor-title"
+                  title={standaloneNoteTitle(selectedNote.content)}
+                >
+                  {standaloneNoteTitle(selectedNote.content)}
+                </span>
+                <div className="kr-standalone__head-tools">
+                  {onMoveNote ? (
+                    <label className="kr-standalone__move" title="把这条笔记移动到其他文件夹">
+                      文件夹
+                      <select
+                        value={selectedNote.folderPath ?? ''}
+                        onChange={(event) => onMoveNote(selectedNote.id, event.target.value)}
+                      >
+                        <option value="">根目录</option>
+                        {allFolderPaths.map((path) => (
+                          <option key={path} value={path}>
+                            {path}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : (
+                    <span
+                      className="kr-muted kr-standalone__folder-badge"
+                      title="这条笔记所在的文件夹（导入 Markdown 时保留层级）"
+                    >
+                      文件夹：{selectedNote.folderPath || '根目录'}
+                    </span>
+                  )}
+                  <span className="kr-standalone__tags">
+                    {(selectedNote.tags ?? []).slice(0, 2).map((tag) => (
+                      <span key={tag} className="kr-standalone__tag">
+                        {tag}
+                        {onSetTags ? (
+                          <button
+                            type="button"
+                            className="kr-standalone__tag-remove"
+                            aria-label={`移除标签 ${tag}`}
+                            onClick={() => removeTag(tag)}
+                            disabled={tagSaving}
+                          >
+                            ×
+                          </button>
+                        ) : null}
+                      </span>
+                    ))}
+                    {(selectedNote.tags ?? []).length > 2 ? (
+                      <span
+                        className="kr-standalone__tag-more"
+                        title={`其余标签：${(selectedNote.tags ?? []).slice(2).join('、')}`}
+                      >
+                        +{(selectedNote.tags ?? []).length - 2}
+                      </span>
+                    ) : null}
+                  </span>
+                  {onSetTags ? (
+                    tagEditorOpen ? (
+                      <input
+                        className="kr-standalone__tag-input"
+                        value={tagInput}
+                        placeholder="新标签"
+                        aria-label="添加标签"
+                        autoFocus
+                        disabled={tagSaving}
+                        onChange={(event) => setTagInput(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            addTag();
+                            setTagEditorOpen(false);
+                          } else if (event.key === 'Escape') {
+                            event.preventDefault();
+                            setTagInput('');
+                            setTagEditorOpen(false);
+                          }
+                        }}
+                        onBlur={() => {
+                          if (tagInput.trim()) addTag();
+                          setTagEditorOpen(false);
+                        }}
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        className="kr-ghost kr-standalone__tag-add"
+                        onClick={() => setTagEditorOpen(true)}
+                        title="为这条笔记添加标签"
+                      >
+                        + 标签
+                      </button>
+                    )
+                  ) : null}
+                  <span
+                    className={`kr-standalone__state${dirty ? ' is-dirty' : ''}`}
+                    role="status"
+                  >
+                    {dirty ? '未保存' : '已保存'}
+                  </span>
+                  <button
+                    type="button"
+                    className="kr-primary"
+                    onClick={save}
+                    disabled={!dirty || saving}
+                    title="保存独立笔记（Ctrl+S）"
+                  >
+                    {saving ? '保存中…' : '保存'}
+                  </button>
+                  <button
+                    type="button"
+                    className="kr-ghost kr-standalone__trash"
+                    onClick={remove}
+                    disabled={deleting}
+                    title="移入回收站（可恢复）"
+                  >
+                    {deleting ? '移动中…' : '移入回收站'}
+                  </button>
+                </div>
+              </div>
+              {tagError ? (
+                <p className="kr-page-error kr-standalone__tag-error" role="alert">
+                  {tagError}
+                </p>
+              ) : null}
+              <MarkdownEditor
+                key={selectedNote.id}
+                value={draft}
+                onChange={updateDraft}
+                documents={documents}
+                loadAnnotations={loadAnnotations}
+                loadNotes={loadNotes}
+                standaloneNotes={notes}
+                uploadImage={uploadImage}
+                onOpenInternal={onOpenInternal}
+                onOpenAsset={onOpenAsset}
+                rows={14}
+                placeholder="写点想法…支持 Markdown、内部引用与图片"
+                ariaLabel="独立笔记内容"
+              />
+            </>
+          ) : (
+            <div className="kr-standalone__placeholder">
+              <p>选择左侧笔记开始编辑，或新建一条独立笔记。</p>
+              {notes.length === 0 && !loading && !error ? (
+                <p className="kr-muted">独立笔记不依附文献，适合记零散想法；支持 Markdown 与内部引用。</p>
+              ) : null}
+            </div>
+          )}
+        </div>
+      </div>
+      {markdownDialogOpen && markdownScan ? (
+        <MarkdownImportDialog
+          scan={markdownScan}
+          initialJob={restoredImportJob}
+          statusError={statusFetchError}
+          onRetryStatus={retryStatusFetch}
+          getMarkdownScanTree={getMarkdownScanTree}
+          resolveMarkdownSelection={resolveMarkdownSelection}
+          getMarkdownImportReportPage={getMarkdownImportReportPage}
+          searchMarkdownScan={searchMarkdownScan}
+          onRescan={() => {
+            closeMarkdownDialog();
+            void beginMarkdownImport();
+          }}
+          onClose={closeMarkdownDialog}
+          onStartImport={(input) =>
+            startMarkdownImport
+              ? startMarkdownImport(input)
+              : Promise.reject(new Error('当前运行环境不支持后台导入'))
+          }
+          onGetImportStatus={() =>
+            getMarkdownImportStatus
+              ? getMarkdownImportStatus()
+              : Promise.reject(new Error('当前运行环境不支持读取导入进度'))
+          }
+          onCancelImport={() =>
+            cancelMarkdownImport
+              ? cancelMarkdownImport()
+              : Promise.reject(new Error('当前运行环境不支持取消导入'))
+          }
+        />
+      ) : null}
+    </section>
+  );
+}
+
+

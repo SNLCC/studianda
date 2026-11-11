@@ -1,0 +1,9 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+injectWorkspacePackages: true
+
+overrides:
+  fastify: 5.12.7
+  "@fastify/multipart": 10.1.6

@@ -1,0 +1,38 @@
+{
+  "name": "@studianda/desktop",
+  "version": "0.1.0",
+  "description": "勘读 Studianda 桌面端（Electron）",
+  "author": "Studianda contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SNLCC/studianda.git"
+  },
+  "private": true,
+  "type": "module",
+  "main": "out/main/index.cjs",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck": "tsc -p tsconfig.json",
+    "verify:window": "node ../../scripts/verify-window-controls.mjs",
+    "package": "electron-builder --dir --config electron-builder.yml"
+  },
+  "dependencies": {
+    "@studianda/app": "workspace:*",
+    "@studianda/shared": "workspace:*",
+    "electron-updater": "6.8.11"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.1.0",
+    "electron": "44.5.1",
+    "electron-builder": "^26.0.0",
+    "electron-vite": "^4.0.0",
+    "pdfjs-dist": "^6.4.299",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.0"
+  }
+}

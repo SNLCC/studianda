@@ -1,0 +1,179 @@
+[
+  {
+    "name": "single",
+    "documents": [
+      {
+        "id": "d1",
+        "name": "One",
+        "tags": [
+          "alpha",
+          "common"
+        ]
+      },
+      {
+        "id": "d2",
+        "name": "Two",
+        "tags": [
+          "beta",
+          "common"
+        ]
+      },
+      {
+        "id": "d3",
+        "name": "Three",
+        "tags": []
+      }
+    ],
+    "ids": [
+      "d1"
+    ]
+  },
+  {
+    "name": "all",
+    "documents": [
+      {
+        "id": "d1",
+        "name": "One",
+        "tags": [
+          "alpha",
+          "common"
+        ]
+      },
+      {
+        "id": "d2",
+        "name": "Two",
+        "tags": [
+          "beta",
+          "common"
+        ]
+      },
+      {
+        "id": "d3",
+        "name": "Three",
+        "tags": []
+      }
+    ],
+    "ids": [
+      "d1",
+      "d2",
+      "d3"
+    ]
+  },
+  {
+    "name": "tags-common",
+    "documents": [
+      {
+        "id": "d1",
+        "name": "One",
+        "tags": [
+          "alpha",
+          "common"
+        ]
+      },
+      {
+        "id": "d2",
+        "name": "Two",
+        "tags": [
+          "beta",
+          "common"
+        ]
+      },
+      {
+        "id": "d3",
+        "name": "Three",
+        "tags": []
+      }
+    ],
+    "ids": [
+      "d1",
+      "d2"
+    ]
+  },
+  {
+    "name": "tags-none",
+    "documents": [
+      {
+        "id": "d1",
+        "name": "One",
+        "tags": [
+          "alpha",
+          "common"
+        ]
+      },
+      {
+        "id": "d2",
+        "name": "Two",
+        "tags": [
+          "beta",
+          "common"
+        ]
+      },
+      {
+        "id": "d3",
+        "name": "Three",
+        "tags": []
+      }
+    ],
+    "error": "所选跨文献范围为空，请选择标签或文献"
+  },
+  {
+    "name": "documents-without-current",
+    "documents": [
+      {
+        "id": "d1",
+        "name": "One",
+        "tags": [
+          "alpha",
+          "common"
+        ]
+      },
+      {
+        "id": "d2",
+        "name": "Two",
+        "tags": [
+          "beta",
+          "common"
+        ]
+      },
+      {
+        "id": "d3",
+        "name": "Three",
+        "tags": []
+      }
+    ],
+    "ids": [
+      "d1",
+      "d2"
+    ]
+  },
+  {
+    "name": "documents-subset",
+    "documents": [
+      {
+        "id": "d1",
+        "name": "One",
+        "tags": [
+          "alpha",
+          "common"
+        ]
+      },
+      {
+        "id": "d2",
+        "name": "Two",
+        "tags": [
+          "beta",
+          "common"
+        ]
+      },
+      {
+        "id": "d3",
+        "name": "Three",
+        "tags": []
+      }
+    ],
+    "ids": [
+      "d1",
+      "d3"
+    ]
+  }
+]

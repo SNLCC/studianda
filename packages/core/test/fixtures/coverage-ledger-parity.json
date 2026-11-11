@@ -1,0 +1,167 @@
+[
+  {
+    "name": "batch-only",
+    "options": {},
+    "expected": [
+      {
+        "dimension": "D1",
+        "label": "概念界定",
+        "status": "UNCERTAIN",
+        "evidence": [
+          "k1"
+        ],
+        "reason": "支撑这一项的原文所在页读不了，因此不能确认这一项是否被讨论过。"
+      },
+      {
+        "dimension": "D2",
+        "label": "理论依据",
+        "status": "NOT_FOUND_IN_BATCH",
+        "evidence": []
+      }
+    ]
+  },
+  {
+    "name": "read-scope",
+    "options": {
+      "searched_full_document": true
+    },
+    "expected": [
+      {
+        "dimension": "D1",
+        "label": "概念界定",
+        "status": "UNCERTAIN",
+        "evidence": [
+          "k1"
+        ],
+        "reason": "支撑这一项的原文所在页读不了，因此不能确认这一项是否被讨论过。"
+      },
+      {
+        "dimension": "D2",
+        "label": "理论依据",
+        "status": "NOT_FOUND_IN_READ_SCOPE",
+        "evidence": []
+      }
+    ]
+  },
+  {
+    "name": "unreadable-pages",
+    "options": {
+      "searched_full_document": true,
+      "unreadable_pages": [
+        5
+      ],
+      "readable_pages": [
+        1,
+        2
+      ]
+    },
+    "expected": [
+      {
+        "dimension": "D1",
+        "label": "概念界定",
+        "status": "UNCERTAIN",
+        "evidence": [
+          "k1"
+        ],
+        "unreadable_pages": [
+          5
+        ],
+        "reason": "支撑这一项的原文所在页读不了，因此不能确认这一项是否被讨论过。",
+        "reviewed_pages": 2
+      },
+      {
+        "dimension": "D2",
+        "label": "理论依据",
+        "status": "UNCERTAIN",
+        "evidence": [],
+        "unreadable_pages": [
+          5
+        ],
+        "reviewed_pages": 2
+      }
+    ]
+  },
+  {
+    "name": "not-fully-recorded",
+    "options": {
+      "searched_full_document": true,
+      "examined_scope_complete": false
+    },
+    "expected": [
+      {
+        "dimension": "D1",
+        "label": "概念界定",
+        "status": "UNCERTAIN",
+        "evidence": [
+          "k1"
+        ],
+        "reason": "支撑这一项的原文所在页读不了，因此不能确认这一项是否被讨论过。"
+      },
+      {
+        "dimension": "D2",
+        "label": "理论依据",
+        "status": "NOT_FOUND_IN_BATCH",
+        "evidence": []
+      }
+    ]
+  },
+  {
+    "name": "evidence-on-unreadable",
+    "options": {
+      "searched_full_document": true,
+      "unreadable_pages": [
+        5
+      ],
+      "evidence_pages": {
+        "k1": 5
+      }
+    },
+    "expected": [
+      {
+        "dimension": "D1",
+        "label": "概念界定",
+        "status": "UNCERTAIN",
+        "evidence": [
+          "k1"
+        ],
+        "unreadable_pages": [
+          5
+        ],
+        "reason": "支撑这一项的原文所在页读不了，因此不能确认这一项是否被讨论过。"
+      },
+      {
+        "dimension": "D2",
+        "label": "理论依据",
+        "status": "UNCERTAIN",
+        "evidence": [],
+        "unreadable_pages": [
+          5
+        ]
+      }
+    ]
+  },
+  {
+    "name": "full-review",
+    "options": {
+      "searched_full_document": true,
+      "gap_search_ran": true
+    },
+    "expected": [
+      {
+        "dimension": "D1",
+        "label": "概念界定",
+        "status": "UNCERTAIN",
+        "evidence": [
+          "k1"
+        ],
+        "reason": "支撑这一项的原文所在页读不了，因此不能确认这一项是否被讨论过。"
+      },
+      {
+        "dimension": "D2",
+        "label": "理论依据",
+        "status": "NOT_FOUND_AFTER_FULL_DOCUMENT_REVIEW",
+        "evidence": []
+      }
+    ]
+  }
+]

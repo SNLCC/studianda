@@ -1,0 +1,16 @@
+{
+  "missing": [
+    "DELETE /api/v1/documents/:p/navigation",
+    "PUT /api/v1/documents/:p/navigation",
+    "GET /api/v1/secrets/status",
+    "POST /api/v1/secrets",
+    "DELETE /api/v1/secrets/:p"
+  ],
+  "reason": {
+    "DELETE /api/v1/documents/:p/navigation": "兼容保留：整页导航覆盖接口；新客户端只用 POST /navigation/entries，保留路由以便旧数据兼容。",
+    "PUT /api/v1/documents/:p/navigation": "兼容保留：整页覆盖接口；新客户端只用 POST /navigation/entries。",
+    "GET /api/v1/secrets/status": "壳专用：桌面主进程用 Electron safeStorage 管理密钥，通过 IPC 读取状态，不经 api-client。",
+    "POST /api/v1/secrets": "壳专用：桌面主进程启动 Core 后经本机 HTTP 推送解密后的密钥；Host 接入时补进共享客户端。",
+    "DELETE /api/v1/secrets/:p": "壳专用：桌面主进程直接删除 safeStorage 中的条目，不经 Core。"
+  }
+}

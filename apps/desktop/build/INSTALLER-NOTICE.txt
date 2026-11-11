@@ -1,0 +1,18 @@
+﻿勘读 Studianda 安装许可提示
+
+勘读 Studianda 本项目代码采用 PolyForm Noncommercial License 1.0.0（非商业许可），完整条款见安装后目录中的 LICENSE，或 https://polyformproject.org/licenses/noncommercial/1.0.0 。
+商业使用需要单独授权。
+
+本安装包包含第三方开源组件，版权归各自作者所有。
+完整清单和许可证原文见安装目录的 resources/legal/。
+安装后可从“设置 → 第三方许可与声明”打开完整声明。
+
+本项目应用图标、安装包/卸载程序图标与界面内品牌标记图标以几何图元程序化生成。溯源见安装目录 legal/BRAND.md。
+
+说明：
+1. 本机 OCR 使用 Tesseract.js（Apache-2.0）；语言训练数据不随安装包分发，只由用户在本机 OCR 设置里选择并主动下载，许可证见 legal/upstream/Tesseract-tessdata-APACHE-2.0.txt。
+2. 本提示是安装前摘要，不替代 resources/legal/THIRD-PARTY.md、NOTICE.html、SOURCES.md 与各许可证原文。
+3. 不得删除安装包内的 legal/ 目录后再分发。
+
+项目源代码与声明的保留位置：
+本安装包随附 LICENSE、NOTICE 与 legal/；再分发时请一并保留。

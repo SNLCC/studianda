@@ -1,0 +1,74 @@
+[
+  {
+    "name": "whole",
+    "query": "请通读全文并总结论证脉络",
+    "selection": "",
+    "expected": {
+      "breadth": "document",
+      "reason": "问题要求完整或整体阅读",
+      "origin": "规则",
+      "pages": []
+    }
+  },
+  {
+    "name": "pages-range",
+    "query": "第 3—5 页说了什么？",
+    "selection": "",
+    "expected": {
+      "breadth": "local",
+      "reason": "问题明确指定页码",
+      "origin": "规则",
+      "pages": [
+        3,
+        4,
+        5
+      ]
+    }
+  },
+  {
+    "name": "page-single",
+    "query": "第 2 页的重点是什么？",
+    "selection": "",
+    "expected": {
+      "breadth": "local",
+      "reason": "问题明确指定页码",
+      "origin": "规则",
+      "pages": [
+        2
+      ]
+    }
+  },
+  {
+    "name": "selection-explain",
+    "query": "请解释这段",
+    "selection": "被选中的原文",
+    "expected": {
+      "breadth": "local",
+      "reason": "解释选文，读取连续邻页",
+      "origin": "规则",
+      "pages": []
+    }
+  },
+  {
+    "name": "current-page",
+    "query": "这一页在讲什么？",
+    "selection": "",
+    "expected": {
+      "breadth": "local",
+      "reason": "问题明确指向当前页",
+      "origin": "规则",
+      "pages": []
+    }
+  },
+  {
+    "name": "conservative",
+    "query": "这个概念是什么意思？",
+    "selection": "",
+    "expected": {
+      "breadth": "document",
+      "reason": "范围不确定，保守读取完整文献",
+      "origin": "保守回退",
+      "pages": []
+    }
+  }
+]
