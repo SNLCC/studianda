@@ -7,6 +7,9 @@
 完整清单和许可证原文见安装目录的 resources/legal/。
 安装后可从“设置 → 第三方许可与声明”打开完整声明。
 
+安装器使用 NSIS 3.0.4.1 与 nsis7z 解压插件；nsis7z 基于 7-Zip 19.00 源码，按 7-Zip License（GNU LGPL-2.1+，含 unRAR 限制）分发。许可原文、来源与完整对应源码见 resources/legal/upstream/official/nsis7z/。
+安装器还内嵌 NSIS 插件 StdUtils、UAC 与 WinShell；许可与来源见 resources/legal/upstream/official/nsis-plugins/。
+
 使用须知与隐私说明：完整版见安装目录 resources/legal/USAGE-NOTICE.md；应用内“设置 → 关于与更新 → 使用须知与隐私说明”为精简版。
 
 本项目应用图标、安装包/卸载程序图标与界面内品牌标记图标以几何图元程序化生成。溯源见安装目录 legal/BRAND.md。

@@ -45,6 +45,7 @@ const repoRequiredFiles = [
   'NOTICE',
   'legal/PROJECT-LICENSE.txt',
   'legal/PROJECT-NOTICE.txt',
+  'legal/COMPATIBILITY.md',
   'legal/BRAND.md',
   'legal/fonts.json',
   'legal/THIRD-PARTY.md',
@@ -54,11 +55,43 @@ const repoRequiredFiles = [
   'legal/electron/LICENSE.txt',
   'legal/electron/LICENSES.chromium.html',
   'legal/runtime/Node-LICENSE.txt',
+  'legal/upstream/official/nsis7z/README.md',
+  'legal/upstream/official/nsis7z/LICENSE.txt',
+  'legal/upstream/official/nsis7z/LGPL-2.1.txt',
+  'legal/upstream/official/nsis7z/unRAR-LICENSE.txt',
+  'legal/upstream/official/nsis7z/7z1900-src.7z',
+  'legal/upstream/official/nsis7z/source/nsis7z/CPP/7zip/Bundles/Nsis7z/nsis7z.cpp',
+  'legal/upstream/official/nsis-plugins/README.md',
+  'legal/upstream/official/nsis-plugins/stdutils/README.md',
+  'legal/upstream/official/nsis-plugins/stdutils/LICENSE-LGPL-2.1.txt',
+  'legal/upstream/official/nsis-plugins/stdutils/LICENSE-CLARIFICATION.txt',
+  'legal/upstream/official/nsis-plugins/stdutils/source/Contrib/StdUtils/StdUtils.vcxproj',
+  'legal/upstream/official/nsis-plugins/uac/README.md',
+  'legal/upstream/official/nsis-plugins/uac/LICENSE.txt',
+  'legal/upstream/official/nsis-plugins/uac/source/uac.cpp',
+  'legal/upstream/official/nsis-plugins/winshell/README.md',
   'docs/USAGE-NOTICE.md',
   'apps/desktop/build/INSTALLER-NOTICE.txt'
 ];
 for (const file of repoRequiredFiles) {
   if (!existsSync(path.join(root, file))) fail(`仓库缺少法律文件：${file}`);
+}
+
+// 7-Zip / nsis7z 的随包源码必须与说明中的版本、哈希一致（防止换成别的源码却仍声称合规）。
+const nsis7zDir = 'legal/upstream/official/nsis7z';
+const sevenZipSourceHash = '9ba70a5e8485cf9061b30a2a84fe741de5aeb8dd271aab8889da0e9b3bf1868e';
+const sevenZipSourceFile = path.join(root, nsis7zDir, '7z1900-src.7z');
+if (existsSync(sevenZipSourceFile)) {
+  if (sha256(readFileSync(sevenZipSourceFile)) !== sevenZipSourceHash) {
+    fail(`${nsis7zDir}/7z1900-src.7z 的 SHA-256 与说明不一致（应为 ${sevenZipSourceHash}）`);
+  }
+}
+const sevenZipLicenseText = path.join(root, nsis7zDir, 'LICENSE.txt');
+if (existsSync(sevenZipLicenseText)) {
+  const text = normalize(readFileSync(sevenZipLicenseText, 'utf8'));
+  for (const needle of ['GNU LGPL', 'unRAR license restriction']) {
+    if (!text.includes(needle)) fail(`${nsis7zDir}/LICENSE.txt 缺少「${needle}」说明`);
+  }
 }
 
 // ---------------------------------------------------------------------------

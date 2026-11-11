@@ -233,5 +233,6 @@
 
 - 项目自身代码按 **PolyForm Noncommercial License 1.0.0** 发布（见 [LICENSE](LICENSE)、[NOTICE](NOTICE)）：非商业用途可以使用、修改与再分发（需随附许可条款与 NOTICE）；**这不是 OSI 开源许可证**，商业使用需单独授权。
 - 第三方组件仍适用各自许可证：清单与原文见 [`legal/THIRD-PARTY.md`](legal/THIRD-PARTY.md)、[`legal/NOTICE.html`](legal/NOTICE.html)、[`legal/inventory.json`](legal/inventory.json)。
+- Windows 安装器内嵌 NSIS 7z 解压插件 `nsis7z.dll`（基于 7-Zip 19.00 源码，按 7-Zip License / LGPL-2.1+ 与 unRAR 限制分发）及 StdUtils / UAC / WinShell 等 NSIS 插件；对应许可、来源与源码见 [`legal/upstream/official/nsis7z/`](legal/upstream/official/nsis7z/README.md) 与 [`legal/upstream/official/nsis-plugins/`](legal/upstream/official/nsis-plugins/README.md)，第三方许可与项目许可的兼容性说明见 [`legal/COMPATIBILITY.md`](legal/COMPATIBILITY.md)。
 - 本机 OCR 使用 `tesseract.js`（Apache-2.0）；语言训练数据来自官方 `tesseract-ocr/tessdata_fast`（Apache-2.0），**不随仓库或安装包分发**，只在你于设置中主动下载时联网获取。
 - 界面内置开源中文字体，按相关协议分发。

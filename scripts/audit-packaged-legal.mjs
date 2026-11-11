@@ -356,6 +356,10 @@ const embeddedNotes = `## 内嵌原生二进制（native binary）/ WASM / 安�
 - PDF.js WASM / 资源：JBIG2、OpenJPEG、QCMS、CMaps、标准字体、ICC；说明见 \`upstream/official/pdfjs-wasm/PDFJS-WASM-THIRD-PARTY.md\`。
 - tesseract.js 预构建 dist：内嵌 buffer 6.0.3（MIT）、ieee754 1.2.1（BSD-3-Clause）、regenerator-runtime（MIT）、zlib.js（MIT）；buffer/ieee754 原文见 \`upstream/official/tesseract-embedded/\`。
 - NSIS 安装器：安装器 stub 使用 NSIS 3.0.4.1（zlib/libpng license），许可证原文见 \`upstream/official/nsis-COPYING.txt\`。
+- nsis7z.dll：NSIS 的 7z 解压插件（安装时解压 app-64.7z），基于 7-Zip 19.00 源码（Nik Medved / Igor Pavlov）；按 7-Zip License（GNU LGPL-2.1+，含 unRAR 限制）分发。许可原文、来源与完整对应源码见 \`upstream/official/nsis7z/\`。
+- StdUtils.dll：NSIS 插件（electron-builder 模板使用），作者 LoRd_MuldeR；按 GNU LGPL-2.1-or-later 分发，许可、澄清说明与完整对应源码见 \`upstream/official/nsis-plugins/stdutils/\`。
+- UAC.dll：NSIS 提权插件，作者 Anders；按 ZLIB/LIBPNG License 分发，许可与源码见 \`upstream/official/nsis-plugins/uac/\`。
+- WinShell.dll：NSIS 快捷方式/AppUserModelID 插件，作者 Anders；上游页面标注 Freeware，来源记录见 \`upstream/official/nsis-plugins/winshell/\`。
 - elevate.exe：NSIS 提权辅助程序（MIT，Copyright (c) 2007 Johannes Passing），原文见 \`upstream/official/elevate-MIT.txt\`。
 - FFmpeg：Electron 内置 \`ffmpeg.dll\`（LGPL-2.1-or-later，Electron 官方构建，未修改）；源代码与构建配置见 https://github.com/electron/electron ，许可证见 \`upstream/official/ffmpeg-LGPL-2.1.txt\`。
 - pako 的 zlib 兼容层：说明见 \`upstream/official/pako-zlib-README.txt\`。
@@ -436,6 +440,16 @@ ${sourceRows}
 - Electron 版本：${electronVersion}
 - Node.js 版本：${process.versions.node}
 
+## 安装器组件
+
+- NSIS 3.0.4.1（zlib/libpng license）：\`upstream/official/nsis-COPYING.txt\`
+- nsis7z.dll（基于 7-Zip 19.00，7-Zip License / LGPL-2.1+，含 unRAR 限制）：许可与来源见 \`upstream/official/nsis7z/\`
+- StdUtils.dll（LoRd_MuldeR，GNU LGPL-2.1+）：许可、澄清与源码见 \`upstream/official/nsis-plugins/stdutils/\`
+- UAC.dll（Anders，ZLIB/LIBPNG）：许可与源码见 \`upstream/official/nsis-plugins/uac/\`
+- WinShell.dll（Anders，上游页面标注 Freeware）：来源记录见 \`upstream/official/nsis-plugins/winshell/\`
+- elevate.exe（MIT）：\`upstream/official/elevate-MIT.txt\`
+- FFmpeg（Electron 内置 ffmpeg.dll，LGPL-2.1-or-later）：\`upstream/official/ffmpeg-LGPL-2.1.txt\`
+
 ${missing.length === 0 ? '' : `## 缺失项\n\n${missing.map((record) => `- ${record.name}@${record.version}（${record.license}）`).join('\n')}\n`}
 ## 免责声明
 
@@ -502,6 +516,10 @@ ${bundledFonts
 <li><a href="upstream/official/pdfjs-wasm/PDFJS-WASM-THIRD-PARTY.md">PDF.js WASM/资源</a>（JBIG2、OpenJPEG、QCMS、CMaps、标准字体、ICC）</li>
 <li><a href="upstream/official/tesseract-embedded/SOURCES.json">tesseract.js 预构建 dist</a>（buffer、ieee754、regenerator-runtime、zlib.js）</li>
 <li><a href="upstream/official/nsis-COPYING.txt">NSIS 安装器 stub</a>（zlib/libpng license）</li>
+<li><a href="upstream/official/nsis7z/README.md">nsis7z.dll</a>（NSIS 7z 解压插件，基于 7-Zip 19.00；7-Zip License / LGPL-2.1+，含 unRAR 限制；<a href="upstream/official/nsis7z/README.md">许可、来源与随包源码</a>）</li>
+<li><a href="upstream/official/nsis-plugins/stdutils/README.md">StdUtils.dll</a>（NSIS 插件，LoRd_MuldeR；GNU LGPL-2.1+；<a href="upstream/official/nsis-plugins/stdutils/">许可、澄清与随包源码</a>）</li>
+<li><a href="upstream/official/nsis-plugins/uac/README.md">UAC.dll</a>（NSIS 提权插件，Anders；ZLIB/LIBPNG；<a href="upstream/official/nsis-plugins/uac/">许可与源码</a>）</li>
+<li><a href="upstream/official/nsis-plugins/winshell/README.md">WinShell.dll</a>（NSIS 快捷方式/AppUserModelID 插件，Anders；来源记录）</li>
 <li><a href="upstream/official/elevate-MIT.txt">elevate.exe</a>（MIT，Copyright (c) 2007 Johannes Passing）</li>
 <li><a href="upstream/official/ffmpeg-LGPL-2.1.txt">FFmpeg（Electron 内置 ffmpeg.dll，LGPL-2.1-or-later）</a>；源代码见 <a href="https://github.com/electron/electron">electron/electron</a></li>
 </ul>

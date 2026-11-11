@@ -1,6 +1,6 @@
 # 许可证来源与哈希
 
-生成时间：2026-11-09T17:24:16.011Z
+生成时间：2026-11-11T13:04:11.075Z
 
 “官方仓库”列取自各包 `package.json` 的 repository/homepage；许可证文件哈希取自安装包内实际文件。
 
@@ -110,6 +110,16 @@
 - Node.js 官方发行物许可证: `runtime/Node-LICENSE.txt`（SHA-256: ed34dd8e3f0a78dbaf00d0444ce8e285b015b765379c2e17880455f70370f8e9）
 - Electron 版本：44.5.1
 - Node.js 版本：24.21.0
+
+## 安装器组件
+
+- NSIS 3.0.4.1（zlib/libpng license）：`upstream/official/nsis-COPYING.txt`
+- nsis7z.dll（基于 7-Zip 19.00，7-Zip License / LGPL-2.1+，含 unRAR 限制）：许可与来源见 `upstream/official/nsis7z/`
+- StdUtils.dll（LoRd_MuldeR，GNU LGPL-2.1+）：许可、澄清与源码见 `upstream/official/nsis-plugins/stdutils/`
+- UAC.dll（Anders，ZLIB/LIBPNG）：许可与源码见 `upstream/official/nsis-plugins/uac/`
+- WinShell.dll（Anders，上游页面标注 Freeware）：来源记录见 `upstream/official/nsis-plugins/winshell/`
+- elevate.exe（MIT）：`upstream/official/elevate-MIT.txt`
+- FFmpeg（Electron 内置 ffmpeg.dll，LGPL-2.1-or-later）：`upstream/official/ffmpeg-LGPL-2.1.txt`
 
 
 ## 免责声明

@@ -1,6 +1,6 @@
 # 第三方组件与许可证声明
 
-生成时间：2026-11-09T17:24:16.011Z
+生成时间：2026-11-11T13:04:11.075Z
 
 本清单从**实际安装包** `resources/app.asar` 的依赖树生成，覆盖渲染器、Core 和生产依赖；不是仅根据源码清单推测。
 
@@ -140,6 +140,10 @@
 - PDF.js WASM / 资源：JBIG2、OpenJPEG、QCMS、CMaps、标准字体、ICC；说明见 `upstream/official/pdfjs-wasm/PDFJS-WASM-THIRD-PARTY.md`。
 - tesseract.js 预构建 dist：内嵌 buffer 6.0.3（MIT）、ieee754 1.2.1（BSD-3-Clause）、regenerator-runtime（MIT）、zlib.js（MIT）；buffer/ieee754 原文见 `upstream/official/tesseract-embedded/`。
 - NSIS 安装器：安装器 stub 使用 NSIS 3.0.4.1（zlib/libpng license），许可证原文见 `upstream/official/nsis-COPYING.txt`。
+- nsis7z.dll：NSIS 的 7z 解压插件（安装时解压 app-64.7z），基于 7-Zip 19.00 源码（Nik Medved / Igor Pavlov）；按 7-Zip License（GNU LGPL-2.1+，含 unRAR 限制）分发。许可原文、来源与完整对应源码见 `upstream/official/nsis7z/`。
+- StdUtils.dll：NSIS 插件（electron-builder 模板使用），作者 LoRd_MuldeR；按 GNU LGPL-2.1-or-later 分发，许可、澄清说明与完整对应源码见 `upstream/official/nsis-plugins/stdutils/`。
+- UAC.dll：NSIS 提权插件，作者 Anders；按 ZLIB/LIBPNG License 分发，许可与源码见 `upstream/official/nsis-plugins/uac/`。
+- WinShell.dll：NSIS 快捷方式/AppUserModelID 插件，作者 Anders；上游页面标注 Freeware，来源记录见 `upstream/official/nsis-plugins/winshell/`。
 - elevate.exe：NSIS 提权辅助程序（MIT，Copyright (c) 2007 Johannes Passing），原文见 `upstream/official/elevate-MIT.txt`。
 - FFmpeg：Electron 内置 `ffmpeg.dll`（LGPL-2.1-or-later，Electron 官方构建，未修改）；源代码与构建配置见 https://github.com/electron/electron ，许可证见 `upstream/official/ffmpeg-LGPL-2.1.txt`。
 - pako 的 zlib 兼容层：说明见 `upstream/official/pako-zlib-README.txt`。
