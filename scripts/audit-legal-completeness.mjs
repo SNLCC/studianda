@@ -37,6 +37,9 @@ function normalize(text) {
   return text.replace(/\r\n/g, '\n');
 }
 
+// 法律文本在 Git/CI 上可能因 core.autocrlf 出现 CRLF/LF 差异，内容比较按归一化换行处理。
+const sameTextFiles = (a, b) => normalize(readFileSync(a, 'utf8')) === normalize(readFileSync(b, 'utf8'));
+
 // ---------------------------------------------------------------------------
 // 1) 仓库必备法律文件（缺失即失败）
 // ---------------------------------------------------------------------------
@@ -103,7 +106,7 @@ const copyPairs = [
 ];
 for (const [canonical, copy] of copyPairs) {
   if (!existsSync(path.join(root, canonical)) || !existsSync(path.join(root, copy))) continue;
-  if (sha256Of(canonical) !== sha256Of(copy)) {
+  if (!sameTextFiles(path.join(root, canonical), path.join(root, copy))) {
     fail(`${copy} 与 ${canonical} 内容不一致（同一法律文本不能有两份不同版本）`);
   }
 }
@@ -249,7 +252,7 @@ if (checkPackage) {
       const packaged = path.join(resourcesDir, name);
       if (!existsSync(packaged)) {
         fail(`安装包缺少 resources/${name}`);
-      } else if (sha256(readFileSync(packaged)) !== sha256Of(name)) {
+      } else if (!sameTextFiles(packaged, path.join(root, name))) {
         fail(`安装包 resources/${name} 与仓库 ${name} 内容不一致`);
       }
     }
@@ -294,7 +297,7 @@ if (checkPackage) {
       const packaged = path.join(unpackedDir, packagedName);
       if (!existsSync(packaged)) {
         fail(`安装包缺少 ${packagedName}`);
-      } else if (sha256(readFileSync(packaged)) !== sha256Of(repoName)) {
+      } else if (!sameTextFiles(packaged, path.join(root, repoName))) {
         fail(`安装包 ${packagedName} 与仓库 ${repoName} 内容不一致`);
       }
     }
