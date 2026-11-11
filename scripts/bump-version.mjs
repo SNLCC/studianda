@@ -2,7 +2,7 @@
  * 同步升级 workspace 版本号。
  *
  * 用法（仓库根目录）：
- *   node scripts/bump-version.mjs 0.1.1
+ *   node scripts/bump-version.mjs 0.1.0
  *
  * 会改写 root package.json、apps/desktop/package.json、packages/*\/package.json 的
  * version 字段（只改 version，保留其余字段与两空格缩进）。

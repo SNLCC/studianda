@@ -17,7 +17,7 @@
 - 发布时要求 root `package.json`、`apps/desktop/package.json`、`packages/*/package.json` 的 `version` 完全一致，由 `pnpm check:version` 强制校验。**不要手改单个 package.json**，用：
 
   ```powershell
-  node scripts/bump-version.mjs 0.1.1
+  node scripts/bump-version.mjs 0.1.0
   ```
 
 - 面向普通用户的版本只发正式版；预发布（Release 勾选 pre-release）不会进入 GitHub 的 latest，`allowPrerelease=false` 的客户端不会收到。
@@ -64,18 +64,18 @@
 
 ```powershell
 # 1) 从仓库根目录升级版本（会同步 root / apps/desktop / packages/*）
-node scripts/bump-version.mjs 0.1.1
+node scripts/bump-version.mjs 0.1.0
 
 # 2) 写发版说明
-#    docs/releases/v0.1.1.md → 参照 docs/releases/v0.1.0.md
+#    在 docs/releases/ 下新建 <tag>.md，参照 docs/releases/v0.1.0.md
 
 # 3) 自检
 pnpm check:version
 
 # 4) 提交、打 tag、推送（脚本不会替你做这些）
-git add package.json apps/desktop/package.json packages docs/releases/v0.1.1.md
-git commit -m "chore(release): v0.1.1"
-git tag v0.1.1
+git add package.json apps/desktop/package.json packages docs/releases/<tag>.md
+git commit -m "chore(release): v0.1.0"
+git tag v0.1.0
 git push origin main --tags
 ```
 
@@ -100,7 +100,7 @@ git push origin main --tags
    - 它构建当前 `main`、发布到已存在的标签 `v0.1.0`。注意：这种情况下 Release 记录的是 `main` 的 commit，而标签仍指向旧提交（`build-manifest.json` 里的 commit 是实际构建的 commit）。
    - 版本号与 tag 必须一致，`check-version` 会拦。
 3. 若同 tag 已有 draft Release，`gh release create` 会失败。在 Releases 页面删除该草稿（**不要删 tag**），再重跑。
-4. 不要为了重跑而删除/push 新 tag，也不要覆盖已发布 Release 的资产（原因见「回滚策略」）。正式版从 0.1.1 起走正常 tag 流程，标签与构建 commit 会一致。
+4. 不要为了重跑而删除/push 新 tag，也不要覆盖已发布 Release 的资产（原因见「回滚策略」）。正式版从 0.1.0 起走正常 tag 流程，标签与构建 commit 会一致。
 
 ## 产物与校验
 
