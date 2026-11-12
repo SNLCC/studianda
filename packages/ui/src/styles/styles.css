@@ -587,6 +587,10 @@ body:has(.kr-desktop) {
 
 .kr-pages__frame {
   margin: 0 auto;
+  /* 缩放预览走 transform（合成器），不触发 266 页重排；变量由滚动容器上的
+     --kr-preview-zoom 控制，滚轮期间直接改 DOM，不 setState。 */
+  transform-origin: 50% 0;
+  transform: scale(var(--kr-preview-zoom, 1));
 }
 
 .kr-pdf-page {
