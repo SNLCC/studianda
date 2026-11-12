@@ -114,15 +114,23 @@ export {
   confirmPurgeNote
 } from './note-purge.js';
 export {
+  STANDALONE_SIDEBAR_COLLAPSED_KEY,
   STATUS_POLL_MAX_RETRIES,
   StandaloneNotesView,
+  folderOptionToPath,
   isMarkdownJobTerminal,
   isMarkdownResultMissing,
   mergeLiteMarkdownJob,
+  orderFolderTreeNotes,
+  readStandaloneSidebarCollapsed,
+  renameNoteFirstLine,
+  reorderNoteIds,
   standaloneNoteTitle,
+  standaloneNoteTitleRaw,
   filterStandaloneNotes,
   markdownJobStaleHint,
   statusPollRetryDelayMs,
+  writeStandaloneSidebarCollapsed,
   type StandaloneNotesViewProps
 } from './StandaloneNotesView.js';
 export {

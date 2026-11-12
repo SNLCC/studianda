@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import type React from 'react';
 import type {
+  MarkdownImportDuplicatePreview,
   MarkdownImportItem,
   MarkdownImportJob,
   MarkdownImportReport,
@@ -41,7 +42,20 @@ export interface MarkdownImportDialogProps {
   /** 关闭弹窗；导入完成时带上报告，供上层刷新/选中。 */
   onClose(report?: MarkdownImportReport | null): void;
   /** 启动后台导入任务。 */
-  onStartImport(input: { vaultPath: string; files: string[] }): Promise<MarkdownImportJob>;
+  onStartImport(input: {
+    vaultPath: string;
+    files: string[];
+    /** 重复笔记策略：更新已有 / 跳过已有（默认 update，保持旧行为）。 */
+    duplicatePolicy?: 'update' | 'skip';
+  }): Promise<MarkdownImportJob>;
+  /**
+   * 预览已选中文件里此前导入过的笔记（按资料库路径+相对路径识别，同名不混淆）。
+   * 不提供/失败时不阻断导入，按「更新」处理。
+   */
+  previewMarkdownImportDuplicates?(input: {
+    vaultPath: string;
+    files: string[];
+  }): Promise<MarkdownImportDuplicatePreview>;
   /** 轮询后台导入状态。 */
   onGetImportStatus(): Promise<MarkdownImportJob>;
   /** 取消后台导入。 */
@@ -166,6 +180,7 @@ export function MarkdownImportDialog({
   resolveMarkdownSelection,
   getMarkdownImportReportPage,
   searchMarkdownScan,
+  previewMarkdownImportDuplicates,
   onRescan
 }: MarkdownImportDialogProps): React.JSX.Element {
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -175,6 +190,13 @@ export function MarkdownImportDialog({
   const [cancelling, setCancelling] = useState(false);
   const [pollRetryNonce, setPollRetryNonce] = useState(0);
   const [pollExhausted, setPollExhausted] = useState(false);
+  // 重复导入预览：已导入 N 篇 + 更新/跳过策略（默认 update，保持旧行为）。
+  const [duplicatePreview, setDuplicatePreview] =
+    useState<MarkdownImportDuplicatePreview | null>(null);
+  const [duplicatePreviewError, setDuplicatePreviewError] = useState('');
+  const [previewingDuplicates, setPreviewingDuplicates] = useState(false);
+  const [duplicatePolicy, setDuplicatePolicy] = useState<'update' | 'skip'>('update');
+  const duplicatePreviewRequestRef = useRef(0);
   // 懒加载树 + 服务端选择。
   const [selection, setSelection] = useState<MarkdownSelectionState>(emptySelection());
   const [resolvedFiles, setResolvedFiles] = useState<string[]>([]);
@@ -284,6 +306,60 @@ export function MarkdownImportDialog({
     };
   }, [selection, resolveMarkdownSelection, scan.vaultPath]);
 
+  // 重复导入预览：选择解析完成后 300ms debounce（避免每勾一个就请求，也不打断导入）。
+  const effectiveFilesKey = effectiveFiles.join('\n');
+  useEffect(() => {
+    if (!previewMarkdownImportDuplicates) {
+      setDuplicatePreview(null);
+      setDuplicatePreviewError('');
+      setPreviewingDuplicates(false);
+      return;
+    }
+    // 只有仍在「选择文件」阶段才预览；导入中/完成后的报告不再请求。
+    if (job && job.status !== 'error') {
+      setPreviewingDuplicates(false);
+      return;
+    }
+    const files = effectiveFiles;
+    if (files.length === 0) {
+      setDuplicatePreview(null);
+      setDuplicatePreviewError('');
+      setPreviewingDuplicates(false);
+      return;
+    }
+    const requestId = ++duplicatePreviewRequestRef.current;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      setPreviewingDuplicates(true);
+      previewMarkdownImportDuplicates({ vaultPath: scan.vaultPath, files })
+        .then((preview) => {
+          if (cancelled || requestId !== duplicatePreviewRequestRef.current) return;
+          setDuplicatePreview(preview);
+          setDuplicatePreviewError('');
+        })
+        .catch((error: unknown) => {
+          if (cancelled || requestId !== duplicatePreviewRequestRef.current) return;
+          setDuplicatePreview(null);
+          setDuplicatePreviewError(
+            `无法检查已导入笔记（将按「更新」处理）：${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        })
+        .finally(() => {
+          if (!cancelled && requestId === duplicatePreviewRequestRef.current) {
+            setPreviewingDuplicates(false);
+          }
+        });
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // effectiveFiles 用内容 key 防抖，避免数组每次 render 变化导致重复请求。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewMarkdownImportDuplicates, effectiveFilesKey, scan.vaultPath, job?.status]);
+
   // 服务端搜索：300ms debounce，首次 limit 100/offset 0；requestId/querySnapshot 丢弃旧响应。
   useEffect(() => {
     if (!searchMarkdownScan) {
@@ -379,7 +455,7 @@ export function MarkdownImportDialog({
           return;
         }
       }
-      await onStartImport({ vaultPath: input.vaultPath, files });
+      await onStartImport({ vaultPath: input.vaultPath, files, duplicatePolicy: 'update' });
     } catch (error) {
       setReimportError(
         `重新导入失败：${error instanceof Error ? error.message : String(error)}`
@@ -503,7 +579,8 @@ export function MarkdownImportDialog({
     try {
       const next = await onStartImport({
         vaultPath: scan.vaultPath,
-        files
+        files,
+        duplicatePolicy
       });
       setJob(next);
     } catch (error) {
@@ -696,11 +773,17 @@ export function MarkdownImportDialog({
             ) : null}
             <p className="kr-markdown-report__summary">
               导入完成：共请求 {report.requested} 篇，导入 {report.imported}、更新{' '}
-              {report.updated}、跳过 {report.skipped}、失败 {report.failed}；复制图片{' '}
+              {report.updated}、跳过 {report.skipped}、跳过已存在{' '}
+              {report.skippedExisting ?? 0}、失败 {report.failed}；复制图片{' '}
               {report.imagesCopied} 张、复制其他附件 {report.attachmentsCopied} 个、重写链接{' '}
               {report.linksRewritten} 条、未解析链接 {report.unresolvedLinks} 条、跳过附件{' '}
               {report.skippedAttachments} 个。
             </p>
+            {(report.skippedExisting ?? 0) > 0 ? (
+              <p className="kr-markdown-warning" role="status">
+                按「跳过已存在」策略跳过了 {report.skippedExisting} 篇此前已导入的笔记。
+              </p>
+            ) : null}
             {report.failed > 0 ? (
               <p className="kr-page-error" role="alert">
                 有 {report.failed} 篇导入失败，请查看下方明细后重试。
@@ -752,14 +835,20 @@ export function MarkdownImportDialog({
               ) : null}
             </details>
             {report.warnings.length > 0 ? (
-              <details className="kr-markdown-report__details">
-                <summary>警告（{report.warnings.length}）</summary>
-                <ul>
-                  {report.warnings.map((warning, index) => (
-                    <li key={`${index}-${warning}`}>{warning}</li>
-                  ))}
-                </ul>
-              </details>
+              <>
+                <p className="kr-markdown-warning" role="alert">
+                  有 {report.warnings.length} 条警告未忽略（例如附件重名时已按最近路径选择，
+                  请核对下方明细，避免丢附件）。
+                </p>
+                <details className="kr-markdown-report__details" open>
+                  <summary>警告（{report.warnings.length}）</summary>
+                  <ul>
+                    {report.warnings.map((warning, index) => (
+                      <li key={`${index}-${warning}`}>{warning}</li>
+                    ))}
+                  </ul>
+                </details>
+              </>
             ) : null}
             <div className="kr-markdown-modal__footer">
               <span className="kr-muted">
@@ -906,6 +995,51 @@ export function MarkdownImportDialog({
                 </p>
               </details>
             </div>
+            {previewingDuplicates || duplicatePreview || duplicatePreviewError ? (
+            <div className="kr-markdown-duplicates" role="status" aria-live="polite">
+              {previewingDuplicates && !duplicatePreview ? (
+                <p className="kr-muted">正在检查选中的笔记是否已导入过…</p>
+              ) : null}
+              {duplicatePreview && duplicatePreview.alreadyImported > 0 ? (
+                <>
+                  <p className="kr-markdown-duplicates__notice">
+                    其中 <strong>{duplicatePreview.alreadyImported}</strong> 篇此前已导入过
+                    （按资料库路径+相对路径识别，同名文件不会混淆）。
+                  </p>
+                  <div
+                    className="kr-markdown-duplicates__policy"
+                    role="radiogroup"
+                    aria-label="重复笔记处理方式"
+                  >
+                    <label>
+                      <input
+                        type="radio"
+                        name="markdown-duplicate-policy"
+                        checked={duplicatePolicy === 'update'}
+                        onChange={() => setDuplicatePolicy('update')}
+                      />
+                      更新已存在的 {duplicatePreview.alreadyImported} 篇（默认；保留原笔记，内容按源文件更新）
+                    </label>
+                    <label>
+                      <input
+                        type="radio"
+                        name="markdown-duplicate-policy"
+                        checked={duplicatePolicy === 'skip'}
+                        onChange={() => setDuplicatePolicy('skip')}
+                      />
+                      跳过已存在的 {duplicatePreview.alreadyImported} 篇
+                    </label>
+                  </div>
+                </>
+              ) : null}
+              {duplicatePreview && duplicatePreview.alreadyImported === 0 ? (
+                <p className="kr-muted">所选文件此前都未导入过。</p>
+              ) : null}
+              {duplicatePreviewError ? (
+                <p className="kr-muted kr-markdown-duplicates__error">{duplicatePreviewError}</p>
+              ) : null}
+            </div>
+            ) : null}
             <label className="kr-markdown-modal__search">
               <input
                 type="search"
@@ -1122,7 +1256,13 @@ export function MarkdownImportDialog({
                   }
                   onClick={() => void startImport()}
                 >
-                  {resolving ? '整理中…' : `导入选中的 ${effectiveCount} 篇笔记`}
+                  {resolving
+                    ? '整理中…'
+                    : `导入选中的 ${effectiveCount} 篇笔记${
+                        duplicatePolicy === 'skip' && (duplicatePreview?.alreadyImported ?? 0) > 0
+                          ? `（跳过已存在 ${duplicatePreview?.alreadyImported} 篇）`
+                          : ''
+                      }`}
                 </button>
               </div>
             </div>

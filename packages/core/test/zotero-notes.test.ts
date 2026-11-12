@@ -339,7 +339,7 @@ describe('notes 表 external_key 迁移（schema_version 6 → 7）', () => {
         .prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'")
         .get() as { value: string };
       // 迁移链继续前进到最新版（9 → 10 增加笔记图片资源引用表）。
-      expect(version.value).toBe('18');
+      expect(version.value).toBe('19');
       const columns = (
         raw.prepare('PRAGMA table_info(notes)').all() as unknown as Array<{ name: string }>
       ).map((column) => column.name);

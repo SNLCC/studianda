@@ -157,6 +157,7 @@ import {
   getMarkdownScanStatus,
   getMarkdownScanTree,
   importMarkdownNotes,
+  previewMarkdownImportDuplicates,
   resolveMarkdownSelection,
   scanMarkdownVault,
   searchMarkdownScan,
@@ -940,8 +941,8 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     raw.on('close', cleanup);
   });
 
-  // Markdown 选择性导入：把选中的 Markdown 笔记导入为独立笔记（去重更新）。
-  app.post(`${API_PREFIX}/markdown/import`, async (request, reply) => {
+  // Markdown 导入前的重复检查：按 externalKey 判断哪些文件已导入（不读正文、不写库）。
+  app.post(`${API_PREFIX}/markdown/import/preview`, async (request, reply) => {
     const body = (request.body ?? {}) as { vaultPath?: unknown; files?: unknown };
     if (typeof body.vaultPath !== 'string' || !body.vaultPath.trim()) {
       return badRequest(reply, '需要库目录路径');
@@ -950,9 +951,40 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       return badRequest(reply, 'files 必须是字符串数组');
     }
     try {
-      return await importMarkdownNotes(options.store, {
+      return previewMarkdownImportDuplicates(options.store, {
         vaultPath: body.vaultPath,
         files: body.files as string[]
+      });
+    } catch (error) {
+      return badRequest(reply, error instanceof Error ? error.message : '检查重复导入失败');
+    }
+  });
+
+  // Markdown 选择性导入：把选中的 Markdown 笔记导入为独立笔记（去重更新）。
+  app.post(`${API_PREFIX}/markdown/import`, async (request, reply) => {
+    const body = (request.body ?? {}) as {
+      vaultPath?: unknown;
+      files?: unknown;
+      duplicatePolicy?: unknown;
+    };
+    if (typeof body.vaultPath !== 'string' || !body.vaultPath.trim()) {
+      return badRequest(reply, '需要库目录路径');
+    }
+    if (!Array.isArray(body.files) || !body.files.every((file) => typeof file === 'string')) {
+      return badRequest(reply, 'files 必须是字符串数组');
+    }
+    if (
+      body.duplicatePolicy !== undefined &&
+      body.duplicatePolicy !== 'update' &&
+      body.duplicatePolicy !== 'skip'
+    ) {
+      return badRequest(reply, 'duplicatePolicy 必须是 update 或 skip');
+    }
+    try {
+      return await importMarkdownNotes(options.store, {
+        vaultPath: body.vaultPath,
+        files: body.files as string[],
+        duplicatePolicy: body.duplicatePolicy as 'update' | 'skip' | undefined
       });
     } catch (error) {
       return badRequest(reply, error instanceof Error ? error.message : '导入 Markdown 笔记失败');
@@ -961,17 +993,29 @@ export function buildServer(options: ServerOptions): FastifyInstance {
 
   // 后台分块导入（带进度/取消；单并发）。
   app.post(`${API_PREFIX}/markdown/import/start`, async (request, reply) => {
-    const body = (request.body ?? {}) as { vaultPath?: unknown; files?: unknown };
+    const body = (request.body ?? {}) as {
+      vaultPath?: unknown;
+      files?: unknown;
+      duplicatePolicy?: unknown;
+    };
     if (typeof body.vaultPath !== 'string' || !body.vaultPath.trim()) {
       return badRequest(reply, '需要库目录路径');
     }
     if (!Array.isArray(body.files) || !body.files.every((file) => typeof file === 'string')) {
       return badRequest(reply, 'files 必须是字符串数组');
     }
+    if (
+      body.duplicatePolicy !== undefined &&
+      body.duplicatePolicy !== 'update' &&
+      body.duplicatePolicy !== 'skip'
+    ) {
+      return badRequest(reply, 'duplicatePolicy 必须是 update 或 skip');
+    }
     try {
       return startMarkdownImport(options.store, {
         vaultPath: body.vaultPath,
-        files: body.files as string[]
+        files: body.files as string[],
+        duplicatePolicy: body.duplicatePolicy as 'update' | 'skip' | undefined
       });
     } catch (error) {
       return badRequest(reply, error instanceof Error ? error.message : '启动 Markdown 笔记导入失败');
@@ -3747,6 +3791,45 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       return { ok: true };
     } catch (error) {
       return notFound(reply, error instanceof Error ? error.message : '笔记不存在');
+    }
+  });
+
+  // ---- 独立笔记批量操作（拖拽排序 / 批量删除 / 批量移动） ----
+  app.post(`${API_PREFIX}/notes/reorder`, async (request, reply) => {
+    const body = (request.body ?? {}) as { folderPath?: unknown; ids?: unknown };
+    if (typeof body.folderPath !== 'string') return badRequest(reply, '需要文件夹路径');
+    if (!Array.isArray(body.ids) || !body.ids.every((id) => typeof id === 'string')) {
+      return badRequest(reply, 'ids 必须是字符串数组');
+    }
+    try {
+      return options.store.reorderStandaloneNotes(body.folderPath, body.ids as string[]);
+    } catch (error) {
+      return badRequest(reply, error instanceof Error ? error.message : '笔记排序失败');
+    }
+  });
+
+  app.post(`${API_PREFIX}/notes/batch-delete`, async (request, reply) => {
+    const body = (request.body ?? {}) as { ids?: unknown };
+    if (!Array.isArray(body.ids) || !body.ids.every((id) => typeof id === 'string')) {
+      return badRequest(reply, 'ids 必须是字符串数组');
+    }
+    try {
+      return options.store.batchDeleteStandaloneNotes(body.ids as string[]);
+    } catch (error) {
+      return badRequest(reply, error instanceof Error ? error.message : '批量删除笔记失败');
+    }
+  });
+
+  app.post(`${API_PREFIX}/notes/batch-move`, async (request, reply) => {
+    const body = (request.body ?? {}) as { ids?: unknown; folderPath?: unknown };
+    if (!Array.isArray(body.ids) || !body.ids.every((id) => typeof id === 'string')) {
+      return badRequest(reply, 'ids 必须是字符串数组');
+    }
+    if (typeof body.folderPath !== 'string') return badRequest(reply, '需要文件夹路径');
+    try {
+      return options.store.batchMoveStandaloneNotes(body.ids as string[], body.folderPath);
+    } catch (error) {
+      return badRequest(reply, error instanceof Error ? error.message : '批量移动笔记失败');
     }
   });
 

@@ -102,7 +102,7 @@ describe('schema 12：notes.tags + note_folders', () => {
 
     const store = new Store(dir);
     try {
-      expect(schemaVersion(store)).toBe('18');
+      expect(schemaVersion(store)).toBe('19');
       const db = (store as unknown as { db: DatabaseSync }).db;
       const columns = (db.prepare('PRAGMA table_info(notes)').all() as Array<{ name: string }>).map(
         (column) => column.name
@@ -119,7 +119,7 @@ describe('schema 12：notes.tags + note_folders', () => {
     // 幂等重开：版本仍是 13，tags 数据不会被重置。
     const reopened = new Store(dir);
     try {
-      expect(schemaVersion(reopened)).toBe('18');
+      expect(schemaVersion(reopened)).toBe('19');
       expect(reopened.listNoteFolders()).toHaveLength(4);
     } finally {
       reopened.close();
@@ -267,7 +267,7 @@ describe('笔记文件夹 CRUD', () => {
     }
   });
 
-  it('创建祖先/空文件夹列出/重命名子树/移动/非空删除拒绝', () => {
+  it('创建祖先/空文件夹列出/重命名子树/移动/删除非空文件夹（笔记上移）', () => {
     const store = storeAt('note-folders');
     try {
       expect(store.listNoteFolders()).toEqual([]);
@@ -308,8 +308,43 @@ describe('笔记文件夹 CRUD', () => {
         store.listNoteFolders().find((folder) => folder.path === 'projects/阅读/2026')?.noteCount
       ).toBe(1);
 
-      // 非空删除拒绝。
-      expect(() => store.deleteNoteFolder('projects/阅读')).toThrow('文件夹非空，无法删除');
+      // 删除非空文件夹（新语义）：直接笔记移到父级，子文件夹整体上移一级；
+      // 回收站里的笔记也移动（计入 movedDeletedNotes），不再报「文件夹非空」。
+      store.createNoteFolder('del/sub');
+      const delDirect = store.createNote({
+        documentId: '',
+        page: 0,
+        content: '直接笔记',
+        folderPath: 'del'
+      });
+      const delChild = store.createNote({
+        documentId: '',
+        page: 0,
+        content: '子文件夹笔记',
+        folderPath: 'del/sub'
+      });
+      const delTrashed = store.createNote({
+        documentId: '',
+        page: 0,
+        content: '回收站笔记',
+        folderPath: 'del'
+      });
+      store.deleteNote(delTrashed.id);
+      expect(store.deleteNoteFolder('del')).toMatchObject({
+        ok: true,
+        movedNotes: 2,
+        movedDeletedNotes: 1
+      });
+      expect(store.getNote(delDirect.id)?.folderPath).toBe('');
+      expect(store.getNote(delChild.id)?.folderPath).toBe('sub');
+      // 回收站笔记不在 getNote 的查询范围，用回收站列表断言。
+      expect(store.listStandaloneNotes(true).find((item) => item.id === delTrashed.id)?.folderPath).toBe(
+        ''
+      );
+      expect(store.listNoteFolders().some((folder) => folder.path === 'del')).toBe(false);
+      expect(store.listNoteFolders().some((folder) => folder.path === 'sub')).toBe(true);
+      // 已不存在的文件夹报错。
+      expect(() => store.deleteNoteFolder('del')).toThrow('文件夹不存在');
       // 空文件夹可删。
       expect(store.createNoteFolder('empty/sub').path).toBe('empty/sub');
       expect(store.deleteNoteFolder('empty/sub')).toMatchObject({
@@ -426,12 +461,23 @@ describe('HTTP：笔记文件夹与标签', () => {
     });
     expect(moveMissingNote.statusCode).toBe(404);
 
+    // 非空文件夹删除（新语义）：笔记上移到父级，不再 400。
     const deleteNonEmpty = await server.inject({
       method: 'DELETE',
       url: '/api/v1/notes/folders?path=http%2Fsub',
       headers: headers()
     });
-    expect(deleteNonEmpty.statusCode).toBe(400);
+    expect(deleteNonEmpty.statusCode).toBe(200);
+    expect((deleteNonEmpty.json() as NoteFolderOperationResult).movedNotes).toBe(1);
+    expect(store.getNote(note.id)?.folderPath).toBe('http');
+
+    // 不存在的文件夹删除 → 400。
+    const deleteMissing = await server.inject({
+      method: 'DELETE',
+      url: '/api/v1/notes/folders?path=missing%2Ffolder',
+      headers: headers()
+    });
+    expect(deleteMissing.statusCode).toBe(400);
 
     const rename = await server.inject({
       method: 'POST',

@@ -12272,3 +12272,425 @@ details.kr-outline2__card > summary::-webkit-details-marker {
   border-color: var(--kr-celadon);
   color: var(--kr-celadon-deep);
 }
+
+/* ========================================================================== */
+/* 笔记 UI 修复（notes-ui）：拖拽排序/移动、重命名、批量、导航收起、编辑区撑满、导入重复提示 */
+/* ========================================================================== */
+
+/* ---- 1) 独立笔记工作区填满可用高度：整页不滚动，左右两列各自内部滚动 ---- */
+.kr-app-content:has(.kr-standalone) {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.kr-app-content:has(.kr-standalone) > .kr-workspace-heading {
+  flex: none;
+}
+
+.kr-app-content:has(.kr-standalone) > .kr-workspace {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  width: 100%;
+  max-width: none;
+  padding: 0 0 12px;
+  gap: 0;
+}
+
+.kr-standalone {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.kr-standalone__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  align-items: stretch;
+}
+
+.kr-standalone__body.is-sidebar-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.kr-standalone__sidebar {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.kr-standalone__sidebar-head,
+.kr-standalone__sidebar .kr-standalone__search,
+.kr-standalone__sidebar .kr-standalone__tag-filter,
+.kr-standalone__sidebar .kr-standalone__bulkbar,
+.kr-standalone__sidebar .kr-standalone__drop-root,
+.kr-standalone__sidebar .kr-page-error,
+.kr-standalone__sidebar .kr-standalone__inline-editor,
+.kr-standalone__sidebar .kr-standalone__inline-confirm,
+.kr-standalone__sidebar .kr-standalone__action-notice,
+.kr-standalone__sidebar .kr-standalone__hint {
+  flex: none;
+}
+
+.kr-standalone__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+}
+
+.kr-standalone__trash {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.kr-standalone__editor {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.kr-standalone__editor > .kr-md-editor {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.kr-standalone__editor .kr-md-editor__input {
+  flex: 1 1 0;
+  min-height: 160px;
+  height: auto;
+  resize: none;
+}
+
+.kr-standalone__editor .kr-rich-editor {
+  flex: 1 1 0;
+  min-height: 160px;
+  max-height: none;
+}
+
+.kr-standalone__editor .kr-md-preview {
+  flex: 1 1 0;
+  min-height: 160px;
+  max-height: none;
+}
+
+.kr-standalone__editor .kr-md-modebar,
+.kr-standalone__editor .kr-md-toolbar,
+.kr-standalone__editor .kr-md-table-tools,
+.kr-standalone__editor .kr-md-editor__notice {
+  flex: none;
+}
+
+.kr-standalone__editor > .kr-standalone__placeholder {
+  flex: 1 1 auto;
+  overflow: auto;
+}
+
+/* ---- 2) 侧栏收起/展开（窄屏覆盖式抽屉） ---- */
+.kr-standalone__sidebar-toggle {
+  flex: none;
+}
+
+.kr-standalone__sidebar-backdrop {
+  display: none;
+  cursor: pointer;
+}
+
+@media (max-width: 1100px) {
+  .kr-standalone__body {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .kr-standalone__sidebar {
+    position: absolute;
+    inset: 0 auto 0 0;
+    z-index: 12;
+    width: min(320px, 88vw);
+    padding: 8px 10px;
+    border: 1px solid var(--kr-line);
+    border-radius: 10px;
+    background: var(--kr-paper-raised);
+    box-shadow: 0 14px 36px rgb(44 42 36 / 20%);
+  }
+
+  .kr-standalone__sidebar-backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 11;
+    display: block;
+    padding: 0;
+    border: 0;
+    border-radius: 10px;
+    background: rgb(44 42 36 / 22%);
+  }
+}
+
+@media (max-width: 760px) {
+  .kr-standalone__editor .kr-md-editor__input,
+  .kr-standalone__editor .kr-rich-editor,
+  .kr-standalone__editor .kr-md-preview {
+    min-height: 140px;
+  }
+}
+
+/* ---- 3) 列表内拖拽排序 / 每项「移动到…」与重命名 ---- */
+.kr-standalone__item {
+  position: relative;
+}
+
+.kr-standalone__item.is-selected {
+  border-color: var(--kr-celadon);
+  background: var(--kr-celadon-soft);
+}
+
+.kr-standalone__item.is-drop-before::before,
+.kr-standalone__item.is-drop-after::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--kr-celadon-deep);
+  pointer-events: none;
+}
+
+.kr-standalone__item.is-drop-before::before {
+  top: -3px;
+}
+
+.kr-standalone__item.is-drop-after::after {
+  bottom: -3px;
+}
+
+.kr-standalone__item-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.kr-standalone__item-row .kr-standalone__open {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.kr-standalone__select {
+  flex: none;
+  margin-top: 2px;
+}
+
+.kr-standalone__item-actions {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px;
+  border-radius: 6px;
+  background: var(--kr-paper-raised);
+  box-shadow: 0 1px 6px rgb(44 42 36 / 12%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.kr-standalone__item:hover .kr-standalone__item-actions,
+.kr-standalone__item:focus-within .kr-standalone__item-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.kr-standalone__item-move {
+  max-width: 104px;
+  height: 24px;
+  padding: 0 4px;
+  border: 1px solid var(--kr-line);
+  border-radius: 6px;
+  background: var(--kr-paper-raised);
+  color: var(--kr-ink-soft);
+  font: inherit;
+  font-size: var(--kr-fs-micro);
+}
+
+.kr-standalone__icon-btn {
+  min-height: 24px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--kr-ink-soft);
+  font-size: var(--kr-fs-micro);
+  line-height: 1.2;
+}
+
+.kr-standalone__icon-btn:hover {
+  border-color: var(--kr-celadon);
+  background: var(--kr-celadon-soft);
+  color: var(--kr-celadon-deep);
+}
+
+.kr-standalone__icon-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.kr-standalone__rename {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.kr-standalone__rename input {
+  width: 100%;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--kr-line-strong);
+  border-radius: 6px;
+  background: var(--kr-paper-raised);
+  color: var(--kr-ink);
+  font: inherit;
+  font-size: var(--kr-fs-ui);
+}
+
+.kr-standalone__rename .kr-page-error {
+  margin: 0;
+  font-size: var(--kr-fs-micro);
+}
+
+/* ---- 4) 多选与批量操作条 ---- */
+.kr-standalone__bulkbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px dashed var(--kr-line);
+  color: var(--kr-ink-soft);
+  font-size: var(--kr-fs-caption);
+}
+
+.kr-standalone__bulkbar.is-active {
+  border-bottom-color: var(--kr-celadon);
+}
+
+.kr-standalone__bulk-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.kr-standalone__bulk-hint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kr-standalone__bulkbar .kr-standalone__bulk-move {
+  height: 26px;
+  padding: 0 4px;
+  border: 1px solid var(--kr-line-strong);
+  border-radius: 6px;
+  background: var(--kr-paper-raised);
+  color: var(--kr-ink);
+  font: inherit;
+  font-size: var(--kr-fs-caption);
+}
+
+.kr-standalone__bulkbar button {
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--kr-line);
+  border-radius: 6px;
+  background: var(--kr-paper-raised);
+  color: var(--kr-ink-soft);
+  font: inherit;
+  font-size: var(--kr-fs-caption);
+}
+
+.kr-standalone__bulkbar button:hover {
+  border-color: var(--kr-celadon);
+  background: var(--kr-celadon-soft);
+  color: var(--kr-celadon-deep);
+}
+
+.kr-standalone__bulkbar .kr-standalone__bulk-delete {
+  border-color: var(--kr-line-strong);
+}
+
+.kr-standalone__bulkbar .kr-standalone__bulk-delete:hover {
+  border-color: var(--kr-vermilion-deep);
+  color: var(--kr-vermilion-deep);
+}
+
+.kr-standalone__action-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: var(--kr-fs-caption);
+}
+
+/* ---- 5) Markdown 导入重复预览 ---- */
+.kr-markdown-duplicates {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 6px 0 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--kr-line-strong);
+  border-radius: 8px;
+  background: var(--kr-celadon-soft);
+}
+
+.kr-markdown-duplicates__notice {
+  margin: 0;
+  color: var(--kr-ink);
+  font-size: var(--kr-fs-ui);
+}
+
+.kr-markdown-duplicates__notice strong {
+  color: var(--kr-celadon-deep);
+  font-size: var(--kr-fs-reading);
+}
+
+.kr-markdown-duplicates__policy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--kr-ink-soft);
+  font-size: var(--kr-fs-caption);
+}
+
+.kr-markdown-duplicates__policy label {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.kr-markdown-duplicates__error {
+  font-size: var(--kr-fs-caption);
+}
+/* 独立笔记：固定顶栏/任务卡/编辑器工具条高度，只有左右两列内容滚动。 */
+.kr-standalone > .kr-standalone__head,
+.kr-standalone > .kr-job-card,
+.kr-standalone > p {
+  flex: none;
+}
+
+.kr-standalone__editor > .kr-standalone__editor-head,
+.kr-standalone__editor > .kr-standalone__tag-error {
+  flex: none;
+}

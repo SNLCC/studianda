@@ -31,6 +31,7 @@ import type {
   NoteFolderOperationResult,
   NoteFolderRecord,
   MarkdownImportReport,
+  MarkdownImportDuplicatePreview,
   MarkdownImportReportPage,
   MarkdownImportJob,
   MarkdownScanTreePage,
@@ -255,15 +256,38 @@ export interface ApiClient {
   renameNoteFolder(from: string, to: string): Promise<NoteFolderOperationResult>;
   deleteNoteFolder(path: string): Promise<NoteFolderOperationResult>;
   moveNoteToFolder(id: string, folderPath: string): Promise<{ ok: boolean }>;
+  /** 拖拽排序：ids 为该文件夹内的目标顺序，返回操作后的文件夹与笔记快照。 */
+  reorderStandaloneNotes(
+    folderPath: string,
+    ids: string[]
+  ): Promise<{
+    ok: boolean;
+    folders: NoteFolderRecord[];
+    notes: Array<{ id: string; folderPath: string }>;
+  }>;
+  /** 批量软删除独立笔记（进回收站）；返回实际删除条数。 */
+  batchDeleteStandaloneNotes(ids: string[]): Promise<{ ok: boolean; deleted: number }>;
+  /** 批量移动独立笔记到指定文件夹（'' = 根目录）。 */
+  batchMoveStandaloneNotes(ids: string[], folderPath: string): Promise<{ ok: boolean; moved: number }>;
   /** 笔记标签：列出全部标签 / 更新某条笔记标签。 */
   listNoteTags(): Promise<string[]>;
   setNoteTags(id: string, tags: string[]): Promise<{ ok: boolean; tags: string[] }>;
   /** 选择性导入 Markdown Markdown 笔记（复制引用图片、重写 wikilink、按外部 key 去重）。 */
-  importMarkdownNotes(input: { vaultPath: string; files: string[] }): Promise<MarkdownImportReport>;
+  importMarkdownNotes(input: {
+    vaultPath: string;
+    files: string[];
+    duplicatePolicy?: 'update' | 'skip';
+  }): Promise<MarkdownImportReport>;
+  /** 导入前重复检查（按 externalKey，不用文件名判断）。 */
+  previewMarkdownImport(input: {
+    vaultPath: string;
+    files: string[];
+  }): Promise<MarkdownImportDuplicatePreview>;
   /** 后台分块导入 Markdown（可进度/取消）。 */
   startMarkdownImport(input: {
     vaultPath: string;
     files: string[];
+    duplicatePolicy?: 'update' | 'skip';
   }): Promise<MarkdownImportJob>;
   getMarkdownImportStatus(): Promise<MarkdownImportJob>;
   cancelMarkdownImport(): Promise<MarkdownImportJob>;
@@ -1099,6 +1123,28 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         body: JSON.stringify({ folderPath })
       }),
 
+    reorderStandaloneNotes: (folderPath, ids) =>
+      request<{
+        ok: boolean;
+        folders: NoteFolderRecord[];
+        notes: Array<{ id: string; folderPath: string }>;
+      }>('/notes/reorder', {
+        method: 'POST',
+        body: JSON.stringify({ folderPath, ids })
+      }),
+
+    batchDeleteStandaloneNotes: (ids) =>
+      request<{ ok: boolean; deleted: number }>('/notes/batch-delete', {
+        method: 'POST',
+        body: JSON.stringify({ ids })
+      }),
+
+    batchMoveStandaloneNotes: (ids, folderPath) =>
+      request<{ ok: boolean; moved: number }>('/notes/batch-move', {
+        method: 'POST',
+        body: JSON.stringify({ ids, folderPath })
+      }),
+
     listNoteTags: () => request<string[]>('/notes/tags'),
 
     setNoteTags: (id, tags) =>
@@ -1109,6 +1155,12 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
 
     importMarkdownNotes: (input) =>
       request<MarkdownImportReport>('/markdown/import', {
+        method: 'POST',
+        body: JSON.stringify(input)
+      }),
+
+    previewMarkdownImport: (input) =>
+      request<MarkdownImportDuplicatePreview>('/markdown/import/preview', {
         method: 'POST',
         body: JSON.stringify(input)
       }),

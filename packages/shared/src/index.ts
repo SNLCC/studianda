@@ -2112,6 +2112,8 @@ export interface MarkdownImportReport {
   imported: number;
   updated: number;
   skipped: number;
+  /** 其中因「已导入过」且 duplicatePolicy='skip' 而跳过的篇数（旧报告缺失时按 0 处理）。 */
+  skippedExisting: number;
   failed: number;
   imagesCopied: number;
   linksRewritten: number;
@@ -2120,6 +2122,24 @@ export interface MarkdownImportReport {
   attachmentsCopied: number;
   notes: MarkdownImportItem[];
   warnings: string[];
+}
+
+/**
+ * Markdown 导入「重复检查」预览：按 externalKey（vault 绝对路径 hash + 规范化相对路径）
+ * 判断哪些文件此前已导入，不能用文件名/标题判断（同名不同目录是不同笔记）。
+ */
+export interface MarkdownImportDuplicatePreview {
+  /** 本次请求的文件总数（与导入接口的 requested 一致）。 */
+  total: number;
+  /** 已导入过的文件数（= items.length）。 */
+  alreadyImported: number;
+  /** 尚未导入、会新建的文件数。 */
+  newCount: number;
+  items: Array<{
+    relativePath: string;
+    noteId: string;
+    title: string;
+  }>;
 }
 
 /** Markdown 导入后台任务（扫描/导入/解析链接分块执行，可取消）。 */

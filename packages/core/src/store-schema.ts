@@ -125,7 +125,9 @@ export const SCHEMA_SQL = `      CREATE TABLE IF NOT EXISTS schema_meta(
         folder_path TEXT DEFAULT '',
         tags TEXT DEFAULT '[]',
         created TEXT DEFAULT CURRENT_TIMESTAMP,
-        deleted INTEGER DEFAULT 0
+        deleted INTEGER DEFAULT 0,
+        -- schema_version 19：手动排序位置（越小越靠前，只由拖拽排序改变）。
+        manual_order REAL DEFAULT 0
       );
 
       CREATE TABLE IF NOT EXISTS note_folders(

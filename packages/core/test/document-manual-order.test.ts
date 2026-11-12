@@ -67,7 +67,7 @@ describe('schema_version 8 → 9（默认排序位置）', () => {
         raw.prepare('PRAGMA table_info(documents)').all() as unknown as Array<{ name: string }>
       ).map((column) => column.name);
       expect(columns).toContain('manual_order');
-      expect(schemaVersion(raw)).toBe('18');
+      expect(schemaVersion(raw)).toBe('19');
     } finally {
       raw.close();
     }
@@ -140,7 +140,7 @@ describe('schema_version 8 → 9（默认排序位置）', () => {
 
     const raw = new DatabaseSync(path.join(dir, 'reader.sqlite3'));
     try {
-      expect(schemaVersion(raw)).toBe('18');
+      expect(schemaVersion(raw)).toBe('19');
       const values = manualOrders(raw).map((row) => row.manual_order);
       expect(new Set(values).size).toBe(values.length);
     } finally {

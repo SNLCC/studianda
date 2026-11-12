@@ -817,6 +817,9 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // 朗读音频是在异步请求完成后才播放的，没有直接的用户手势；允许自动播放，
+      // 否则 Chromium 会静默拦截 audio.play()，表现为「朗读没有声音」。
+      autoplayPolicy: 'no-user-gesture-required',
       backgroundThrottling: false
     }
   });
@@ -919,6 +922,7 @@ function openTranslationWindow(input: {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      autoplayPolicy: 'no-user-gesture-required',
       backgroundThrottling: false
     }
   });

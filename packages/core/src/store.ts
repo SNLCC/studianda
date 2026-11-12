@@ -2456,7 +2456,7 @@ export class Store {
       previousVersion = 0;
     }
     // 备份必须在 BEGIN 之前（VACUUM INTO 不能在事务内执行）。
-    const currentVersion = 18;
+    const currentVersion = 19;
     if (previousVersion > 0 && previousVersion < currentVersion) {
       this.backupBeforeMigration(previousVersion);
     }
@@ -2542,6 +2542,12 @@ export class Store {
     if (!noteColumns.has('tags')) {
       this.db.exec("ALTER TABLE notes ADD COLUMN tags TEXT DEFAULT '[]'");
     }
+    // schema_version 18 → 19：笔记手动排序位置（越小越靠前；拖拽排序只改这一列）。
+    // 旧库升级时按 rowid 递增回填，保证升级前后列表顺序稳定（ALTER/回填/版本号同一事务）。
+    if (!noteColumns.has('manual_order')) {
+      this.db.exec('ALTER TABLE notes ADD COLUMN manual_order REAL DEFAULT 0');
+    }
+    if (previousVersion < 19) this.backfillNoteManualOrder();
     this.db.exec(
       `CREATE INDEX IF NOT EXISTS note_external_key ON notes(document_id, external_key)`
     );
@@ -2582,7 +2588,7 @@ export class Store {
 
     this.db
       .prepare('INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)')
-      .run('schema_version', '18');
+      .run('schema_version', '19');
       this.db.exec('COMMIT');
     } catch (error) {
       // 整体回滚：schema、回填、schema_version 一起回到迁移前；迁移前快照仍保留在
@@ -2818,6 +2824,39 @@ export class Store {
     const row = this.db
       .prepare('SELECT COALESCE(MAX(manual_order), 0) + 1 AS value FROM documents')
       .get() as { value?: number } | undefined;
+    return Number(row?.value ?? 1);
+  }
+
+  /**
+   * 回填笔记默认排序（schema_version 19）：仅在"有笔记但所有 manual_order 都是 0"时执行
+   * （刚加列或半迁移）。按 rowid 递增赋 1..N，顺序即升级前的默认顺序；已迁移的库不会重复回填。
+   */
+  private backfillNoteManualOrder(): void {
+    const total = Number(
+      (this.db.prepare('SELECT COUNT(*) AS n FROM notes').get() as { n?: number } | undefined)?.n ??
+        0
+    );
+    if (total === 0) return;
+    const nonZero = Number(
+      (
+        this.db
+          .prepare('SELECT COUNT(*) AS n FROM notes WHERE manual_order <> 0')
+          .get() as { n?: number } | undefined
+      )?.n ?? 0
+    );
+    if (nonZero > 0) return;
+    const rows = this.db
+      .prepare('SELECT id FROM notes ORDER BY rowid ASC')
+      .all() as unknown as Array<{ id: string }>;
+    const update = this.db.prepare('UPDATE notes SET manual_order = ? WHERE id = ?');
+    rows.forEach((row, index) => update.run(index + 1, row.id));
+  }
+
+  /** 新笔记的默认排序位置：当前文件夹内追加到末尾（同名文件夹下 MAX+1）。 */
+  private nextNoteManualOrder(folderPath: string): number {
+    const row = this.db
+      .prepare('SELECT COALESCE(MAX(manual_order), 0) + 1 AS value FROM notes WHERE folder_path = ?')
+      .get(folderPath) as { value?: number } | undefined;
     return Number(row?.value ?? 1);
   }
 
@@ -4525,7 +4564,7 @@ export class Store {
       .prepare(
         `SELECT id, document_id, page, quote, content, created, folder_path, tags, rowid
          FROM notes WHERE (document_id = '' OR document_id IS NULL) AND deleted = ?
-         ORDER BY created DESC, rowid DESC`
+         ORDER BY folder_path ASC, manual_order ASC, created ASC`
       )
       .all(trash ? 1 : 0) as unknown as NoteRow[];
     return rows.map(toNote);
@@ -4573,13 +4612,16 @@ export class Store {
     }
     const id = randomUUID();
     const folderPath = normalizeFolderPath(input.folderPath);
+    // 文件夹路径及其祖先必须登记，否则 Markdown 导入产生的文件夹无法重命名/删除。
+    this.ensureNoteFolderHierarchy(folderPath);
+    const manualOrder = this.nextNoteManualOrder(folderPath);
     // 内容写入与资源引用同步必须同成同败：任何一步失败都回滚，避免内容有图但索引没登记。
     this.db.exec('BEGIN IMMEDIATE');
     try {
       this.db
         .prepare(
-          `INSERT INTO notes(id, document_id, page, quote, content, external_key, folder_path, tags)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO notes(id, document_id, page, quote, content, external_key, folder_path, tags, manual_order)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           id,
@@ -4589,7 +4631,8 @@ export class Store {
           input.content?.trim() ?? '',
           externalKey,
           folderPath,
-          JSON.stringify(normalizeTags(input.tags))
+          JSON.stringify(normalizeTags(input.tags)),
+          manualOrder
         );
       this.syncNoteAssetRefs('note', id, input.content?.trim() ?? '');
       this.db.exec('COMMIT');
@@ -4654,6 +4697,8 @@ export class Store {
       input.folderPath !== undefined
         ? normalizeFolderPath(input.folderPath)
         : (row.folder_path ?? '');
+    // 显式改文件夹时同样登记层级（Markdown 导入/移动后文件夹必须能重命名/删除）。
+    if (input.folderPath !== undefined) this.ensureNoteFolderHierarchy(folderPath);
     const tags =
       input.tags !== undefined ? normalizeTags(input.tags) : parseNoteTags(row.tags);
     this.db.exec('BEGIN IMMEDIATE');
@@ -4749,10 +4794,35 @@ export class Store {
     for (const folderPath of paths) insert.run(folderPath, now);
   }
 
-  /** 列出笔记虚拟文件夹（不含根 ''；空文件夹也返回；noteCount 只统计未删除笔记）。 */
+  /** notes.folder_path（含回收站笔记）里出现的路径及其所有祖先（隐式文件夹）。 */
+  private implicitNoteFolderPaths(): Set<string> {
+    const rows = this.db
+      .prepare(
+        "SELECT DISTINCT folder_path FROM notes WHERE folder_path IS NOT NULL AND folder_path <> ''"
+      )
+      .all() as unknown as Array<{ folder_path?: string | null }>;
+    const paths = new Set<string>();
+    for (const row of rows) {
+      const folder = String(row.folder_path ?? '');
+      if (!folder) continue;
+      const segments = folder.split('/').filter(Boolean);
+      for (let index = 1; index <= segments.length; index += 1) {
+        paths.add(segments.slice(0, index).join('/'));
+      }
+    }
+    return paths;
+  }
+
+  /**
+   * 列出笔记虚拟文件夹（不含根 ''；空文件夹也返回；noteCount 只统计未删除笔记）。
+   *
+   * 除 note_folders 里显式登记的行，还包含「隐式文件夹」：notes.folder_path（含回收站笔记）
+   * 中出现的路径及其所有祖先。这样 Markdown 导入直接写入 folder_path 的目录也能被
+   * 重命名/删除，而不是报「文件夹不存在」。
+   */
   listNoteFolders(): NoteFolderRecord[] {
-    const folders = this.db
-      .prepare('SELECT path, created_at FROM note_folders ORDER BY path')
+    const explicit = this.db
+      .prepare('SELECT path, created_at FROM note_folders')
       .all() as unknown as Array<{ path: string; created_at: string }>;
     const counts = this.db
       .prepare(
@@ -4762,19 +4832,63 @@ export class Store {
       )
       .all() as unknown as Array<{ path: string; n: number }>;
     const countByPath = new Map(counts.map((row) => [String(row.path ?? ''), Number(row.n ?? 0)]));
-    return folders.map((row) => ({
-      path: String(row.path ?? ''),
-      noteCount: countByPath.get(String(row.path ?? '')) ?? 0,
-      createdAt: String(row.created_at ?? '')
-    }));
+    const merged = new Map<string, NoteFolderRecord>();
+    for (const row of explicit) {
+      const folderPath = String(row.path ?? '');
+      if (!folderPath) continue;
+      merged.set(folderPath, {
+        path: folderPath,
+        noteCount: countByPath.get(folderPath) ?? 0,
+        createdAt: String(row.created_at ?? '')
+      });
+    }
+    for (const folderPath of this.implicitNoteFolderPaths()) {
+      if (merged.has(folderPath)) continue;
+      merged.set(folderPath, {
+        path: folderPath,
+        noteCount: countByPath.get(folderPath) ?? 0,
+        createdAt: ''
+      });
+    }
+    return [...merged.values()].sort((left, right) =>
+      left.path < right.path ? -1 : left.path > right.path ? 1 : 0
+    );
   }
 
+  /** 文件夹是否存在：显式登记、隐式笔记路径或作为更短路径的祖先。 */
   private folderPathExists(folderPath: string): boolean {
     if (!folderPath) return true;
     const row = this.db
       .prepare('SELECT path FROM note_folders WHERE path = ?')
       .get(folderPath) as { path?: string } | undefined;
-    return Boolean(row?.path);
+    if (row?.path) return true;
+    const note = this.db
+      .prepare(
+        `SELECT 1 AS found FROM notes
+         WHERE folder_path = ? OR folder_path LIKE ? ESCAPE '\\' LIMIT 1`
+      )
+      .get(folderPath, `${this.escapeLike(folderPath)}/%`) as { found?: number } | undefined;
+    return Boolean(note?.found);
+  }
+
+  /**
+   * 确保文件夹路径及其所有祖先都已登记到 note_folders（INSERT OR IGNORE）。
+   * Markdown 导入每条笔记写入前、createNote/updateNote 指定 folderPath 时调用。
+   */
+  ensureNoteFolderHierarchy(folderPath: string): void {
+    const normalized = normalizeFolderPath(folderPath);
+    if (!normalized) return;
+    const now = new Date().toISOString();
+    const insert = this.db.prepare(
+      'INSERT OR IGNORE INTO note_folders(path, created_at) VALUES (?, ?)'
+    );
+    this.insertFolderWithAncestors(
+      normalized,
+      (pathValue, createdAt) => {
+        insert.run(pathValue, createdAt);
+      },
+      now
+    );
   }
 
   private insertFolderWithAncestors(
@@ -4906,23 +5020,89 @@ export class Store {
     };
   }
 
-  /** 删除空笔记文件夹（无笔记、无子文件夹）；非空返回中文错误。 */
+  /**
+   * 删除笔记文件夹（含隐式文件夹）：删除整棵子树，但笔记不丢。
+   *
+   * - path 直接下属笔记移动到其父文件夹（path 无父则根 ''）；
+   * - 子文件夹整体上移一级（保持层级与笔记），空子文件夹目录也保留；
+   * - 删除 path 及子树的 note_folders 行，并把上移后的子文件夹重新登记；
+   * - 回收站里的笔记同样移动（计入 movedDeletedNotes）。
+   *
+   * 仅当 path 既无笔记也无 note_folders 行时抛「文件夹不存在」。
+   */
   deleteNoteFolder(folderPath: string): NoteFolderOperationResult {
-    const normalized = normalizeFolderPath(folderPath);
-    if (!normalized) throw new Error('需要文件夹路径');
-    if (!this.folderPathExists(normalized)) throw new Error('文件夹不存在');
-    const noteRow = this.db
-      .prepare('SELECT COUNT(*) AS n FROM notes WHERE folder_path = ?')
-      .get(normalized) as { n?: number } | undefined;
-    if (Number(noteRow?.n ?? 0) > 0) throw new Error('文件夹非空，无法删除');
-    const childRow = this.db
-      .prepare(
-        `SELECT COUNT(*) AS n FROM note_folders WHERE path LIKE ? ESCAPE '\\'`
-      )
-      .get(`${this.escapeLike(normalized)}/%`) as { n?: number } | undefined;
-    if (Number(childRow?.n ?? 0) > 0) throw new Error('文件夹非空，无法删除');
-    this.db.prepare('DELETE FROM note_folders WHERE path = ?').run(normalized);
-    return { ok: true, movedNotes: 0, movedDeletedNotes: 0, folders: this.listNoteFolders(), notes: [] };
+    const target = normalizeFolderPath(folderPath);
+    if (!target) throw new Error('需要文件夹路径');
+    if (!this.folderPathExists(target)) throw new Error('文件夹不存在');
+    const parent = target.includes('/') ? target.slice(0, target.lastIndexOf('/')) : '';
+    const prefixPattern = `${this.escapeLike(target)}/%`;
+    let movedNotes = 0;
+    let movedDeletedNotes = 0;
+    const affectedNotes: Array<{ id: string; folderPath: string }> = [];
+    const now = new Date().toISOString();
+    const insert = this.db.prepare(
+      'INSERT OR IGNORE INTO note_folders(path, created_at) VALUES (?, ?)'
+    );
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const folders = this.db
+        .prepare(
+          `SELECT path, created_at FROM note_folders
+           WHERE path = ? OR path LIKE ? ESCAPE '\\' ORDER BY length(path)`
+        )
+        .all(target, prefixPattern) as unknown as Array<{ path: string; created_at: string }>;
+      const notes = this.db
+        .prepare(
+          `SELECT id, folder_path, deleted FROM notes
+           WHERE folder_path = ? OR folder_path LIKE ? ESCAPE '\\'`
+        )
+        .all(target, prefixPattern) as unknown as Array<{
+        id: string;
+        folder_path: string;
+        deleted: number;
+      }>;
+      // 删除文件夹：直接笔记上移到父级，子文件夹整体上移一级（路径前缀替换）。
+      const updateNoteFolder = this.db.prepare('UPDATE notes SET folder_path = ? WHERE id = ?');
+      for (const note of notes) {
+        const current = String(note.folder_path ?? '');
+        const nextFolderPath = normalizeFolderPath(`${parent}${current.slice(target.length)}`);
+        updateNoteFolder.run(nextFolderPath, note.id);
+        affectedNotes.push({ id: note.id, folderPath: nextFolderPath });
+        if (Number(note.deleted ?? 0) === 1) movedDeletedNotes += 1;
+        else movedNotes += 1;
+      }
+      // 删除原子树行，再登记父级与上移后的子文件夹（保留空目录层级）。
+      for (const folder of folders) {
+        this.db.prepare('DELETE FROM note_folders WHERE path = ?').run(String(folder.path ?? ''));
+      }
+      if (parent) {
+        this.insertFolderWithAncestors(
+          parent,
+          (pathValue, createdAt) => {
+            insert.run(pathValue, createdAt);
+          },
+          now
+        );
+      }
+      for (const folder of folders) {
+        const current = String(folder.path ?? '');
+        if (current === target) continue;
+        const nextFolderPath = normalizeFolderPath(`${parent}${current.slice(target.length)}`);
+        if (!nextFolderPath) continue;
+        insert.run(nextFolderPath, String(folder.created_at ?? now));
+      }
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    return {
+      ok: true,
+      movedNotes,
+      movedDeletedNotes,
+      folders: this.listNoteFolders(),
+      notes: affectedNotes
+    };
   }
 
   /** 把笔记移动到指定文件夹（'' = 根目录；目标文件夹必须存在）。 */
@@ -4942,6 +5122,111 @@ export class Store {
       folders: this.listNoteFolders(),
       notes: [{ id, folderPath: normalized }]
     };
+  }
+
+  /**
+   * 重排某文件夹内独立笔记：ids 为该文件夹内的目标顺序，只处理属于该 folderPath 的 id，
+   * 按数组下标（从 1 开始）写 manual_order（事务）。
+   */
+  reorderStandaloneNotes(
+    folderPath: string,
+    ids: string[]
+  ): { ok: boolean; folders: NoteFolderRecord[]; notes: Array<{ id: string; folderPath: string }> } {
+    if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) {
+      throw new Error('需要笔记 id 字符串数组');
+    }
+    const folder = normalizeFolderPath(folderPath);
+    const ordered = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
+    const lookup = this.db.prepare(
+      `SELECT id FROM notes
+       WHERE id = ? AND deleted = 0 AND (document_id = '' OR document_id IS NULL) AND folder_path = ?`
+    );
+    const update = this.db.prepare('UPDATE notes SET manual_order = ? WHERE id = ?');
+    const notes: Array<{ id: string; folderPath: string }> = [];
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      let position = 0;
+      for (const id of ordered) {
+        const row = lookup.get(id, folder) as { id?: string } | undefined;
+        if (!row?.id) continue;
+        position += 1;
+        update.run(position, id);
+        notes.push({ id, folderPath: folder });
+      }
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    return { ok: true, folders: this.listNoteFolders(), notes };
+  }
+
+  /** 批量软删除独立笔记（回收站）；幂等，返回实际删除条数（已是删除态不计）。 */
+  batchDeleteStandaloneNotes(ids: string[]): { ok: boolean; deleted: number } {
+    if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) {
+      throw new Error('需要笔记 id 字符串数组');
+    }
+    const ordered = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
+    const remove = this.db.prepare(
+      `UPDATE notes SET deleted = 1
+       WHERE id = ? AND deleted = 0 AND (document_id = '' OR document_id IS NULL)`
+    );
+    let deleted = 0;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const id of ordered) {
+        const result = remove.run(id);
+        if (Number(result.changes ?? 0) > 0) deleted += 1;
+      }
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    if (deleted > 0) this.invalidateReferenceGraphCache();
+    return { ok: true, deleted };
+  }
+
+  /**
+   * 批量移动独立笔记到指定文件夹（'' = 根目录；目标可以是已有或隐式文件夹）。
+   * 返回实际移动条数（只统计未删除的独立笔记）。
+   */
+  batchMoveStandaloneNotes(
+    ids: string[],
+    folderPath: string
+  ): {
+    ok: boolean;
+    moved: number;
+    folders: NoteFolderRecord[];
+    notes: Array<{ id: string; folderPath: string }>;
+  } {
+    if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) {
+      throw new Error('需要笔记 id 字符串数组');
+    }
+    const folder = normalizeFolderPath(folderPath);
+    if (folder && !this.folderPathExists(folder)) throw new Error('目标文件夹不存在');
+    const ordered = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
+    const move = this.db.prepare(
+      `UPDATE notes SET folder_path = ?
+       WHERE id = ? AND deleted = 0 AND (document_id = '' OR document_id IS NULL)`
+    );
+    let moved = 0;
+    const notes: Array<{ id: string; folderPath: string }> = [];
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const id of ordered) {
+        const result = move.run(folder, id);
+        if (Number(result.changes ?? 0) > 0) {
+          moved += 1;
+          notes.push({ id, folderPath: folder });
+        }
+      }
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    return { ok: true, moved, folders: this.listNoteFolders(), notes };
   }
 
   private escapeLike(value: string): string {

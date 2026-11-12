@@ -36,7 +36,7 @@ describe('migration safety', () => {
         const row = check
           .prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'")
           .get() as { value?: string } | undefined;
-        expect(row?.value).toBe('18');
+        expect(row?.value).toBe('19');
       } finally {
         check.close();
       }

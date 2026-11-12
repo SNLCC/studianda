@@ -68,7 +68,7 @@ describe('schema_version 7 → 8（文件类型 + 文件夹）', () => {
           .all() as unknown as Array<{ name: string }>
       ).map((row) => row.name);
       expect(indexNames).toContain('document_folder');
-      expect(schemaVersion(raw)).toBe('18');
+      expect(schemaVersion(raw)).toBe('19');
     } finally {
       raw.close();
     }
@@ -140,7 +140,7 @@ describe('schema_version 7 → 8（文件类型 + 文件夹）', () => {
 
     const raw = new DatabaseSync(path.join(dir, 'reader.sqlite3'));
     try {
-      expect(schemaVersion(raw)).toBe('18');
+      expect(schemaVersion(raw)).toBe('19');
       expect(columnNames(raw, 'documents')).toEqual(
         expect.arrayContaining(['doc_type', 'folder_id'])
       );

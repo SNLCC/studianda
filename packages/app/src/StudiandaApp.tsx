@@ -1784,6 +1784,91 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     }
   });
 
+  // 独立笔记：列表内拖拽排序（乐观更新当前文件夹内的显示顺序，失败回滚）。
+  const reorderStandaloneNotesMutation = useMutation({
+    mutationFn: (input: { folderPath: string; ids: string[] }) =>
+      api.reorderStandaloneNotes(input.folderPath, input.ids),
+    onMutate: async (input) => {
+      await cancelNoteCaches();
+      const snapshot = snapshotNoteCaches();
+      const normalizeFolder = (path?: string): string =>
+        (path ?? '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+      queryClient.setQueryData<NoteRecord[]>(['standalone-notes'], (current) => {
+        if (!current) return current;
+        const inFolder = current.filter(
+          (note) => normalizeFolder(note.folderPath) === input.folderPath
+        );
+        if (inFolder.length === 0) return current;
+        const byId = new Map(inFolder.map((note) => [note.id, note]));
+        const ordered = input.ids
+          .map((id) => byId.get(id))
+          .filter((note): note is NoteRecord => Boolean(note));
+        const listed = new Set(ordered.map((note) => note.id));
+        const nextFolderNotes = [
+          ...ordered,
+          ...inFolder.filter((note) => !listed.has(note.id))
+        ];
+        let cursor = 0;
+        return current.map((note) =>
+          normalizeFolder(note.folderPath) === input.folderPath
+            ? (nextFolderNotes[cursor++] ?? note)
+            : note
+        );
+      });
+      return snapshot;
+    },
+    onSuccess: () => {
+      setFolderNotice('笔记顺序已保存。');
+    },
+    onError: (error: Error, _input, context) => {
+      restoreNoteCaches(context);
+      appDialogs.alert(`保存笔记顺序失败：${error.message}（已恢复原顺序）`);
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['standalone-notes'] });
+    }
+  });
+
+  // 独立笔记：批量移入回收站。
+  const batchDeleteStandaloneNotesMutation = useMutation({
+    mutationFn: (ids: string[]) => api.batchDeleteStandaloneNotes(ids),
+    onSuccess: (result, ids) => {
+      invalidateNoteLibrary();
+      setFolderNotice(`已将 ${result.deleted || ids.length} 篇笔记移入回收站。`);
+    },
+    onError: (error: Error) => appDialogs.alert(`批量移入回收站失败：${error.message}`)
+  });
+
+  // 独立笔记：批量移动到文件夹（乐观更新 folderPath，失败回滚）。
+  const batchMoveStandaloneNotesMutation = useMutation({
+    mutationFn: (input: { ids: string[]; folderPath: string }) =>
+      api.batchMoveStandaloneNotes(input.ids, input.folderPath),
+    onMutate: async (input) => {
+      await cancelNoteCaches();
+      const snapshot = snapshotNoteCaches();
+      const ids = new Set(input.ids);
+      updateNoteCaches((note) =>
+        ids.has(note.id) ? { ...note, folderPath: input.folderPath } : note
+      );
+      return snapshot;
+    },
+    onSuccess: (result, input) => {
+      setFolderNotice(
+        input.folderPath
+          ? `已将 ${result.moved} 篇笔记移动到「${input.folderPath}」。`
+          : `已将 ${result.moved} 篇笔记移动到根目录。`
+      );
+    },
+    onError: (error: Error, _input, context) => {
+      restoreNoteCaches(context);
+      appDialogs.alert(`批量移动笔记失败：${error.message}（已恢复原位置）`);
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['standalone-notes'] });
+      void queryClient.invalidateQueries({ queryKey: ['note-folders'] });
+    }
+  });
+
   const setNoteTagsMutation = useMutation({
     mutationFn: (input: { id: string; tags: string[] }) =>
       api.setNoteTags(input.id, input.tags),
@@ -3165,12 +3250,29 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
           onRenameFolder={(from, to) => renameNoteFolderMutation.mutate({ from, to })}
           onDeleteFolder={(path) => deleteNoteFolderMutation.mutate(path)}
           onMoveNote={(id, folderPath) =>
-            moveNoteToFolderMutation.mutate({ id, folderPath })
+            moveNoteToFolderMutation.mutateAsync({ id, folderPath }).then(() => undefined)
+          }
+          onReorderNotes={(folderPath, ids) =>
+            reorderStandaloneNotesMutation
+              .mutateAsync({ folderPath, ids })
+              .then(() => undefined)
+          }
+          onBatchDeleteNotes={(ids) =>
+            batchDeleteStandaloneNotesMutation.mutateAsync(ids).then(() => undefined)
+          }
+          onBatchMoveNotes={(ids, folderPath) =>
+            batchMoveStandaloneNotesMutation
+              .mutateAsync({ ids, folderPath })
+              .then(() => undefined)
+          }
+          onRenameNote={(id, content) =>
+            updateStandaloneNoteMutation.mutateAsync({ id, content }).then(() => undefined)
           }
           onSetTags={(id, tags) =>
             setNoteTagsMutation.mutateAsync({ id, tags }).then(() => undefined)
           }
           startMarkdownImport={(input) => api.startMarkdownImport(input)}
+          previewMarkdownImportDuplicates={(input) => api.previewMarkdownImport(input)}
           cancelMarkdownImport={() => api.cancelMarkdownImport()}
           onOpenAsset={async (url) => {
             if (!adapter.openNoteAsset) {
@@ -3181,6 +3283,8 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
           }}
           onMarkdownImported={(report) => {
             void queryClient.invalidateQueries({ queryKey: ['standalone-notes'] });
+            void queryClient.invalidateQueries({ queryKey: ['note-folders'] });
+            void queryClient.invalidateQueries({ queryKey: ['note-tags'] });
             void queryClient.invalidateQueries({ queryKey: ['note-asset-usage'] });
             const first = report.notes.find(
               (item) =>
@@ -3188,7 +3292,11 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
             );
             if (first?.noteId) setStandaloneNoteId(first.noteId);
             setFolderNotice(
-              `Markdown 笔记导入完成：导入 ${report.imported} 篇、更新 ${report.updated} 篇、跳过 ${report.skipped} 篇、失败 ${report.failed} 篇。`
+              `Markdown 笔记导入完成：导入 ${report.imported} 篇、更新 ${report.updated} 篇、跳过 ${report.skipped} 篇${
+                (report.skippedExisting ?? 0) > 0
+                  ? `（其中跳过已存在 ${report.skippedExisting} 篇）`
+                  : ''
+              }、失败 ${report.failed} 篇。`
             );
           }}
           onRetry={() => void standaloneNotesQuery.refetch()}
@@ -7725,8 +7833,23 @@ function ReaderView({
     onSuccess: (blob) => {
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
+      let reported = false;
+      const fail = (message: string): void => {
+        if (reported) return;
+        reported = true;
+        URL.revokeObjectURL(url);
+        appDialogs.alert(message);
+      };
       audio.onended = () => URL.revokeObjectURL(url);
-      void audio.play().catch(() => URL.revokeObjectURL(url));
+      audio.onerror = () =>
+        fail('语音播报失败：音频无法播放（可能音频为空或格式不受支持）。');
+      void audio.play().catch((error) => {
+        fail(
+          `语音播报失败：${
+            error instanceof Error ? error.message : '浏览器拦截了音频播放'
+          }`
+        );
+      });
     },
     onError: (error: Error) => {
       appDialogs.alert(`语音播报失败：${error.message}`);

@@ -112,7 +112,7 @@ describe('schema 10：note_assets / note_asset_refs 迁移回填', () => {
         source_id: note.id
       });
       const version = rows(assets, "SELECT value FROM schema_meta WHERE key = 'schema_version'");
-      expect(version[0]?.value).toBe('18');
+      expect(version[0]?.value).toBe('19');
       // 迁移回填同时写索引统计。
       const settings = migrated.getSettings();
       expect(settings['note_assets.indexed_files']).toBe('1');

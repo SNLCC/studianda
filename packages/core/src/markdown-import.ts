@@ -14,6 +14,7 @@ import { gunzipSync, gzipSync } from 'node:zlib';
 import path from 'node:path';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 import type {
+  MarkdownImportDuplicatePreview,
   MarkdownImportItem,
   MarkdownImportJob,
   MarkdownImportReport,
@@ -150,6 +151,23 @@ function normalizedKey(value: string): string {
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
+}
+
+/** Markdown 导入的身份前缀：vault 绝对路径 hash（不同库/移动后的库互不误判）。 */
+function markdownVaultKeyPrefix(vaultRoot: string): string {
+  const vaultId = createHash('sha256').update(vaultRoot).digest('hex').slice(0, 16);
+  return `markdown:${vaultId}:`;
+}
+
+/** 某篇笔记的 externalKey：vault hash + 规范化相对路径（同名不同目录是不同笔记）。 */
+function markdownExternalKey(vaultRoot: string, relativePath: string): string {
+  return `${markdownVaultKeyPrefix(vaultRoot)}${normalizedKey(relativePath)}`;
+}
+
+/** 重复预览里展示的标题：文件名（去 Markdown 扩展名），不按正文推断以免同名文件混淆。 */
+function importPreviewTitle(relativePath: string): string {
+  const base = path.posix.basename(normalizeRelative(relativePath));
+  return base.replace(/\.(md|markdown)$/i, '') || base;
 }
 
 function isInside(root: string, target: string): boolean {
@@ -551,11 +569,27 @@ function rewriteLinks(
 // 图片 / 附件
 // ---------------------------------------------------------------------------
 
+/** 相对路径的目录部分（'' = 根目录；统一 / 分隔）。 */
+function relativeDirOf(relativePath: string): string {
+  const normalized = normalizeRelative(relativePath);
+  const dir = path.posix.dirname(normalized);
+  return dir === '.' || dir === '/' ? '' : dir;
+}
+
+/**
+ * 解析笔记里的图片/附件目标（相对库根目录）。
+ *
+ * 顺序：① 笔记同目录相对路径；② vault 根相对路径；③ 按 basename 候选列表：
+ * 唯一候选直接用；多候选时优先与笔记同目录者，其次按相对路径深度/字典序取最近候选，
+ * 并 addWarning 说明选择（同名附件是合法的，不得仅因重名跳过真实附件）。
+ * 只有确实不存在/越界才带原因跳过。
+ */
 function resolveAttachmentPath(
   vaultRoot: string,
   noteAbsPath: string,
   rawTarget: string,
-  attachmentsByBasename: Map<string, MarkdownVaultFile | typeof AMBIGUOUS>
+  attachmentsByBasename: Map<string, MarkdownVaultFile[]>,
+  report: MarkdownImportReport
 ): { absPath?: string; name: string; reason?: string } {
   let target = rawTarget.trim().replace(/^<|>$/g, '');
   if (!target) return { name: '', reason: '路径为空' };
@@ -569,24 +603,66 @@ function resolveAttachmentPath(
   if (/^(?:https?:|data:|mailto:|studianda-asset:|file:)/i.test(target)) {
     return { name: target, reason: '非本地附件' };
   }
-  const direct = path.resolve(path.dirname(noteAbsPath), target.replace(/\\/g, '/'));
+  const slashTarget = target.replace(/\\/g, '/');
+  // ① 笔记同目录相对路径优先。
+  const direct = path.resolve(path.dirname(noteAbsPath), slashTarget);
   if (isInside(vaultRoot, direct) && existsSync(direct) && statSync(direct).isFile()) {
     return { absPath: direct, name: path.basename(direct) };
   }
-  if (/[\\/]/.test(target) && !isInside(vaultRoot, direct)) {
-    return { name: path.basename(target), reason: '附件路径越界' };
+  // ② vault 根相对路径（例如笔记在子目录、但链接写的是从库根算起的路径）。
+  const fromRoot = path.resolve(vaultRoot, slashTarget);
+  if (isInside(vaultRoot, fromRoot) && existsSync(fromRoot) && statSync(fromRoot).isFile()) {
+    return { absPath: fromRoot, name: path.basename(fromRoot) };
   }
-  const byBase = attachmentsByBasename.get(path.basename(target).toLowerCase());
-  if (byBase && byBase !== AMBIGUOUS) {
-    const candidate = path.resolve(vaultRoot, byBase.relativePath);
-    if (isInside(vaultRoot, candidate) && existsSync(candidate)) {
-      return { absPath: candidate, name: byBase.name };
+  // ③ basename 候选（扫描结果里的附件；越界/不存在的候选剔除）。
+  const baseName = path.posix.basename(slashTarget);
+  const candidates = attachmentsByBasename.get(baseName.toLowerCase()) ?? [];
+  const usable: MarkdownVaultFile[] = [];
+  for (const candidate of candidates) {
+    const candidatePath = path.resolve(vaultRoot, candidate.relativePath);
+    if (!isInside(vaultRoot, candidatePath)) continue;
+    try {
+      if (!statSync(candidatePath).isFile()) continue;
+    } catch {
+      continue;
     }
+    usable.push(candidate);
   }
-  return {
-    name: path.basename(target),
-    reason: byBase === AMBIGUOUS ? '附件重名，无法确定目标' : '附件不存在'
-  };
+  const noteRelativeDir = relativeDirOf(path.relative(vaultRoot, noteAbsPath));
+  if (usable.length === 1) {
+    const chosen = usable[0]!;
+    return {
+      absPath: path.resolve(vaultRoot, chosen.relativePath),
+      name: chosen.name
+    };
+  }
+  if (usable.length > 1) {
+    const depthOf = (relativePath: string): number => relativePath.split('/').length;
+    const sorted = [...usable].sort((left, right) => {
+      const leftSameDir = relativeDirOf(left.relativePath) === noteRelativeDir ? 0 : 1;
+      const rightSameDir = relativeDirOf(right.relativePath) === noteRelativeDir ? 0 : 1;
+      if (leftSameDir !== rightSameDir) return leftSameDir - rightSameDir;
+      const leftDepth = depthOf(left.relativePath);
+      const rightDepth = depthOf(right.relativePath);
+      if (leftDepth !== rightDepth) return leftDepth - rightDepth;
+      return left.relativePath < right.relativePath
+        ? -1
+        : left.relativePath > right.relativePath
+          ? 1
+          : 0;
+    });
+    const chosen = sorted[0]!;
+    addWarning(report, `附件重名，已按最近路径选择：${chosen.relativePath}`);
+    return {
+      absPath: path.resolve(vaultRoot, chosen.relativePath),
+      name: chosen.name
+    };
+  }
+  // 兜底：带目录的相对路径解析到库外 → 越界；否则确实不存在。
+  if (/[\\/]/.test(slashTarget) && !isInside(vaultRoot, direct)) {
+    return { name: path.basename(slashTarget), reason: '附件路径越界' };
+  }
+  return { name: path.basename(slashTarget), reason: '附件不存在' };
 }
 
 /** 对大图做有损压缩，直到满足当前 note image 大小/像素限制；失败返回 null。 */
@@ -665,7 +741,7 @@ async function replaceEmbeds(
   vaultRoot: string,
   noteAbsPath: string,
   content: string,
-  attachmentsByBasename: Map<string, MarkdownVaultFile | typeof AMBIGUOUS>,
+  attachmentsByBasename: Map<string, MarkdownVaultFile[]>,
   report: MarkdownImportReport
 ): Promise<string> {
   let output = content;
@@ -675,7 +751,13 @@ async function replaceEmbeds(
     const target = (targetRaw ?? '').replace(/#.*$/, '').trim();
     const alias = safeLabel((aliasRaw ?? '').trim()) || path.basename(target);
     if (!target) return match.text;
-    const resolved = resolveAttachmentPath(vaultRoot, noteAbsPath, target, attachmentsByBasename);
+    const resolved = resolveAttachmentPath(
+      vaultRoot,
+      noteAbsPath,
+      target,
+      attachmentsByBasename,
+      report
+    );
     if (!resolved.absPath) {
       addWarning(
         report,
@@ -713,7 +795,13 @@ async function replaceEmbeds(
       const alt = match.groups[0] ?? '';
       const rawTarget = match.groups[1] ?? '';
       if (/^(?:https?:|data:|studianda-asset:|file:)/i.test(rawTarget.trim())) return match.text;
-      const resolved = resolveAttachmentPath(vaultRoot, noteAbsPath, rawTarget, attachmentsByBasename);
+      const resolved = resolveAttachmentPath(
+        vaultRoot,
+        noteAbsPath,
+        rawTarget,
+        attachmentsByBasename,
+        report
+      );
       const ext = resolved.absPath ? path.extname(resolved.absPath).toLowerCase().slice(1) : '';
       const mime = IMAGE_MIME_BY_EXT[ext];
       if (!resolved.absPath || !mime) {
@@ -825,6 +913,7 @@ function createEmptyReport(vaultPath: string): MarkdownImportReport {
     imported: 0,
     updated: 0,
     skipped: 0,
+    skippedExisting: 0,
     failed: 0,
     imagesCopied: 0,
     linksRewritten: 0,
@@ -836,24 +925,82 @@ function createEmptyReport(vaultPath: string): MarkdownImportReport {
   };
 }
 
+/** 旧版（schema/结果文件）报告没有 skippedExisting 时按 0 兜底。 */
+function withReportDefaults(report: MarkdownImportReport | null): MarkdownImportReport | null {
+  if (!report) return null;
+  return {
+    ...report,
+    skippedExisting: Number(report.skippedExisting ?? 0) || 0
+  };
+}
+
+/**
+ * 导入前的重复检查预览：按 externalKey（vault 绝对路径 hash + 规范化相对路径）判断
+ * 哪些文件此前已导入。**不能用文件名/标题判断**——同名不同目录是不同笔记。
+ * 不读正文、不写库，供 UI 弹窗让用户选择 update / skip。
+ */
+export function previewMarkdownImportDuplicates(
+  store: Store,
+  input: { vaultPath: string; files: string[] }
+): MarkdownImportDuplicatePreview {
+  const { root: vaultRoot } = assertVaultDirectory(input.vaultPath);
+  const files = Array.isArray(input.files) ? input.files : [];
+  const items: MarkdownImportDuplicatePreview['items'] = [];
+  const seenKeys = new Set<string>();
+  for (const raw of files) {
+    const relativePath = normalizeRelative(String(raw ?? ''));
+    if (!relativePath) continue;
+    if (path.isAbsolute(relativePath) || /^[a-zA-Z]:/.test(relativePath)) continue;
+    const externalKey = markdownExternalKey(vaultRoot, relativePath);
+    if (seenKeys.has(externalKey)) continue;
+    const existing = store.findNoteByExternalKey('', externalKey);
+    if (!existing) continue;
+    seenKeys.add(externalKey);
+    items.push({
+      relativePath,
+      noteId: existing.id,
+      title: importPreviewTitle(relativePath)
+    });
+  }
+  return {
+    total: files.length,
+    alreadyImported: items.length,
+    newCount: Math.max(0, files.length - items.length),
+    items
+  };
+}
+
+/** 重复命中时的策略：update = 覆盖更新（旧行为）；skip = 保留已有笔记、不改内容与链接。 */
+export type MarkdownImportDuplicatePolicy = 'update' | 'skip';
+
+interface MarkdownImportInput {
+  vaultPath: string;
+  files: string[];
+  duplicatePolicy?: MarkdownImportDuplicatePolicy;
+}
+
+function resolveDuplicatePolicy(value: unknown): MarkdownImportDuplicatePolicy {
+  if (value === undefined || value === null || value === '') return 'update';
+  if (value === 'update' || value === 'skip') return value;
+  throw new Error('duplicatePolicy 必须是 update 或 skip');
+}
+
 /** 同步导入（旧接口）：内部复用异步主流程，等全部完成后返回报告。 */
 export async function importMarkdownNotes(
   store: Store,
-  input: { vaultPath: string; files: string[] }
+  input: MarkdownImportInput
 ): Promise<MarkdownImportReport> {
   const outcome = await runMarkdownImport(store, input);
   return outcome.report;
 }
 
 /** 后台任务入口：启动异步分块导入（单并发；运行中再 start 返回当前快照）。 */
-export function startMarkdownImport(
-  store: Store,
-  input: { vaultPath: string; files: string[] }
-): MarkdownImportJob {
+export function startMarkdownImport(store: Store, input: MarkdownImportInput): MarkdownImportJob {
   if (markdownImportRunning) return snapshotJob();
   if (!Array.isArray(input?.files) || !input.files.every((file) => typeof file === 'string')) {
     throw new Error('需要 files 字符串数组');
   }
+  const duplicatePolicy = resolveDuplicatePolicy(input.duplicatePolicy);
   // 先做一次同步校验（非法路径/不存在目录直接 400，而不是异步 error）。
   const { root } = assertVaultDirectory(input.vaultPath);
   const previousResult = markdownImportJob;
@@ -879,18 +1026,22 @@ export function startMarkdownImport(
   persistImportJob(store, markdownImportJob);
   notifyJobChange();
   let lastPersisted = 0;
-  void runMarkdownImport(store, { vaultPath: root, files: input.files }, {
-    onProgress: (state) => {
-      markdownImportJob = { ...markdownImportJob, ...state };
-      notifyJobChange();
-      // 节流写盘：每 20 项或阶段变化时持久化一次。
-      if (state.done - lastPersisted >= 20) {
-        lastPersisted = state.done;
-        persistImportJob(store, markdownImportJob);
-      }
-    },
-    shouldCancel: () => markdownImportCancelRequested
-  })
+  void runMarkdownImport(
+    store,
+    { vaultPath: root, files: input.files, duplicatePolicy },
+    {
+      onProgress: (state) => {
+        markdownImportJob = { ...markdownImportJob, ...state };
+        notifyJobChange();
+        // 节流写盘：每 20 项或阶段变化时持久化一次。
+        if (state.done - lastPersisted >= 20) {
+          lastPersisted = state.done;
+          persistImportJob(store, markdownImportJob);
+        }
+      },
+      shouldCancel: () => markdownImportCancelRequested
+    }
+  )
     .then((outcome) => {
       markdownImportRunning = false;
       const cancelled = markdownImportCancelRequested || outcome.cancelled;
@@ -931,24 +1082,27 @@ export function startMarkdownImport(
 /** 实际执行导入：importing 阶段逐篇写库，resolving 阶段统一重写同 vault 链接。 */
 export async function runMarkdownImport(
   store: Store,
-  input: { vaultPath: string; files: string[] },
+  input: MarkdownImportInput,
   hooks: ImportHooks = {}
 ): Promise<MarkdownImportOutcome> {
   const { root: vaultRoot } = assertVaultDirectory(input.vaultPath);
+  const duplicatePolicy = resolveDuplicatePolicy(input.duplicatePolicy);
   const report = createEmptyReport(vaultRoot);
   report.vaultPath = vaultRoot;
   report.requested = input.files.length;
-  const vaultId = createHash('sha256').update(vaultRoot).digest('hex').slice(0, 16);
-  const keyPrefix = `markdown:${vaultId}:`;
+  const keyPrefix = markdownVaultKeyPrefix(vaultRoot);
   const scan = scanMarkdownVault(vaultRoot);
-  const attachmentsByBasename = new Map<string, MarkdownVaultFile | typeof AMBIGUOUS>();
+  const attachmentsByBasename = new Map<string, MarkdownVaultFile[]>();
   for (const attachment of scan.attachments) {
     const key = attachment.name.toLowerCase();
-    if (attachmentsByBasename.has(key)) attachmentsByBasename.set(key, AMBIGUOUS);
-    else attachmentsByBasename.set(key, attachment);
+    const existing = attachmentsByBasename.get(key);
+    if (existing) existing.push(attachment);
+    else attachmentsByBasename.set(key, [attachment]);
   }
   const checkCancel = (): boolean => hooks.shouldCancel?.() === true;
   const seen = new Set<string>();
+  // duplicatePolicy='skip' 命中的已有笔记：不做内容更新/链接改写。
+  const skippedExistingIds = new Set<string>();
   let cancelled = false;
 
   // importing
@@ -980,6 +1134,23 @@ export async function runMarkdownImport(
       if (seen.has(dedupeKey)) throw new Error('重复的导入路径');
       seen.add(dedupeKey);
 
+      // 身份只由 externalKey 决定（vault 绝对路径 hash + 规范化相对路径），不能用文件名判断。
+      const externalKey = markdownExternalKey(vaultRoot, relativePath);
+      const folderPath = relativeDirOf(relativePath);
+      const existing = store.findNoteByExternalKey('', externalKey);
+      if (existing && duplicatePolicy === 'skip') {
+        // 已导入过且策略为 skip：不读文件、不复制附件、不写库、不改链接。
+        item.status = 'skipped';
+        item.noteId = existing.id;
+        item.message = '文件已导入过，按跳过策略跳过';
+        report.skipped += 1;
+        report.skippedExisting += 1;
+        skippedExistingIds.add(existing.id);
+        report.notes.push(item);
+        if (index % 5 === 4) await yieldToEventLoop();
+        continue;
+      }
+
       const frontmatterResult = stripFrontmatter(
         readFileSync(absPath, 'utf8'),
         report,
@@ -999,10 +1170,8 @@ export async function runMarkdownImport(
         report
       );
 
-      const normalizedExternalPath = normalizedKey(relativePath);
-      const externalKey = `${keyPrefix}${normalizedExternalPath}`;
-      const folderPath = path.posix.dirname(relativePath) === '.' ? '' : path.posix.dirname(relativePath);
-      const existing = store.findNoteByExternalKey('', externalKey);
+      // 写入笔记前登记文件夹层级（Markdown 导入产生的目录必须能重命名/删除）。
+      store.ensureNoteFolderHierarchy(folderPath);
       let noteId: string;
       if (existing) {
         if (existing.deleted) store.restoreNote(existing.id);
@@ -1073,19 +1242,21 @@ export async function runMarkdownImport(
       const sourceRelativePath = note.externalKey.startsWith(keyPrefix)
         ? note.externalKey.slice(keyPrefix.length)
         : note.folderPath || '';
-      try {
-        const result = rewriteLinks(note.content, sourceRelativePath, mapping, report);
-        report.linksRewritten += result.rewritten;
-        report.unresolvedLinks += result.unresolved;
-        if (result.content !== note.content) {
-          store.updateNote(note.id, { content: result.content });
+      if (!skippedExistingIds.has(note.id)) {
+        try {
+          const result = rewriteLinks(note.content, sourceRelativePath, mapping, report);
+          report.linksRewritten += result.rewritten;
+          report.unresolvedLinks += result.unresolved;
+          if (result.content !== note.content) {
+            store.updateNote(note.id, { content: result.content });
+          }
+        } catch (error) {
+          report.failed += 1;
+          addWarning(
+            report,
+            `链接解析失败：${sourceRelativePath}（${error instanceof Error ? error.message : String(error)}）`
+          );
         }
-      } catch (error) {
-        report.failed += 1;
-        addWarning(
-          report,
-          `链接解析失败：${sourceRelativePath}（${error instanceof Error ? error.message : String(error)}）`
-        );
       }
       hooks.onProgress?.({
         phase: 'resolving',
@@ -2050,6 +2221,7 @@ export function hydrateMarkdownJobs(store: Store): void {
           resultMissing = true;
         }
       }
+      report = withReportDefaults(report);
       const completedAt = parsed.resultCompletedAt ?? read.completedAt ?? null;
       let lastAttemptStatus: MarkdownImportJob['lastAttemptStatus'] =
         status === 'interrupted'

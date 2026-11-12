@@ -57,7 +57,7 @@ describe('Store 独立笔记（document_id=""）', () => {
     }
   });
 
-  it('listStandaloneNotes 只返回独立笔记（不混入文献笔记），created 倒序', async () => {
+  it('listStandaloneNotes 只返回独立笔记（不混入文献笔记），手动排序位置升序', async () => {
     const store = storeAt('standalone-list');
     try {
       const document = await importPdf(store, 'list-doc');
@@ -71,7 +71,8 @@ describe('Store 独立笔记（document_id=""）', () => {
       const newer = store.createNote({ documentId: '', page: 0, content: '较新的独立笔记' });
 
       const list = store.listStandaloneNotes();
-      expect(list.map((note) => note.id)).toEqual([newer.id, older.id]);
+      // schema 19：新建笔记追加到文件夹末尾（MAX(manual_order)+1），默认按创建先后排列。
+      expect(list.map((note) => note.id)).toEqual([older.id, newer.id]);
       expect(list.map((note) => note.documentId)).toEqual(['', '']);
       expect(list.map((note) => note.id)).not.toContain(documentNote.id);
       // 文献笔记列表也不混入独立笔记。

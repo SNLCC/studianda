@@ -901,8 +901,23 @@ export function QaView({
     onSuccess: (blob) => {
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
+      let reported = false;
+      const fail = (message: string): void => {
+        if (reported) return;
+        reported = true;
+        URL.revokeObjectURL(url);
+        appDialogs.alert(message);
+      };
       audio.onended = () => URL.revokeObjectURL(url);
-      void audio.play().catch(() => URL.revokeObjectURL(url));
+      audio.onerror = () =>
+        fail('语音播报失败：音频无法播放（可能音频为空或格式不受支持）。');
+      void audio.play().catch((error) => {
+        fail(
+          `语音播报失败：${
+            error instanceof Error ? error.message : '浏览器拦截了音频播放'
+          }`
+        );
+      });
     },
     onError: (error: Error) => {
       appDialogs.alert(`语音播报失败：${error.message}`);

@@ -6,6 +6,7 @@ import type {
   BacklinkRecord,
   DocumentSummary,
   MarkdownInternalTarget,
+  MarkdownImportDuplicatePreview,
   NoteFolderRecord,
   NoteRecord,
   MarkdownImportJob,
@@ -23,9 +24,10 @@ import { Backlinks, type BacklinkTarget } from './Backlinks.js';
 import { MarkdownEditor, type MarkdownImageUpload } from './MarkdownEditor.js';
 import { MarkdownImportDialog } from './MarkdownImportDialog.js';
 import { confirmPurgeNote } from './note-purge.js';
-import type { ConfirmAction } from './dialog-utils.js';
+import { resolveConfirm, type ConfirmAction } from './dialog-utils.js';
 import {
   buildStandaloneFolderTree,
+  collectFolderNotes,
   collectFolderPaths,
   filterStandaloneFolderTree,
   filterStandaloneNotesByTags,
@@ -111,7 +113,18 @@ export interface StandaloneNotesViewProps {
   onCreateFolder?(path: string): void;
   onRenameFolder?(from: string, to: string): void;
   onDeleteFolder?(path: string): void;
-  onMoveNote?(noteId: string, folderPath: string): void;
+  onMoveNote?(noteId: string, folderPath: string): void | Promise<void>;
+  /**
+   * 列表内拖拽排序：按 ids 顺序持久化 folderPath 内的手动顺序
+   * （app 包装 api.reorderStandaloneNotes；'' = 根目录）。
+   */
+  onReorderNotes?(folderPath: string, ids: string[]): Promise<void> | void;
+  /** 批量移入回收站（app 包装 api.batchDeleteStandaloneNotes）。 */
+  onBatchDeleteNotes?(ids: string[]): Promise<void> | void;
+  /** 批量移动到指定文件夹（app 包装 api.batchMoveStandaloneNotes；'' = 根目录）。 */
+  onBatchMoveNotes?(ids: string[], folderPath: string): Promise<void> | void;
+  /** 重命名保存：改写正文第一行标题后保存（app 复用 api.updateNote）。 */
+  onRenameNote?(id: string, content: string): Promise<void> | void;
   /** 保存笔记标签（app 包装 api.setNoteTags），成功后刷新列表与标签查询。 */
   onSetTags?(noteId: string, tags: string[]): Promise<void>;
   /** 初始扫描任务（主要便于测试/恢复界面）。 */
@@ -134,7 +147,14 @@ export interface StandaloneNotesViewProps {
   startMarkdownImport?(input: {
     vaultPath: string;
     files: string[];
+    /** 重复笔记策略：更新已有 / 跳过已有（默认 update，保持旧行为）。 */
+    duplicatePolicy?: 'update' | 'skip';
   }): Promise<MarkdownImportJob>;
+  /** 预览本次选择里此前已导入过的笔记（按资料库路径+相对路径识别）。 */
+  previewMarkdownImportDuplicates?(input: {
+    vaultPath: string;
+    files: string[];
+  }): Promise<MarkdownImportDuplicatePreview>;
   /** 轮询后台导入状态（app 包装 api.getMarkdownImportStatus）。 */
   getMarkdownImportStatus?(): Promise<MarkdownImportJob>;
   /** 取消后台导入（app 包装 api.cancelMarkdownImport）。 */
@@ -249,15 +269,15 @@ function writeDismissedMarkdownJobs(value: DismissedMarkdownJobs): void {
 }
 
 /**
- * 独立笔记标题：取内容第一个非空行，去掉常见 Markdown 标记与内部引用语法，截断到 40 字。
- * 导出为纯函数便于 SSR/冒烟测试。
+ * 独立笔记可编辑标题：取内容第一个非空行，去掉常见 Markdown 标记与内部引用语法（不截断）。
+ * 重命名输入框用它回填，避免把 40 字截断的展示标题写回正文。
  */
-export function standaloneNoteTitle(content: string): string {
+export function standaloneNoteTitleRaw(content: string): string {
   const lines = (content ?? '').replace(/\r\n?/g, '\n').split('\n');
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    const plain = trimmed
+    return trimmed
       .replace(/^\s*#{1,6}\s+/, '')
       .replace(/^\s*>\s?/, '')
       .replace(/^\s*[-*+]\s+\[[ xX]\]\s+/, '')
@@ -273,11 +293,116 @@ export function standaloneNoteTitle(content: string): string {
       .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
       .replace(/\s+/g, ' ')
       .trim();
-    if (!plain) continue;
-    return plain.length > 40 ? `${plain.slice(0, 40)}…` : plain;
   }
-  return '（未命名笔记）';
+  return '';
 }
+
+/**
+ * 独立笔记标题：取内容第一个非空行，去掉常见 Markdown 标记与内部引用语法，截断到 40 字。
+ * 导出为纯函数便于 SSR/冒烟测试。
+ */
+export function standaloneNoteTitle(content: string): string {
+  const plain = standaloneNoteTitleRaw(content);
+  if (!plain) return '（未命名笔记）';
+  return plain.length > 40 ? `${plain.slice(0, 40)}…` : plain;
+}
+
+/**
+ * 重命名笔记：只改写正文第一个非空行，保留它的 `#` 标题层级（以及空行结构）。
+ * 若正文没有非空行则直接写入标题。空标题原样返回 content（调用方据此判断不提交）。
+ * 纯函数，便于审查/测试。
+ */
+export function renameNoteFirstLine(content: string, nextTitle: string): string {
+  const title = (nextTitle ?? '').replace(/\s+/g, ' ').trim();
+  if (!title) return content;
+  const normalized = (content ?? '').replace(/\r\n?/g, '\n');
+  const lines = normalized.split('\n');
+  const index = lines.findIndex((line) => line.trim().length > 0);
+  if (index < 0) return title;
+  const firstLine = lines[index] ?? '';
+  const heading = firstLine.match(/^(\s*)(#{1,6})(\s*)/);
+  const prefix = heading ? `${heading[1]}${heading[2]} ` : '';
+  lines[index] = `${prefix}${title}`;
+  return lines.join('\n');
+}
+
+/**
+ * 拖拽排序：把 draggedId 插到 targetId 前/后（targetId 为 null/找不到时追加到末尾）。
+ * 返回新的 id 顺序；纯函数，便于审查/测试。
+ */
+export function reorderNoteIds(
+  ids: string[],
+  draggedId: string,
+  targetId: string | null,
+  position: 'before' | 'after'
+): string[] {
+  const without = ids.filter((id) => id !== draggedId);
+  if (!targetId) return [...without, draggedId];
+  const targetIndex = without.indexOf(targetId);
+  if (targetIndex < 0) return [...without, draggedId];
+  const insertAt = position === 'before' ? targetIndex : targetIndex + 1;
+  return [...without.slice(0, insertAt), draggedId, ...without.slice(insertAt)];
+}
+
+/**
+ * 按给定顺序（服务端 manual_order）排列文件夹树里的笔记。
+ *
+ * `buildStandaloneFolderTree` 为兼容旧数据仍按创建时间排序，这里用 notes 数组的
+ * 顺序覆盖，使拖拽排序结果能立即显示（不依赖 core 返回的排序细节）。
+ * 纯函数。
+ */
+export function orderFolderTreeNotes(
+  folder: StandaloneFolder,
+  order: ReadonlyMap<string, number>
+): StandaloneFolder {
+  const rank = (note: NoteRecord): number => order.get(note.id) ?? Number.MAX_SAFE_INTEGER;
+  return {
+    ...folder,
+    notes: [...folder.notes].sort((left, right) => rank(left) - rank(right)),
+    children: folder.children.map((child) => orderFolderTreeNotes(child, order))
+  };
+}
+
+/** 笔记所在文件夹路径（规范化；'' = 根目录）。 */
+function noteFolderPath(note: Pick<NoteRecord, 'folderPath'>): string {
+  return (note.folderPath ?? '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+}
+
+/** 笔记栏收起状态的本机持久化 key。 */
+export const STANDALONE_SIDEBAR_COLLAPSED_KEY = 'studianda.notes.sidebarCollapsed';
+
+/** 读取笔记栏收起状态；localStorage 不可用/内容损坏时用默认值。 */
+export function readStandaloneSidebarCollapsed(defaultCollapsed: boolean): boolean {
+  try {
+    const raw = window.localStorage.getItem(STANDALONE_SIDEBAR_COLLAPSED_KEY);
+    if (raw === 'true') return true;
+    if (raw === 'false') return false;
+  } catch {
+    // localStorage 不可用（隐私模式/受限环境）时退回默认值。
+  }
+  return defaultCollapsed;
+}
+
+/** 写入笔记栏收起状态；失败只影响下次默认值，不影响当前交互。 */
+export function writeStandaloneSidebarCollapsed(collapsed: boolean): void {
+  try {
+    window.localStorage.setItem(STANDALONE_SIDEBAR_COLLAPSED_KEY, collapsed ? 'true' : 'false');
+  } catch {
+    // 忽略：仅影响下次是否记住。
+  }
+}
+
+/**
+ * 「移动到…」下拉里代表根目录的哨兵值：真实文件夹路径不允许以 / 开头，
+ * 所以用 '/' 区分「根目录」与其他空值。
+ */
+const ROOT_FOLDER_OPTION_VALUE = '/';
+
+/** 把「移动到…」下拉值转成文件夹路径（哨兵 '/' → 根目录 ''）。 */
+export function folderOptionToPath(value: string): string {
+  return value === ROOT_FOLDER_OPTION_VALUE ? '' : value;
+}
+
 
 /**
  * 独立笔记本地搜索：标题（首行）与全文内容，大小写不敏感；空关键词返回全部。
@@ -343,6 +468,10 @@ export function StandaloneNotesView({
   onRenameFolder,
   onDeleteFolder,
   onMoveNote,
+  onReorderNotes,
+  onBatchDeleteNotes,
+  onBatchMoveNotes,
+  onRenameNote,
   onSetTags,
   initialScanJob = null,
   initialFolderEditor = null,
@@ -351,6 +480,7 @@ export function StandaloneNotesView({
   initialImportRestoreNotice = '',
   subscribeMarkdownJobs,
   startMarkdownImport,
+  previewMarkdownImportDuplicates,
   cancelMarkdownImport,
   onMarkdownImported,
   onRetry
@@ -381,6 +511,35 @@ export function StandaloneNotesView({
   const [folderDelete, setFolderDelete] = useState<string | null>(initialFolderDelete);
   const [dragNoteId, setDragNoteId] = useState<string | null>(null);
   const [dragTarget, setDragTarget] = useState<string | null>(null);
+  // 列表内拖拽排序：目标笔记 + 插入位置（before/after）。
+  const [dragTargetNote, setDragTargetNote] = useState<{
+    id: string;
+    position: 'before' | 'after';
+  } | null>(null);
+  // 多选批量操作。
+  const [selectedNoteIds, setSelectedNoteIds] = useState<Set<string>>(new Set());
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [noteActionNotice, setNoteActionNotice] = useState('');
+  // 重命名（改写正文第一行；Enter 保存 / Esc 取消）。
+  const [renamingNote, setRenamingNote] = useState<{
+    id: string;
+    value: string;
+    error: string;
+  } | null>(null);
+  // 左侧笔记文件夹栏收起/展开（localStorage 持久化；窄屏默认收起并作为抽屉）。
+  const [narrowNotesLayout, setNarrowNotesLayout] = useState(
+    () =>
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(max-width: 1100px)').matches
+  );
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() =>
+    readStandaloneSidebarCollapsed(
+      typeof window !== 'undefined' &&
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(max-width: 1100px)').matches
+    )
+  );
   const [tagInput, setTagInput] = useState('');
   const [tagError, setTagError] = useState('');
   const [tagSaving, setTagSaving] = useState(false);
@@ -495,14 +654,49 @@ export function StandaloneNotesView({
   useEffect(() => {
     setTagEditorOpen(false);
     setTagInput('');
+    setRenamingNote(null);
   }, [selectedId]);
+
+  // 收起/展开状态持久化到本机（下次进入笔记工作区沿用）。
+  useEffect(() => {
+    writeStandaloneSidebarCollapsed(sidebarCollapsed);
+  }, [sidebarCollapsed]);
+
+  // 窄屏（<1100px）：侧栏改为覆盖式抽屉；进入窄屏时默认收起一次，用户展开后可用。
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const media = window.matchMedia('(max-width: 1100px)');
+    const onChange = (): void => {
+      setNarrowNotesLayout(media.matches);
+      if (media.matches) setSidebarCollapsed(true);
+    };
+    setNarrowNotesLayout(media.matches);
+    media.addEventListener('change', onChange);
+    return () => media.removeEventListener('change', onChange);
+  }, []);
+
+  // 笔记被删除/过滤后清理已不存在的选中项，避免批量操作作用到幽灵 id。
+  useEffect(() => {
+    setSelectedNoteIds((current) => {
+      if (current.size === 0) return current;
+      const known = new Set(notes.map((note) => note.id));
+      const next = new Set([...current].filter((id) => known.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [notes]);
 
   // 本地搜索：标题（首行）/全文内容/文件夹路径，大小写不敏感；不影响草稿与选中状态。
   // 顶部标签筛选优先于文件夹/搜索（标签为 OR 匹配）。
   const tagFilteredNotes = filterStandaloneNotesByTags(notes, tagFilter);
-  const fullFolderTree = buildStandaloneFolderTree(
-    tagFilteredNotes,
-    folders.map((folder) => folder.path)
+  // notes 由 app 按 core 的 folder_path, manual_order, created 顺序给出；
+  // 这里覆盖 helper 的默认创建时间排序，让拖拽排序结果立即可见。
+  const noteOrderIndex = new Map(tagFilteredNotes.map((note, index) => [note.id, index]));
+  const fullFolderTree = orderFolderTreeNotes(
+    buildStandaloneFolderTree(
+      tagFilteredNotes,
+      folders.map((folder) => folder.path)
+    ),
+    noteOrderIndex
   );
   const folderTree = filterStandaloneFolderTree(fullFolderTree, search);
   const scanPercent =
@@ -511,6 +705,14 @@ export function StandaloneNotesView({
       : 0;
   const allFolderPaths = collectFolderPaths(fullFolderTree);
   const knownFolderPaths = new Set(allFolderPaths);
+  // 当前筛选（标签 + 搜索）下的全部笔记：批量「全选当前筛选结果」用。
+  const visibleFilteredNotes = folderTree ? collectFolderNotes(folderTree) : [];
+  const allVisibleSelected =
+    visibleFilteredNotes.length > 0 &&
+    visibleFilteredNotes.every((note) => selectedNoteIds.has(note.id));
+  const someVisibleSelected = visibleFilteredNotes.some((note) =>
+    selectedNoteIds.has(note.id)
+  );
 
   const toggleTag = (tag: string): void => {
     setTagFilter((current) => {
@@ -601,9 +803,160 @@ export function StandaloneNotesView({
   const moveNoteToFolder = (noteId: string, folderPath: string): void => {
     if (!onMoveNote) return;
     const note = notes.find((item) => item.id === noteId);
-    if (note && (note.folderPath ?? '') === folderPath) return;
-    onMoveNote(noteId, folderPath);
+    if (note && noteFolderPath(note) === folderPath) return;
+    setNoteActionNotice('');
+    Promise.resolve(onMoveNote(noteId, folderPath)).catch((error: unknown) => {
+      setNoteActionNotice(
+        `移动笔记失败：${error instanceof Error ? error.message : String(error)}`
+      );
+    });
     setFolderMessage('');
+  };
+
+  /** 某文件夹内的全部笔记 id（按服务端顺序；不受搜索/标签筛选影响）。 */
+  const folderNoteIds = (folderPath: string): string[] =>
+    notes.filter((note) => noteFolderPath(note) === folderPath).map((note) => note.id);
+
+  /** 列表内拖拽落点：同文件夹调序；跨文件夹先移动再调序，失败回滚由 app mutation 负责。 */
+  const dropNoteOnNote = async (
+    target: NoteRecord,
+    position: 'before' | 'after'
+  ): Promise<void> => {
+    const draggedId = dragNoteId;
+    setDragNoteId(null);
+    setDragTarget(null);
+    setDragTargetNote(null);
+    if (!draggedId || draggedId === target.id) return;
+    const dragged = notes.find((note) => note.id === draggedId);
+    if (!dragged) return;
+    const targetFolder = noteFolderPath(target);
+    const nextIds = reorderNoteIds(folderNoteIds(targetFolder), draggedId, target.id, position);
+    if (nextIds.length === 0) return;
+    setNoteActionNotice('');
+    try {
+      if (noteFolderPath(dragged) !== targetFolder) {
+        // 跨文件夹拖动：先 move 再 reorder，保证服务端顺序作用于正确的文件夹。
+        await onMoveNote?.(draggedId, targetFolder);
+      }
+      await onReorderNotes?.(targetFolder, nextIds);
+    } catch (error) {
+      setNoteActionNotice(
+        `调整笔记顺序失败：${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  };
+
+  const toggleNoteSelection = (noteId: string): void => {
+    setSelectedNoteIds((current) => {
+      const next = new Set(current);
+      if (next.has(noteId)) next.delete(noteId);
+      else next.add(noteId);
+      return next;
+    });
+  };
+
+  const selectAllVisibleNotes = (): void => {
+    setSelectedNoteIds(new Set(visibleFilteredNotes.map((note) => note.id)));
+  };
+
+  const clearNoteSelection = (): void => {
+    setSelectedNoteIds(new Set());
+  };
+
+  const batchDeleteSelected = async (): Promise<void> => {
+    if (!onBatchDeleteNotes || selectedNoteIds.size === 0 || batchBusy) return;
+    const ids = [...selectedNoteIds];
+    if (!resolveConfirm(confirmAction)(`将选中的 ${ids.length} 篇笔记移入回收站？可恢复。`)) {
+      return;
+    }
+    setBatchBusy(true);
+    setNoteActionNotice('');
+    try {
+      await onBatchDeleteNotes(ids);
+      setSelectedNoteIds(new Set());
+      setNoteActionNotice(`已将 ${ids.length} 篇笔记移入回收站。`);
+    } catch (error) {
+      setNoteActionNotice(
+        `批量移入回收站失败：${error instanceof Error ? error.message : String(error)}`
+      );
+    } finally {
+      setBatchBusy(false);
+    }
+  };
+
+  const batchMoveSelected = async (folderPath: string): Promise<void> => {
+    if (!onBatchMoveNotes || selectedNoteIds.size === 0 || batchBusy) return;
+    const ids = [...selectedNoteIds];
+    setBatchBusy(true);
+    setNoteActionNotice('');
+    try {
+      await onBatchMoveNotes(ids, folderPath);
+      setSelectedNoteIds(new Set());
+      setNoteActionNotice(
+        `已将 ${ids.length} 篇笔记移动到${folderPath ? `「${folderPath}」` : '根目录'}。`
+      );
+    } catch (error) {
+      setNoteActionNotice(
+        `批量移动失败：${error instanceof Error ? error.message : String(error)}`
+      );
+    } finally {
+      setBatchBusy(false);
+    }
+  };
+
+  const beginRenameNote = (note: NoteRecord): void => {
+    // 重命名输入框渲染在左侧列表项里：栏收起时先展开，避免点了没反应。
+    setSidebarCollapsed(false);
+    // 当前笔记有未保存草稿时以草稿为基准，避免重命名把草稿内容覆盖掉。
+    const base = note.id === selectedId ? (drafts[note.id] ?? note.content) : note.content;
+    setRenamingNote({
+      id: note.id,
+      value: standaloneNoteTitleRaw(base),
+      error: ''
+    });
+  };
+
+  const cancelRenameNote = (): void => {
+    setRenamingNote(null);
+  };
+
+  /**
+   * 提交重命名：基于当前草稿（若这条笔记正在编辑）改写正文第一行，
+   * 保留标题层级；空标题不提交；保存成功后清空重命名状态。
+   */
+  const commitRenameNote = async (): Promise<void> => {
+    if (!renamingNote) return;
+    const note = notes.find((item) => item.id === renamingNote.id);
+    if (!note) {
+      setRenamingNote(null);
+      return;
+    }
+    const title = renamingNote.value.trim();
+    if (!title) {
+      setRenamingNote((current) =>
+        current ? { ...current, error: '标题不能为空。' } : current
+      );
+      return;
+    }
+    const base = note.id === selectedId ? (drafts[note.id] ?? note.content) : note.content;
+    const next = renameNoteFirstLine(base, title);
+    if (next === base) {
+      setRenamingNote(null);
+      return;
+    }
+    if (note.id === selectedId) {
+      setDrafts((current) => ({ ...current, [note.id]: next }));
+    }
+    setRenamingNote(null);
+    setNoteActionNotice('');
+    try {
+      const saveRename = onRenameNote ?? onSave;
+      await Promise.resolve(saveRename(note.id, next));
+    } catch (error) {
+      setNoteActionNotice(
+        `重命名失败：${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   };
 
   const saveNoteTags = async (tags: string[]): Promise<void> => {
@@ -1288,7 +1641,9 @@ export function StandaloneNotesView({
     setMarkdownError('');
     if (!report) return;
     setImportRestoreNotice(
-      `上次导入完成：导入 ${report.imported} 篇、更新 ${report.updated} 篇。`
+      `上次导入完成：导入 ${report.imported} 篇、更新 ${report.updated} 篇${
+        (report.skippedExisting ?? 0) > 0 ? `、跳过已存在 ${report.skippedExisting} 篇` : ''
+      }。`
     );
     onMarkdownImported?.(report);
     // 用报告生成的任务卡只作兜底；优先读取服务端完整状态（含 input/完成时间），
@@ -1379,43 +1734,164 @@ export function StandaloneNotesView({
   const renderNoteItem = (note: NoteRecord): React.JSX.Element => {
     const title = standaloneNoteTitle(note.content);
     const isActive = note.id === selectedId;
+    const checked = selectedNoteIds.has(note.id);
+    const isRenaming = renamingNote?.id === note.id;
+    const dropBefore = dragTargetNote?.id === note.id && dragTargetNote.position === 'before';
+    const dropAfter = dragTargetNote?.id === note.id && dragTargetNote.position === 'after';
+    const currentFolder = noteFolderPath(note);
+    const moveTargets = allFolderPaths.filter((path) => path !== currentFolder);
     return (
       <li
         key={note.id}
-        className="kr-standalone__item"
-        draggable={Boolean(onMoveNote)}
+        className={`kr-standalone__item${checked ? ' is-selected' : ''}${
+          dropBefore ? ' is-drop-before' : ''
+        }${dropAfter ? ' is-drop-after' : ''}`}
+        draggable={Boolean(onMoveNote || onReorderNotes) && !isRenaming}
         onDragStart={(event) => {
           setDragNoteId(note.id);
+          setDragTargetNote(null);
           event.dataTransfer.effectAllowed = 'move';
           event.dataTransfer.setData('text/plain', note.id);
         }}
         onDragEnd={() => {
           setDragNoteId(null);
           setDragTarget(null);
+          setDragTargetNote(null);
+        }}
+        onDragOver={(event) => {
+          if (!dragNoteId || dragNoteId === note.id) return;
+          event.preventDefault();
+          event.stopPropagation();
+          event.dataTransfer.dropEffect = 'move';
+          const rect = event.currentTarget.getBoundingClientRect();
+          const position: 'before' | 'after' =
+            event.clientY > rect.top + rect.height / 2 ? 'after' : 'before';
+          setDragTarget(null);
+          setDragTargetNote({ id: note.id, position });
+        }}
+        onDragLeave={(event) => {
+          if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+          setDragTargetNote((current) => (current?.id === note.id ? null : current));
+        }}
+        onDrop={(event) => {
+          if (!dragNoteId) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const rect = event.currentTarget.getBoundingClientRect();
+          const position: 'before' | 'after' =
+            event.clientY > rect.top + rect.height / 2 ? 'after' : 'before';
+          void dropNoteOnNote(note, position);
         }}
       >
-        <button
-          type="button"
-          className={`kr-standalone__open${isActive ? ' is-active' : ''}`}
-          title={title}
-          onClick={() => onSelect(note.id)}
-        >
-          <span className="kr-standalone__title">{title}</span>
-          <small>
-            {new Date(note.created).toLocaleDateString()} ·{' '}
-            {note.content.replace(/\s+/g, '').length} 字
-            {note.folderPath ? ` · ${note.folderPath}` : ''}
-          </small>
-          {(note.tags ?? []).length > 0 ? (
-            <span className="kr-standalone__tags">
-              {(note.tags ?? []).map((tag) => (
-                <span key={tag} className="kr-standalone__tag">
-                  {tag}
+        <div className="kr-standalone__item-row">
+          <input
+            type="checkbox"
+            className="kr-standalone__select"
+            checked={checked}
+            aria-label={`选择笔记 ${title}`}
+            onChange={() => toggleNoteSelection(note.id)}
+          />
+          {isRenaming ? (
+            <span className="kr-standalone__rename">
+              <input
+                autoFocus
+                value={renamingNote?.value ?? ''}
+                aria-label="重命名笔记（改写正文第一行标题）"
+                placeholder="笔记标题"
+                onChange={(event) =>
+                  setRenamingNote((current) =>
+                    current ? { ...current, value: event.target.value, error: '' } : current
+                  )
+                }
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    void commitRenameNote();
+                  } else if (event.key === 'Escape') {
+                    event.preventDefault();
+                    cancelRenameNote();
+                  }
+                }}
+                onBlur={() => {
+                  if (renamingNote?.error) return;
+                  cancelRenameNote();
+                }}
+              />
+              {renamingNote?.error ? (
+                <span className="kr-page-error">{renamingNote.error}</span>
+              ) : null}
+            </span>
+          ) : (
+            <button
+              type="button"
+              className={`kr-standalone__open${isActive ? ' is-active' : ''}`}
+              title={title}
+              onClick={() => onSelect(note.id)}
+            >
+              <span className="kr-standalone__title">{title}</span>
+              <small>
+                {new Date(note.created).toLocaleDateString()} ·{' '}
+                {note.content.replace(/\s+/g, '').length} 字
+                {note.folderPath ? ` · ${note.folderPath}` : ''}
+              </small>
+              {(note.tags ?? []).length > 0 ? (
+                <span className="kr-standalone__tags">
+                  {(note.tags ?? []).map((tag) => (
+                    <span key={tag} className="kr-standalone__tag">
+                      {tag}
+                    </span>
+                  ))}
                 </span>
-              ))}
+              ) : null}
+            </button>
+          )}
+          {!isRenaming ? (
+            <span className="kr-standalone__item-actions">
+              {onMoveNote ? (
+                <select
+                  className="kr-standalone__item-move"
+                  value=""
+                  title="移动到…"
+                  aria-label={`移动笔记 ${title} 到文件夹`}
+                  onChange={(event) => {
+                    const target = event.target.value;
+                    if (!target) return;
+                    moveNoteToFolder(note.id, folderOptionToPath(target));
+                  }}
+                >
+                  <option value="">移动到…</option>
+                  {currentFolder ? (
+                    <option value={ROOT_FOLDER_OPTION_VALUE}>根目录</option>
+                  ) : null}
+                  {moveTargets.map((path) => (
+                    <option key={path} value={path}>
+                      {path}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+              <button
+                type="button"
+                className="kr-standalone__icon-btn"
+                title="重命名（改写正文第一行标题）"
+                aria-label={`重命名笔记 ${title}`}
+                onClick={() => beginRenameNote(note)}
+              >
+                ✎
+              </button>
+              <button
+                type="button"
+                className="kr-standalone__icon-btn"
+                title="移入回收站（可恢复）"
+                aria-label={`将笔记 ${title} 移入回收站`}
+                disabled={deleting}
+                onClick={() => onDelete(note.id)}
+              >
+                移除
+              </button>
             </span>
           ) : null}
-        </button>
+        </div>
         {loadBacklinks ? (
           <Backlinks
             target={{ kind: 'note', documentId: '', id: note.id }}
@@ -1440,6 +1916,7 @@ export function StandaloneNotesView({
           if (!dragNoteId) return;
           event.preventDefault();
           event.dataTransfer.dropEffect = 'move';
+          setDragTargetNote(null);
           setDragTarget(folder.path);
         }}
         onDragLeave={(event) => {
@@ -1453,6 +1930,7 @@ export function StandaloneNotesView({
           if (noteId) moveNoteToFolder(noteId, folder.path);
           setDragNoteId(null);
           setDragTarget(null);
+          setDragTargetNote(null);
         }}
       >
         {renameEditor ? (
@@ -1512,10 +1990,10 @@ export function StandaloneNotesView({
         {folderDelete === folder.path ? (
           <div className="kr-standalone__inline-confirm" role="alert">
             <span>
-              删除文件夹「{folder.path}」？
+              删除文件夹「{folder.path}」后，其中笔记会移到上一级/根目录，子文件夹会上移一级。
               {folder.totalCount > 0
-                ? `其中 ${folder.totalCount} 篇笔记会被移到上一级/根目录。`
-                : '这是空文件夹。'}
+                ? `（该文件夹及子文件夹共 ${folder.totalCount} 篇笔记，不会丢失。）`
+                : '（当前没有笔记。）'}
             </span>
             <button type="button" className="kr-primary" onClick={confirmDeleteFolder}>
               删除
@@ -1555,6 +2033,16 @@ export function StandaloneNotesView({
           删除的笔记/批注会进入回收站，可恢复或彻底删除；只有彻底删除才会清理仅被它引用的图片。
         </span>
         <div className="kr-standalone__head-actions">
+          <button
+            type="button"
+            className="kr-ghost kr-standalone__sidebar-toggle"
+            aria-expanded={!sidebarCollapsed}
+            aria-controls="kr-standalone-sidebar"
+            title={sidebarCollapsed ? '展开笔记文件夹栏' : '收起笔记文件夹栏'}
+            onClick={() => setSidebarCollapsed((current) => !current)}
+          >
+            {sidebarCollapsed ? '展开笔记列表' : '收起笔记列表'}
+          </button>
           <button
             type="button"
             className={`kr-ghost${scanJob?.status === 'running' ? ' is-busy' : ''}`}
@@ -1844,7 +2332,11 @@ export function StandaloneNotesView({
               <p>
                 上次导入完成：
                 {restoredImportJob.report
-                  ? `导入 ${restoredImportJob.report.imported} 篇、更新 ${restoredImportJob.report.updated} 篇。`
+                  ? `导入 ${restoredImportJob.report.imported} 篇、更新 ${restoredImportJob.report.updated} 篇${
+                      (restoredImportJob.report.skippedExisting ?? 0) > 0
+                        ? `、跳过已存在 ${restoredImportJob.report.skippedExisting} 篇`
+                        : ''
+                    }。`
                   : '结果已生成。'}
                 <button
                   type="button"
@@ -1879,11 +2371,34 @@ export function StandaloneNotesView({
         </div>
       ) : null}
 
-      <div className="kr-standalone__body">
-        <div className="kr-standalone__sidebar">
+      <div
+        className={`kr-standalone__body${
+          sidebarCollapsed ? ' is-sidebar-collapsed' : ''
+        }${narrowNotesLayout && !sidebarCollapsed ? ' is-drawer-open' : ''}`}
+      >
+        {narrowNotesLayout && !sidebarCollapsed ? (
+          <button
+            type="button"
+            className="kr-standalone__sidebar-backdrop"
+            aria-label="收起笔记文件夹栏"
+            onClick={() => setSidebarCollapsed(true)}
+          />
+        ) : null}
+        {sidebarCollapsed ? null : (
+        <div className="kr-standalone__sidebar" id="kr-standalone-sidebar">
           <div className="kr-standalone__sidebar-head">
             <span className="kr-standalone__sidebar-label">笔记文件夹</span>
             <div className="kr-standalone__sidebar-actions">
+              <button
+                type="button"
+                className="kr-ghost"
+                aria-expanded={true}
+                aria-controls="kr-standalone-sidebar"
+                onClick={() => setSidebarCollapsed(true)}
+                title="收起笔记文件夹栏，让编辑器占满宽度"
+              >
+                收起
+              </button>
               {onCreateFolder ? (
                 <button
                   type="button"
@@ -1919,6 +2434,7 @@ export function StandaloneNotesView({
               onDragOver={(event) => {
                 event.preventDefault();
                 event.dataTransfer.dropEffect = 'move';
+                setDragTargetNote(null);
                 setDragTarget('');
               }}
               onDragLeave={() =>
@@ -1931,6 +2447,7 @@ export function StandaloneNotesView({
                 if (noteId) moveNoteToFolder(noteId, '');
                 setDragNoteId(null);
                 setDragTarget(null);
+                setDragTargetNote(null);
               }}
             >
               拖到此处移动到根目录
@@ -2027,6 +2544,84 @@ export function StandaloneNotesView({
                   ) : null}
                 </div>
               ) : null}
+              {noteActionNotice ? (
+                <p className="kr-muted kr-standalone__action-notice" role="status">
+                  {noteActionNotice}
+                  <button
+                    type="button"
+                    className="kr-link-button"
+                    onClick={() => setNoteActionNotice('')}
+                    aria-label="忽略操作提示"
+                  >
+                    忽略
+                  </button>
+                </p>
+              ) : null}
+              <div
+                className={`kr-standalone__bulkbar${selectedNoteIds.size > 0 ? ' is-active' : ''}`}
+                role="toolbar"
+                aria-label="笔记多选与批量操作"
+              >
+                <label className="kr-standalone__bulk-all" title="全选当前筛选结果">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleSelected}
+                    ref={(element) => {
+                      if (element) element.indeterminate = someVisibleSelected && !allVisibleSelected;
+                    }}
+                    aria-label="全选当前筛选结果"
+                    onChange={() =>
+                      allVisibleSelected ? clearNoteSelection() : selectAllVisibleNotes()
+                    }
+                  />
+                  全选
+                </label>
+                <span className="kr-muted">已选 {selectedNoteIds.size} 篇</span>
+                {selectedNoteIds.size > 0 ? (
+                  <>
+                    {onBatchMoveNotes ? (
+                      <select
+                        className="kr-standalone__bulk-move"
+                        value=""
+                        aria-label={`批量移动已选 ${selectedNoteIds.size} 篇笔记`}
+                        title="批量移动到…"
+                        disabled={batchBusy}
+                        onChange={(event) => {
+                          const target = event.target.value;
+                          if (!target) return;
+                          void batchMoveSelected(folderOptionToPath(target));
+                        }}
+                      >
+                        <option value="">移动到…</option>
+                        <option value={ROOT_FOLDER_OPTION_VALUE}>根目录</option>
+                        {allFolderPaths.map((path) => (
+                          <option key={path} value={path}>
+                            {path}
+                          </option>
+                        ))}
+                      </select>
+                    ) : null}
+                    {onBatchDeleteNotes ? (
+                      <button
+                        type="button"
+                        className="kr-standalone__bulk-delete"
+                        disabled={batchBusy}
+                        title="批量移入回收站（可恢复）"
+                        onClick={() => void batchDeleteSelected()}
+                      >
+                        {batchBusy ? '处理中…' : `移入回收站（${selectedNoteIds.size}）`}
+                      </button>
+                    ) : null}
+                    <button type="button" onClick={clearNoteSelection} disabled={batchBusy}>
+                      取消选择
+                    </button>
+                  </>
+                ) : (
+                  <span className="kr-muted kr-standalone__bulk-hint">
+                    勾选笔记可批量移动或删除；拖动笔记可调整顺序。
+                  </span>
+                )}
+              </div>
               {!folderTree || folderTree.totalCount === 0 ? (
                 <div className="kr-standalone__empty">
                   <p>没有匹配的独立笔记。</p>
@@ -2048,6 +2643,7 @@ export function StandaloneNotesView({
             </>
           )}
         </div>
+        )}
 
         <div className="kr-standalone__editor">
           {showTrash ? (
@@ -2069,8 +2665,10 @@ export function StandaloneNotesView({
                     <label className="kr-standalone__move" title="把这条笔记移动到其他文件夹">
                       文件夹
                       <select
-                        value={selectedNote.folderPath ?? ''}
-                        onChange={(event) => onMoveNote(selectedNote.id, event.target.value)}
+                        value={noteFolderPath(selectedNote)}
+                        onChange={(event) =>
+                          moveNoteToFolder(selectedNote.id, event.target.value)
+                        }
                       >
                         <option value="">根目录</option>
                         {allFolderPaths.map((path) => (
@@ -2088,6 +2686,14 @@ export function StandaloneNotesView({
                       文件夹：{selectedNote.folderPath || '根目录'}
                     </span>
                   )}
+                  <button
+                    type="button"
+                    className="kr-ghost kr-standalone__rename-trigger"
+                    onClick={() => beginRenameNote(selectedNote)}
+                    title="重命名：改写正文第一行标题（保留 # 层级）"
+                  >
+                    重命名
+                  </button>
                   <span className="kr-standalone__tags">
                     {(selectedNote.tags ?? []).slice(0, 2).map((tag) => (
                       <span key={tag} className="kr-standalone__tag">
@@ -2228,6 +2834,7 @@ export function StandaloneNotesView({
               ? startMarkdownImport(input)
               : Promise.reject(new Error('当前运行环境不支持后台导入'))
           }
+          previewMarkdownImportDuplicates={previewMarkdownImportDuplicates}
           onGetImportStatus={() =>
             getMarkdownImportStatus
               ? getMarkdownImportStatus()
