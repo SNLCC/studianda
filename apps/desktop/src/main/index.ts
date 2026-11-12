@@ -1104,9 +1104,14 @@ app.whenReady().then(async () => {
   migrateLegacyUserData();
   protocol.handle('studianda-asset', async (request) => {
     const url = new URL(request.url);
-    // 自定义协议有两种写法：`studianda-asset:///out/renderer/...`（无 hosi）与
-    // `studianda-asset://note-assets/<文件>`（hosi=note-assets）；拼回相对路径后统一处理。
-    const relative = decodeURIComponent(`${url.hostname ?? ''}${url.pathname}`).replace(/^\/+/, '');
+    // 渲染进程静态资源（pdf.js 的 cmaps/wasm/standard_fonts/iccs 等）用无主机名的
+    // `studianda-asset:///cmaps/...`；note-assets 用 `studianda-asset://note-assets/<文件>`。
+    // 这里把 hostname + pathname 拼回相对路径统一处理。
+    const relative = decodeURIComponent(`${url.hostname ?? ''}${url.pathname}`)
+      .replace(/^\/+/, '')
+      // 兼容旧版渲染进程/缓存里可能出现的 `studianda-asset://app/...` 写法：
+      // 避免再解析成 out/renderer/app/... 导致 cmaps/wasm 404。
+      .replace(/^app\//, '');
     if (relative.includes('..')) return new Response('Not found', { status: 404 });
     // 笔记/批注图片：存于当前数据目录的 note-assets/，只允许该子目录，避免任意文件读取。
     if (relative.startsWith('note-assets/')) {
