@@ -9375,20 +9375,19 @@ function ReaderView({
           {pdfError ? <p className="kr-page-error">PDF 解析失败：{pdfError}</p> : null}
           {!pdf && !pdfError ? <p className="kr-page-status">正在渲染 PDF…</p> : null}
           {pdf ? (
-            <div
-              className="kr-pages"
-              style={{ alignItems: zoom > 1 ? 'flex-start' : 'center' }}
-            >
+            <div className="kr-pages">
               {/*
-                缩放预览层：CSS zoom 让整页内容（画布位图 + 文本层 + 批注/高亮/区域框）
-                一起缩放，视觉上立刻跟手且互不错位；静止 160ms 后才把目标缩放写进
-                真实页宽并重绘清晰画布（见 zoom / renderZoom 状态）。
+                缩放预览层：用 transform 缩放整页内容（画布位图 + 文本层 + 批注/高亮/区域框）。
+                transform 不触发重排（CSS zoom 会让 266 页全部重新布局，滚轮缩放时明显粘滞），
+                视觉上立刻跟手且互不错位；静止 160ms 后才把目标缩放写进真实页宽并重绘清晰画布。
               */}
               <div
                 className="kr-pages__frame"
                 style={{
-                  zoom: previewZoom,
-                  width: `${Math.round(baseWidth * renderZoom)}px`
+                  width: `${Math.round(baseWidth * renderZoom)}px`,
+                  transform: previewZoom === 1 ? undefined : `scale(${previewZoom})`,
+                  transformOrigin: '50% 0%',
+                  willChange: previewZoom === 1 ? undefined : 'transform'
                 }}
               >
               {Array.from({ length: pdf.numPages }, (_, index) => (

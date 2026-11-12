@@ -579,8 +579,14 @@ body:has(.kr-desktop) {
 .kr-pages {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  /* 不用 align-items:center：宽度超过容器时居中会让左右溢出无法滚动；
+     页面帧用 margin:auto 在未溢出时居中、溢出时靠左，缩放过程不会来回跳。 */
+  align-items: stretch;
   gap: 22px;
+}
+
+.kr-pages__frame {
+  margin: 0 auto;
 }
 
 .kr-pdf-page {
