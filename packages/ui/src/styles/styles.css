@@ -12469,13 +12469,17 @@ details.kr-outline2__card > summary::-webkit-details-marker {
 
 .kr-standalone__item-row {
   display: flex;
+  flex-wrap: nowrap;
   align-items: flex-start;
   gap: 6px;
   min-width: 0;
 }
 
+/* 列表项只保留复选框 + 标题/元信息：操作（移动/重命名/删除）统一放到
+   打开后的编辑区工具条，长标题不再被右侧按钮挤掉或遮挡。 */
 .kr-standalone__item-row .kr-standalone__open {
   flex: 1 1 auto;
+  width: auto;
   min-width: 0;
 }
 
@@ -12484,61 +12488,78 @@ details.kr-outline2__card > summary::-webkit-details-marker {
   margin-top: 2px;
 }
 
-.kr-standalone__item-actions {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  z-index: 2;
+/* 列表项右键菜单：portal 到 body，fixed 定位，不占用/遮挡标题宽度。 */
+.kr-standalone__ctx-menu {
+  position: fixed;
+  z-index: 80;
   display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px 4px;
-  border-radius: 6px;
+  flex-direction: column;
+  min-width: 204px;
+  max-width: 248px;
+  padding: 4px;
+  border: 1px solid var(--kr-line-strong);
+  border-radius: 8px;
   background: var(--kr-paper-raised);
-  box-shadow: 0 1px 6px rgb(44 42 36 / 12%);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.12s ease;
+  box-shadow: 0 8px 24px rgb(44 42 36 / 18%);
+  font-size: var(--kr-fs-caption);
 }
 
-.kr-standalone__item:hover .kr-standalone__item-actions,
-.kr-standalone__item:focus-within .kr-standalone__item-actions {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.kr-standalone__item-move {
-  max-width: 104px;
-  height: 24px;
-  padding: 0 4px;
-  border: 1px solid var(--kr-line);
-  border-radius: 6px;
-  background: var(--kr-paper-raised);
-  color: var(--kr-ink-soft);
-  font: inherit;
-  font-size: var(--kr-fs-micro);
-}
-
-.kr-standalone__icon-btn {
-  min-height: 24px;
-  padding: 0 6px;
-  border: 1px solid transparent;
-  border-radius: 6px;
+.kr-standalone__ctx-menu button {
+  display: block;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 5px;
   background: transparent;
-  color: var(--kr-ink-soft);
-  font-size: var(--kr-fs-micro);
-  line-height: 1.2;
+  color: var(--kr-ink);
+  font: inherit;
+  font-size: var(--kr-fs-caption);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
 }
 
-.kr-standalone__icon-btn:hover {
-  border-color: var(--kr-celadon);
+.kr-standalone__ctx-menu button:hover,
+.kr-standalone__ctx-menu button:focus-visible {
   background: var(--kr-celadon-soft);
   color: var(--kr-celadon-deep);
+  outline: none;
 }
 
-.kr-standalone__icon-btn:disabled {
-  opacity: 0.45;
-  cursor: default;
+.kr-standalone__ctx-menu .kr-standalone__ctx-danger {
+  color: var(--kr-vermilion-deep);
+}
+
+.kr-standalone__ctx-menu .kr-standalone__ctx-danger:hover,
+.kr-standalone__ctx-menu .kr-standalone__ctx-danger:focus-visible {
+  background: rgb(178 59 46 / 10%);
+  color: var(--kr-vermilion-deep);
+}
+
+.kr-standalone__ctx-sep {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--kr-line);
+}
+
+.kr-standalone__ctx-label {
+  margin: 3px 8px 2px;
+  color: var(--kr-ink-soft);
+  font-size: var(--kr-fs-micro);
+}
+
+.kr-standalone__ctx-folders {
+  display: flex;
+  flex-direction: column;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.kr-standalone__ctx-folders .kr-muted {
+  padding: 4px 8px;
+  font-size: var(--kr-fs-micro);
 }
 
 .kr-standalone__rename {

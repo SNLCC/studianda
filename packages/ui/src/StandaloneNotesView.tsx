@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type React from 'react';
+import { createPortal } from 'react-dom';
 import { markdownJobFingerprint } from '@studianda/shared';
 import type {
   AnnotationRecord,
@@ -520,6 +521,12 @@ export function StandaloneNotesView({
   const [selectedNoteIds, setSelectedNoteIds] = useState<Set<string>>(new Set());
   const [batchBusy, setBatchBusy] = useState(false);
   const [noteActionNotice, setNoteActionNotice] = useState('');
+  // 列表项右键菜单：用 fixed 坐标渲染到 body，避免被侧栏滚动容器裁剪。
+  const [noteContextMenu, setNoteContextMenu] = useState<{
+    noteId: string;
+    x: number;
+    y: number;
+  } | null>(null);
   // 重命名（改写正文第一行；Enter 保存 / Esc 取消）。
   const [renamingNote, setRenamingNote] = useState<{
     id: string;
@@ -544,6 +551,33 @@ export function StandaloneNotesView({
   const [tagError, setTagError] = useState('');
   const [tagSaving, setTagSaving] = useState(false);
   const [tagEditorOpen, setTagEditorOpen] = useState(false);
+  // 右键菜单：点击外部 / Esc / 列表滚动 / 窗口缩放时关闭。
+  useEffect(() => {
+    if (!noteContextMenu) return;
+    const close = (): void => setNoteContextMenu(null);
+    const onPointerDown = (event: PointerEvent): void => {
+      const target = event.target;
+      if (target instanceof Element && target.closest('.kr-standalone__ctx-menu')) return;
+      close();
+    };
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return;
+      event.stopPropagation();
+      close();
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('keydown', onKeyDown, true);
+    document.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    window.addEventListener('blur', close);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, true);
+      document.removeEventListener('keydown', onKeyDown, true);
+      document.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('blur', close);
+    };
+  }, [noteContextMenu]);
   const [markdownScan, setMarkdownScan] = useState<MarkdownVaultScan | null>(null);
   const [markdownDialogOpen, setMarkdownDialogOpen] = useState(false);
   const [markdownBusy, setMarkdownBusy] = useState<'picking' | 'scanning' | null>(null);
@@ -844,6 +878,25 @@ export function StandaloneNotesView({
         `调整笔记顺序失败：${error instanceof Error ? error.message : String(error)}`
       );
     }
+  };
+
+  /** 打开列表项的右键菜单（fixed 坐标；靠近窗口边缘时向内收，避免溢出）。 */
+  const openNoteContextMenu = (event: React.MouseEvent, note: NoteRecord): void => {
+    event.preventDefault();
+    event.stopPropagation();
+    setDragNoteId(null);
+    setDragTarget(null);
+    setDragTargetNote(null);
+    const menuWidth = 232;
+    const menuHeight = 360;
+    const margin = 8;
+    const maxX = Math.max(margin, window.innerWidth - menuWidth - margin);
+    const maxY = Math.max(margin, window.innerHeight - menuHeight - margin);
+    setNoteContextMenu({
+      noteId: note.id,
+      x: Math.min(Math.max(margin, event.clientX), maxX),
+      y: Math.min(Math.max(margin, event.clientY), maxY)
+    });
   };
 
   const toggleNoteSelection = (noteId: string): void => {
@@ -1738,8 +1791,6 @@ export function StandaloneNotesView({
     const isRenaming = renamingNote?.id === note.id;
     const dropBefore = dragTargetNote?.id === note.id && dragTargetNote.position === 'before';
     const dropAfter = dragTargetNote?.id === note.id && dragTargetNote.position === 'after';
-    const currentFolder = noteFolderPath(note);
-    const moveTargets = allFolderPaths.filter((path) => path !== currentFolder);
     return (
       <li
         key={note.id}
@@ -1782,6 +1833,7 @@ export function StandaloneNotesView({
             event.clientY > rect.top + rect.height / 2 ? 'after' : 'before';
           void dropNoteOnNote(note, position);
         }}
+        onContextMenu={(event) => openNoteContextMenu(event, note)}
       >
         <div className="kr-standalone__item-row">
           <input
@@ -1845,52 +1897,6 @@ export function StandaloneNotesView({
               ) : null}
             </button>
           )}
-          {!isRenaming ? (
-            <span className="kr-standalone__item-actions">
-              {onMoveNote ? (
-                <select
-                  className="kr-standalone__item-move"
-                  value=""
-                  title="移动到…"
-                  aria-label={`移动笔记 ${title} 到文件夹`}
-                  onChange={(event) => {
-                    const target = event.target.value;
-                    if (!target) return;
-                    moveNoteToFolder(note.id, folderOptionToPath(target));
-                  }}
-                >
-                  <option value="">移动到…</option>
-                  {currentFolder ? (
-                    <option value={ROOT_FOLDER_OPTION_VALUE}>根目录</option>
-                  ) : null}
-                  {moveTargets.map((path) => (
-                    <option key={path} value={path}>
-                      {path}
-                    </option>
-                  ))}
-                </select>
-              ) : null}
-              <button
-                type="button"
-                className="kr-standalone__icon-btn"
-                title="重命名（改写正文第一行标题）"
-                aria-label={`重命名笔记 ${title}`}
-                onClick={() => beginRenameNote(note)}
-              >
-                ✎
-              </button>
-              <button
-                type="button"
-                className="kr-standalone__icon-btn"
-                title="移入回收站（可恢复）"
-                aria-label={`将笔记 ${title} 移入回收站`}
-                disabled={deleting}
-                onClick={() => onDelete(note.id)}
-              >
-                移除
-              </button>
-            </span>
-          ) : null}
         </div>
         {loadBacklinks ? (
           <Backlinks
@@ -2013,6 +2019,13 @@ export function StandaloneNotesView({
       </li>
     );
   };
+
+  // 右键菜单对应的笔记（数据刷新后可能已不在列表里，此时不渲染菜单）。
+  const contextMenuNote = noteContextMenu
+    ? (notes.find((note) => note.id === noteContextMenu.noteId) ?? null)
+    : null;
+  const contextMenuFolder = contextMenuNote ? noteFolderPath(contextMenuNote) : '';
+  const contextMenuMoveTargets = allFolderPaths.filter((path) => path !== contextMenuFolder);
 
   return (
     <section
@@ -2387,7 +2400,12 @@ export function StandaloneNotesView({
         {sidebarCollapsed ? null : (
         <div className="kr-standalone__sidebar" id="kr-standalone-sidebar">
           <div className="kr-standalone__sidebar-head">
-            <span className="kr-standalone__sidebar-label">笔记文件夹</span>
+            <span
+              className="kr-standalone__sidebar-label"
+              title="把笔记拖到文件夹可移动；打开笔记后，右上角可移动/重命名/移入回收站"
+            >
+              笔记文件夹
+            </span>
             <div className="kr-standalone__sidebar-actions">
               <button
                 type="button"
@@ -2847,6 +2865,85 @@ export function StandaloneNotesView({
           }
         />
       ) : null}
+      {noteContextMenu && contextMenuNote && typeof document !== 'undefined'
+        ? createPortal(
+            <div
+              className="kr-standalone__ctx-menu"
+              role="menu"
+              aria-label={`笔记操作：${standaloneNoteTitle(contextMenuNote.content)}`}
+              style={{ left: noteContextMenu.x, top: noteContextMenu.y }}
+              onContextMenu={(event) => event.preventDefault()}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                autoFocus
+                onClick={() => {
+                  setNoteContextMenu(null);
+                  onSelect(contextMenuNote.id);
+                }}
+              >
+                打开笔记
+              </button>
+              <div className="kr-standalone__ctx-sep" role="separator" />
+              <p className="kr-standalone__ctx-label">移动到文件夹</p>
+              <div className="kr-standalone__ctx-folders">
+                {contextMenuFolder ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setNoteContextMenu(null);
+                      moveNoteToFolder(contextMenuNote.id, '');
+                    }}
+                  >
+                    根目录
+                  </button>
+                ) : null}
+                {contextMenuMoveTargets.length === 0 && !contextMenuFolder ? (
+                  <span className="kr-muted">没有其他文件夹</span>
+                ) : null}
+                {contextMenuMoveTargets.map((folderPath) => (
+                  <button
+                    key={folderPath}
+                    type="button"
+                    role="menuitem"
+                    title={folderPath}
+                    onClick={() => {
+                      setNoteContextMenu(null);
+                      moveNoteToFolder(contextMenuNote.id, folderPath);
+                    }}
+                  >
+                    {folderPath}
+                  </button>
+                ))}
+              </div>
+              <div className="kr-standalone__ctx-sep" role="separator" />
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setNoteContextMenu(null);
+                  beginRenameNote(contextMenuNote);
+                }}
+              >
+                重命名
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="kr-standalone__ctx-danger"
+                onClick={() => {
+                  setNoteContextMenu(null);
+                  onDelete(contextMenuNote.id);
+                }}
+              >
+                移入回收站
+              </button>
+            </div>,
+            document.body
+          )
+        : null}
     </section>
   );
 }
