@@ -1,7 +1,7 @@
 {
   "name": "studianda",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1-test.1",
   "description": "勘读 Studianda — 一站式人文社科学术空间（Electron + Node/TypeScript Core）",
   "license": "SEE LICENSE IN LICENSE",
   "packageManager": "pnpm@10.30.3",
