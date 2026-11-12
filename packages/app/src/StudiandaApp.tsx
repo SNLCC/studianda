@@ -3702,6 +3702,7 @@ function ReaderPage({
   documentId,
   pageNumber,
   width,
+  renderQuality = 1,
   annotations,
   regionMode,
   maskMode,
@@ -3728,6 +3729,8 @@ function ReaderPage({
   documentId: string;
   pageNumber: number;
   width: number;
+  /** 仅用于提高 canvas 内部分辨率（缩放停止后重绘），不影响页面布局尺寸。 */
+  renderQuality?: number;
   annotations: AnnotationRecord[];
   regionMode: boolean;
   maskMode: boolean;
@@ -4029,7 +4032,7 @@ function ReaderPage({
     let cancelled = false;
     setRenderError('');
     const render = async (): Promise<void> => {
-      const renderKey = `${pageNumber}:${width}:${renderAttempt}`;
+      const renderKey = `${pageNumber}:${width}:${renderQuality}:${renderAttempt}`;
       if (renderedKeyRef.current === renderKey) return;
       const pdfPage = await pdf.getPage(pageNumber);
       const canvas = canvasRef.current;
@@ -4040,7 +4043,18 @@ function ReaderPage({
       const scale = width / base.width;
       const viewport = pdfPage.getViewport({ scale });
       const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
-      const renderViewport = pdfPage.getViewport({ scale: scale * dpr });
+      // 清晰度倍率只影响 canvas 内部分辨率，不影响页面布局/文本层坐标；
+      // 缩放停止后提高倍率重绘，画面变清晰但不会引起重排或跳动。
+      const quality = Math.max(1, Math.min(2, renderQuality));
+      let pixelScale = scale * dpr * quality;
+      let renderViewport = pdfPage.getViewport({ scale: pixelScale });
+      const maxPixels = 10_000_000;
+      if (renderViewport.width * renderViewport.height > maxPixels) {
+        pixelScale *= Math.sqrt(
+          maxPixels / (renderViewport.width * renderViewport.height)
+        );
+        renderViewport = pdfPage.getViewport({ scale: pixelScale });
+      }
       const offscreen = window.document.createElement('canvas');
       offscreen.width = Math.max(1, Math.ceil(renderViewport.width));
       offscreen.height = Math.max(1, Math.ceil(renderViewport.height));
@@ -4176,7 +4190,7 @@ function ReaderPage({
     return () => {
       cancelled = true;
     };
-  }, [active, pdf, pageNumber, width, renderAttempt]);
+  }, [active, pdf, pageNumber, width, renderQuality, renderAttempt]);
 
   const rectsFor = (annotation: AnnotationRecord): number[][] => {
     if (!annotation.rects) return [];
@@ -5860,12 +5874,12 @@ function ReaderView({
     }
     if (matchesShortcut(event, shortcut('zoomIn', 'Ctrl+='))) {
       event.preventDefault();
-      setZoomAnchored(Math.min(240, Math.round(wheelZoomRef.current * 100) + 5) / 100);
+      setZoomAnchored(Math.min(240, Math.round(zoomRef.current * 100) + 5) / 100);
       return;
     }
     if (matchesShortcut(event, shortcut('zoomOut', 'Ctrl+-'))) {
       event.preventDefault();
-      setZoomAnchored(Math.max(60, Math.round(wheelZoomRef.current * 100) - 5) / 100);
+      setZoomAnchored(Math.max(60, Math.round(zoomRef.current * 100) - 5) / 100);
       return;
     }
     if (matchesShortcut(event, shortcut('fitWidth', 'Ctrl+0'))) {
@@ -5960,7 +5974,6 @@ function ReaderView({
     }
   });
   const [pageInput, setPageInput] = useState(String(page));
-  const [zoomInput, setZoomInput] = useState('100');
   const [maskAllPages, setMaskAllPages] = useState(false);
   const [maskScope, setMaskScope] = useState<
     'page' | 'all' | 'odd' | 'even' | 'range' | 'exclude'
@@ -6309,27 +6322,17 @@ function ReaderView({
     },
     []
   );
-  const [zoom, setZoom] = useState(1);
-  useEffect(() => {
-    setZoomInput(`${Math.round(zoom * 100)}%`);
-  }, [zoom]);
   /**
-   * 缩放平滑：滚轮/按钮/快捷键只更新目标缩放（zoom），页面先用 CSS zoom 做预览——
-   * 画布、文本层、批注/高亮/区域框都在同一个页面容器里一起缩放，天然对齐；
-   * 静止 160ms 后再把目标缩放写进真实页宽（renderZoom）并重绘清晰画布。
-   * 这样每个 wheel tick 不再触发整页 PDF 重绘，也就不会出现批注跳位和卡顿。
+   * 缩放只做视觉变换：页面布局宽度始终是 baseWidth，滚动范围由 spacer 按 zoom 放大。
+   * 这样缩放过程不重排 266 页、不重绘画布、不触发 React 渲染，也就没有松手跳变和闪烁。
+   * 工具栏百分比用 ref 命令式更新，不进入 React state。
    */
-  const [renderZoom, setRenderZoom] = useState(1);
-  useEffect(() => {
-    if (renderZoom === zoom) return undefined;
-    const timer = window.setTimeout(() => setRenderZoom(zoom), 160);
-    return () => window.clearTimeout(timer);
-  }, [zoom, renderZoom]);
   const pagesFrameRef = useRef<HTMLDivElement | null>(null);
-  const renderZoomRef = useRef(renderZoom);
-  renderZoomRef.current = renderZoom;
-  /** 滚轮手势结束后把目标缩放提交给 React 的定时器。 */
-  const zoomCommitTimerRef = useRef(0);
+  const pagesSpacerRef = useRef<HTMLDivElement | null>(null);
+  const frameSizeRef = useRef<{ width: number; height: number }>({ width: 0, height: 0 });
+  const zoomRef = useRef(1);
+  const [renderQuality, setRenderQuality] = useState(1);
+  const zoomInputRef = useRef<HTMLInputElement | null>(null);
   const zoomAnchorRef = useRef<{
     page: number;
     fx: number;
@@ -6337,22 +6340,24 @@ function ReaderView({
     viewX: number;
     viewY: number;
   } | null>(null);
-  const wheelZoomRef = useRef(zoom);
-  const wheelFrameRef = useRef(0);
+  const zoomSettleTimerRef = useRef(0);
+  /** 缩放校正滚动期间跳过昂贵的页码检测（避免每个滚轮 tick 扫描 266 页 DOM）。 */
+  const zoomingRef = useRef(false);
+  const handleScrollRef = useRef<() => void>(() => {});
 
-  /**
-   * 滚轮/按钮缩放时只改 CSS 变量和容器 class，不触发 React 渲染：
-   * 266 页全部重新 render 是卡顿的主要来源；等手势停下再提交 zoom 状态。
-   * transform 也不参与重排，页面位图/文本层/批注一起缩放，天然对齐。
-   */
-  const applyPreviewZoom = (nextZoom: number): void => {
-    const container = scrollRef.current;
-    const frame = pagesFrameRef.current;
-    if (!container || !frame) return;
-    const preview = renderZoomRef.current > 0 ? nextZoom / renderZoomRef.current : 1;
-    container.style.setProperty('--kr-preview-zoom', String(preview));
-    container.classList.toggle('is-zooming', preview !== 1);
-    frame.style.willChange = preview === 1 ? '' : 'transform';
+  const syncZoomInput = (value: number): void => {
+    const input = zoomInputRef.current;
+    if (input) input.value = `${Math.round(value * 100)}%`;
+  };
+
+  /** 预览时把占位层尺寸一起缩放：transform 不改布局，不扩占位层则滚动范围/锚点会被旧尺寸夹住。 */
+  const setSpacerSize = (preview: number): void => {
+    const spacer = pagesSpacerRef.current;
+    if (!spacer) return;
+    const size = frameSizeRef.current;
+    if (size.width <= 0 || size.height <= 0) return;
+    spacer.style.width = `${Math.round(size.width * preview)}px`;
+    spacer.style.height = `${Math.round(size.height * preview)}px`;
   };
 
   /** 以页面锚点校正滚动位置：让鼠标下（或视口中心）的那一点在缩放前后保持不动。 */
@@ -6371,18 +6376,15 @@ function ReaderView({
   };
 
   /**
-   * 工具栏 +/-、快捷键、百分比输入：以阅读区**中心**为锚点缩放，而不是左上角。
-   * 先立即套用预览 transform（跟手），再提交 zoom 状态；手势结束后的清晰重绘沿用原流程。
+   * 统一缩放入口：transform + spacer 同步更新，纯 DOM 操作。
+   * `center` 为 true 时（工具栏/快捷键/输入框）以阅读区中心为锚点；滚轮由 onWheel 自己设鼠标锚点。
    */
-  const setZoomAnchored = (nextValue: number): void => {
-    if (zoomCommitTimerRef.current) {
-      window.clearTimeout(zoomCommitTimerRef.current);
-      zoomCommitTimerRef.current = 0;
-    }
+  const applyZoomValue = (nextValue: number, options?: { center?: boolean }): void => {
     const clamped = Math.min(2.4, Math.max(0.6, nextValue));
-    wheelZoomRef.current = clamped;
+    zoomRef.current = clamped;
     const container = scrollRef.current;
-    if (container) {
+    const frame = pagesFrameRef.current;
+    if (options?.center && container) {
       const containerRect = container.getBoundingClientRect();
       const viewX = containerRect.width / 2;
       const viewY = containerRect.height / 2;
@@ -6406,13 +6408,34 @@ function ReaderView({
         }
       }
     }
-    applyPreviewZoom(clamped);
-    setZoom(clamped);
+    syncZoomInput(clamped);
+    if (!container || !frame) return;
+    zoomingRef.current = true;
+    frameSizeRef.current = { width: frame.offsetWidth, height: frame.offsetHeight };
+    container.style.setProperty('--kr-preview-zoom', String(clamped));
+    container.classList.toggle('is-zooming', clamped !== 1);
+    frame.style.willChange = clamped === 1 ? '' : 'transform';
+    setSpacerSize(clamped);
+    window.requestAnimationFrame(() => {
+      correctZoomAnchor();
+      if (zoomSettleTimerRef.current) window.clearTimeout(zoomSettleTimerRef.current);
+      zoomSettleTimerRef.current = window.setTimeout(() => {
+        correctZoomAnchor();
+        zoomAnchorRef.current = null;
+        zoomingRef.current = false;
+        // 缩放停止后提高位图分辨率重绘（只改 canvas 内部分辨率，不改布局）。
+        const targetQuality = zoomRef.current >= 1.3 ? 2 : 1;
+        setRenderQuality((previous) => (previous === targetQuality ? previous : targetQuality));
+        // 缩放结束后补一次页码检测（缩放期间的滚动事件被跳过了）。
+        handleScrollRef.current();
+      }, 260);
+    });
   };
 
-  useEffect(() => {
-    wheelZoomRef.current = zoom;
-  }, [zoom]);
+  const setZoomAnchored = (nextValue: number): void => {
+    applyZoomValue(nextValue, { center: true });
+  };
+
   useEffect(() => {
     const container = scrollRef.current;
     if (!container) return;
@@ -6421,11 +6444,10 @@ function ReaderView({
       event.preventDefault();
       const nextPercent = Math.min(
         240,
-        Math.max(60, Math.round(wheelZoomRef.current * 100) + (event.deltaY < 0 ? 5 : -5))
+        Math.max(60, Math.round(zoomRef.current * 100) + (event.deltaY < 0 ? 10 : -10))
       );
       const next = nextPercent / 100;
-      if (next === wheelZoomRef.current) return;
-      wheelZoomRef.current = next;
+      if (next === zoomRef.current) return;
       const containerRect = container.getBoundingClientRect();
       const target = (event.target as Element | null)?.closest?.('.kr-pdf-page');
       const rect = target?.getBoundingClientRect();
@@ -6438,68 +6460,24 @@ function ReaderView({
           viewY: event.clientY - containerRect.top
         };
       }
-      // 直接改 CSS 变量，不 setState：滚轮期间不重新渲染 266 页。
-      applyPreviewZoom(next);
-      if (!wheelFrameRef.current) {
-        wheelFrameRef.current = window.requestAnimationFrame(() => {
-          wheelFrameRef.current = 0;
-          correctZoomAnchor();
-        });
-      }
-      // 手势停止后才提交 React 状态（工具栏百分比、最终清晰重绘都在此时发生）。
-      if (zoomCommitTimerRef.current) window.clearTimeout(zoomCommitTimerRef.current);
-      zoomCommitTimerRef.current = window.setTimeout(() => {
-        zoomCommitTimerRef.current = 0;
-        setZoom(wheelZoomRef.current);
-      }, 140);
+      // 直接改 DOM，不 setState：滚轮期间完全不触发 React 渲染。
+      applyZoomValue(next);
     };
     container.addEventListener('wheel', onWheel, { passive: false });
     return () => {
       container.removeEventListener('wheel', onWheel);
-      if (wheelFrameRef.current) {
-        window.cancelAnimationFrame(wheelFrameRef.current);
-        wheelFrameRef.current = 0;
-      }
-      if (zoomCommitTimerRef.current) {
-        window.clearTimeout(zoomCommitTimerRef.current);
-        zoomCommitTimerRef.current = 0;
+      if (zoomSettleTimerRef.current) {
+        window.clearTimeout(zoomSettleTimerRef.current);
+        zoomSettleTimerRef.current = 0;
       }
     };
   }, []);
-  useLayoutEffect(() => {
-    // 把最终目标同步到 CSS 变量：按钮/快捷键/输入框走 state 时也能立即预览；
-    // 滚轮手势期间没有 state 更新，变量由 onWheel 直接维护。
-    // 必须是 layout effect：否则 renderZoom 提交后，新页宽已经生效、旧 transform 还在，
-    // 会闪一帧「放大后又缩一下」。
-    const container = scrollRef.current;
-    if (!container) return;
-    container.style.setProperty(
-      '--kr-preview-zoom',
-      String(renderZoom > 0 ? zoom / renderZoom : 1)
-    );
-    container.classList.toggle('is-zooming', zoom !== renderZoom);
-    const frame = pagesFrameRef.current;
-    if (frame) frame.style.willChange = zoom === renderZoom ? '' : 'transform';
-  }, [zoom, renderZoom]);
-  useLayoutEffect(() => {
-    const anchor = zoomAnchorRef.current;
-    const container = scrollRef.current;
-    if (!anchor || !container) return;
-    // 预览（transform）与真实页宽提交是两次渲染：两次都要按同一页面锚点校正滚动位置，
-    // 否则停下重绘后滚动位置会偏移（缩放时把锚点保持在原地）。
-    correctZoomAnchor();
-    const settle = window.setTimeout(correctZoomAnchor, 220);
-    const clear = window.setTimeout(() => {
-      if (zoomAnchorRef.current === anchor) zoomAnchorRef.current = null;
-    }, 900);
-    return () => {
-      window.clearTimeout(settle);
-      window.clearTimeout(clear);
-    };
-  }, [zoom, renderZoom]);
   const [baseWidth, setBaseWidth] = useState(820);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const suppressScrollRef = useRef(false);
+  const scrollFrameRef = useRef(0);
+  const pageRef = useRef(page);
+  pageRef.current = page;
   const exportMenuRef = useRef<HTMLDetailsElement | null>(null);
   useEffect(() => {
     const close = (event: MouseEvent): void => {
@@ -6511,6 +6489,19 @@ function ReaderView({
   }, []);
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [pdfError, setPdfError] = useState<string | null>(null);
+  useLayoutEffect(() => {
+    const frame = pagesFrameRef.current;
+    if (!frame || typeof ResizeObserver === 'undefined') return undefined;
+    const measure = (): void => {
+      frameSizeRef.current = { width: frame.offsetWidth, height: frame.offsetHeight };
+      if (zoomRef.current === 1) setSpacerSize(1);
+      else setSpacerSize(zoomRef.current);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(frame);
+    return () => observer.disconnect();
+  }, [pdf]);
 
   const annotationsQuery = useQuery({
     queryKey: ['annotations', document.id],
@@ -8393,14 +8384,14 @@ function ReaderView({
   );
 
   const commitZoomInput = (): void => {
-    const next = Number(zoomInput.replace('%', '').trim());
+    const raw = zoomInputRef.current?.value ?? '100%';
+    const next = Number(raw.replace('%', '').trim());
     if (!Number.isFinite(next)) {
-      setZoomInput(`${Math.round(zoom * 100)}%`);
+      syncZoomInput(zoomRef.current);
       return;
     }
     const percent = Math.min(240, Math.max(60, Math.round(next)));
     setZoomAnchored(percent / 100);
-    setZoomInput(`${percent}%`);
   };
 
   const clearMasks = (): void => {
@@ -8414,7 +8405,6 @@ function ReaderView({
     const targetPage = page;
     suppressScrollRef.current = true;
     setZoomAnchored(1);
-    setZoomInput('100%');
     setPage(targetPage);
     window.requestAnimationFrame(() => {
       const container = scrollRef.current;
@@ -8504,25 +8494,33 @@ function ReaderView({
 
   const handleScroll = (): void => {
     // 跳页/悬停跳转期间锁住页码；悬停时页码一变，译文栏会切页并清掉高亮。
-    if (suppressScrollRef.current || hoverActiveRef.current) return;
+    if (suppressScrollRef.current || hoverActiveRef.current || zoomingRef.current) return;
     const container = scrollRef.current;
-    if (!container)
-      return;
-    const containerRect = container.getBoundingClientRect();
-    const anchor = containerRect.top + containerRect.height * 0.28;
-    let bestPage = page;
-    let bestDistance = Number.POSITIVE_INFINITY;
-    for (const element of container.querySelectorAll<HTMLElement>('[data-page]')) {
-      const rect = element.getBoundingClientRect();
-      if (rect.bottom < containerRect.top || rect.top > containerRect.bottom) continue;
-      const distance = Math.abs(rect.top - anchor);
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        bestPage = Number(element.dataset.page ?? '1');
+    if (!container || scrollFrameRef.current) return;
+    // 滚动事件很密集：每帧最多检测一次，避免每个事件都遍历 266 个页面读布局。
+    scrollFrameRef.current = window.requestAnimationFrame(() => {
+      scrollFrameRef.current = 0;
+      const container = scrollRef.current;
+      if (!container || suppressScrollRef.current || hoverActiveRef.current || zoomingRef.current) {
+        return;
       }
-    }
-    if (bestPage !== page) setPage(bestPage);
+      const containerRect = container.getBoundingClientRect();
+      const anchor = containerRect.top + containerRect.height * 0.28;
+      let bestPage = pageRef.current;
+      let bestDistance = Number.POSITIVE_INFINITY;
+      for (const element of container.querySelectorAll<HTMLElement>('[data-page]')) {
+        const rect = element.getBoundingClientRect();
+        if (rect.bottom < containerRect.top || rect.top > containerRect.bottom) continue;
+        const distance = Math.abs(rect.top - anchor);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestPage = Number(element.dataset.page ?? '1');
+        }
+      }
+      if (bestPage !== pageRef.current) setPage(bestPage);
+    });
   };
+  handleScrollRef.current = handleScroll;
 
   // 预算确认的响应没有回答内容：沿用上一条助手回答，避免把已有依据/审计面板清空。
   const lastAssistantResponse = [...chatMessages]
@@ -9058,17 +9056,17 @@ function ReaderView({
           <button
             type="button"
             onClick={() =>
-              setZoomAnchored(Math.max(60, Math.round(wheelZoomRef.current * 100) - 5) / 100)
+              setZoomAnchored(Math.max(60, Math.round(zoomRef.current * 100) - 5) / 100)
             }
           >
             −
           </button>
           <input
+            ref={zoomInputRef}
             className="kr-reader__zoom-input"
-            value={zoomInput}
+            defaultValue="100%"
             inputMode="numeric"
             aria-label="缩放百分比"
-            onChange={(event) => setZoomInput(event.target.value)}
             onBlur={commitZoomInput}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
@@ -9080,7 +9078,7 @@ function ReaderView({
           <button
             type="button"
             onClick={() =>
-              setZoomAnchored(Math.min(240, Math.round(wheelZoomRef.current * 100) + 5) / 100)
+              setZoomAnchored(Math.min(240, Math.round(zoomRef.current * 100) + 5) / 100)
             }
           >
             +
@@ -9483,11 +9481,12 @@ function ReaderView({
                 transform 不触发重排（CSS zoom 会让 266 页全部重新布局，滚轮缩放时明显粘滞），
                 视觉上立刻跟手且互不错位；静止 160ms 后才把目标缩放写进真实页宽并重绘清晰画布。
               */}
-              <div
-                ref={pagesFrameRef}
-                className="kr-pages__frame"
-                style={{ width: `${Math.round(baseWidth * renderZoom)}px` }}
-              >
+              <div ref={pagesSpacerRef} className="kr-pages__spacer">
+                <div
+                  ref={pagesFrameRef}
+                  className="kr-pages__frame"
+                  style={{ width: `${Math.round(baseWidth)}px` }}
+                >
               {Array.from({ length: pdf.numPages }, (_, index) => (
                 <ReaderPage
                   key={index + 1}
@@ -9495,7 +9494,8 @@ function ReaderView({
                   api={api}
                   documentId={document.id}
                   pageNumber={index + 1}
-                  width={Math.round(baseWidth * renderZoom)}
+                  width={Math.round(baseWidth)}
+                  renderQuality={renderQuality}
                   regionMode={regionMode}
                   maskMode={maskMode}
                   ocrRegionMode={ocrRegionMode}
@@ -9570,7 +9570,8 @@ function ReaderView({
                     })
                   }
                 />
-              ))}
+                ))}
+                </div>
               </div>
             </div>
           ) : null}

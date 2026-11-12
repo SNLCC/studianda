@@ -585,11 +585,17 @@ body:has(.kr-desktop) {
   gap: 22px;
 }
 
-.kr-pages__frame {
+.kr-pages__spacer {
+  position: relative;
+  width: max-content;
   margin: 0 auto;
+}
+
+.kr-pages__frame {
   /* 缩放预览走 transform（合成器），不触发 266 页重排；变量由滚动容器上的
-     --kr-preview-zoom 控制，滚轮期间直接改 DOM，不 setState。 */
-  transform-origin: 50% 0;
+     --kr-preview-zoom 控制，滚轮期间直接改 DOM，不 setState。
+     外层 spacer 的宽高同步按 preview 放大，滚动范围才和视觉一致，锚点不会被夹住。 */
+  transform-origin: 0 0;
   transform: scale(var(--kr-preview-zoom, 1));
 }
 
@@ -2854,6 +2860,7 @@ a {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  column-gap: 12px;
   flex: none;
   height: 48px;
   padding: 0 24px;
@@ -2900,8 +2907,15 @@ a {
   align-items: center;
   gap: 8px;
   min-width: 0;
+  flex: 0 1 auto;
   color: var(--kr-ink-faint);
   font-size: var(--kr-fs-caption);
+}
+
+.kr-breadcrumb button,
+.kr-breadcrumb > span {
+  flex: none;
+  white-space: nowrap;
 }
 
 .kr-breadcrumb button {
@@ -2950,10 +2964,21 @@ a {
   color: var(--kr-celadon-deep);
 }
 
+.kr-app-header__actions { display: flex; align-items: center; gap: 8px; flex: none; }
 .kr-app-header__actions button {
   min-height: 28px;
   padding: 4px 10px;
   font-size: var(--kr-fs-caption);
+  white-space: nowrap;
+  flex: none;
+}
+/* 阅读界面里文献标题很长时，面包屑必须自己省略，不能把「设置」挤成两行。 */
+.kr-breadcrumb { overflow: hidden; }
+.kr-breadcrumb strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .kr-app-content {
@@ -4472,7 +4497,7 @@ a {
 .kr-app-content--reader .kr-reader { border-radius: 0; }
 .kr-reader__scroll { padding: 10px 12px 24px !important; }
 .kr-pages { gap: 14px !important; }
-.kr-app-header__left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.kr-app-header__left { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1 1 auto; }
 .kr-app-header__left .kr-sidebar-toggle { flex: none; }
 /* 页面渲染缓存窗口：提前渲染更多邻近页，减少翻页可见加载 */
 /* 页面使用 img，按原始比例缩放，不经过 canvas 重绘 */
