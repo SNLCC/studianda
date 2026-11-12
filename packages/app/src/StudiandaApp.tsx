@@ -8185,8 +8185,10 @@ function ReaderView({
     const baseUrl =
       window.location.protocol === 'file:'
         ? // 打包后渲染页从 file:// 加载，pdf.js 的 cmaps/wasm/standard_fonts/iccs 走
-          // studianda-asset 自定义协议；这里必须用无主机名写法（`:///`）。
-          'studianda-asset:///'
+          // studianda-asset 自定义协议；固定用 `app` 主机名，主进程会把 `app/`
+          // 前缀剥掉再映射到 out/renderer/（空主机名写法在 Electron 里可能被当成
+          // 非法 base URL）。
+          'studianda-asset://app/'
         : new URL('.', window.location.href).href;
     const source = api.getDocumentFileSource(document.id);
     const task = getDocument({
