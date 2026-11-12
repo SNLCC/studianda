@@ -199,6 +199,9 @@ describe('Markdown 导入：附件重名解析', () => {
       expect(
         report.warnings.some((warning) => warning.includes('附件不存在') || warning.includes('无法读取'))
       ).toBe(false);
+      // 同目录重名属于正常情况（同目录优先），不再提示「附件重名」。
+      expect(report.warnings.some((warning) => warning.includes('附件重名'))).toBe(false);
+      expect(report.duplicateAttachments ?? 0).toBe(0);
     } finally {
       store.close();
     }
@@ -234,9 +237,13 @@ describe('Markdown 导入：附件重名解析', () => {
     try {
       const report = await importMarkdownNotes(store, { vaultPath: vault, files: ['note.md'] });
       expect(report.imagesCopied).toBe(1);
+      // 重名解析只汇总一条警告，具体选择明细在 notices（避免几十条警告刷屏）。
       expect(
-        report.warnings.some(
-          (warning) => warning.includes('附件重名') && warning.includes('z/dup.png')
+        report.warnings.some((warning) => warning.includes('附件重名'))
+      ).toBe(true);
+      expect(
+        (report.notices ?? []).some(
+          (notice) => notice.includes('附件重名') && notice.includes('z/dup.png')
         )
       ).toBe(true);
       const note = store.listStandaloneNotes()[0]!;
@@ -258,8 +265,11 @@ describe('Markdown 导入：附件重名解析', () => {
       expect(report.attachmentsCopied).toBe(1);
       expect(report.skippedAttachments).toBe(0);
       expect(
-        report.warnings.some(
-          (warning) => warning.includes('附件重名') && warning.includes('a/dup.pdf')
+        report.warnings.some((warning) => warning.includes('附件重名'))
+      ).toBe(true);
+      expect(
+        (report.notices ?? []).some(
+          (notice) => notice.includes('附件重名') && notice.includes('a/dup.pdf')
         )
       ).toBe(true);
       expect(store.listStandaloneNotes()[0]?.content).toContain('[附件：dup.pdf]');
@@ -285,6 +295,38 @@ describe('Markdown 导入：附件重名解析', () => {
       expect(note.content).toContain('../attach-outside-assets/outside.png');
       expect(note.content).toContain('nope.png');
       expect(note.content).not.toContain('studianda-asset://');
+    } finally {
+      store.close();
+    }
+  });
+});
+
+describe('Markdown 导入：未解析模板占位', () => {
+  it('{{annotation.imageBaseName}} 不当作附件、不产生警告，原样保留', async () => {
+    const vault = path.join(root, 'template-placeholder-vault');
+    mkdirSync(vault, { recursive: true });
+    writeFile(
+      vault,
+      'zotero-annotation.md',
+      '# 笔记\n\n![[{{annotation.imageBaseName}}]]\n\n![]({{annotation.imageBaseName}})\n'
+    );
+    const { store } = storeAt('template-placeholder-store');
+    try {
+      const report = await importMarkdownNotes(store, {
+        vaultPath: vault,
+        files: ['zotero-annotation.md']
+      });
+      expect(report.imported).toBe(1);
+      expect(report.failed).toBe(0);
+      // 模板占位不是真实附件：不应出现「附件无法读取 / 附件不存在」这类警告。
+      expect(
+        report.warnings.some(
+          (warning) => warning.includes('附件') || warning.includes('图片')
+        )
+      ).toBe(false);
+      expect((report.notices ?? []).some((notice) => notice.includes('模板占位'))).toBe(true);
+      const note = store.listStandaloneNotes()[0]!;
+      expect(note.content).toContain('{{annotation.imageBaseName}}');
     } finally {
       store.close();
     }

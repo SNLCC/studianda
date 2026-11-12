@@ -837,7 +837,7 @@ export function MarkdownImportDialog({
             {report.warnings.length > 0 ? (
               <>
                 <p className="kr-markdown-warning" role="alert">
-                  有 {report.warnings.length} 条警告未忽略（例如附件重名时已按最近路径选择，
+                  有 {report.warnings.length} 条警告（例如附件重名时已按最近路径选择，
                   请核对下方明细，避免丢附件）。
                 </p>
                 <details className="kr-markdown-report__details" open>
@@ -849,6 +849,18 @@ export function MarkdownImportDialog({
                   </ul>
                 </details>
               </>
+            ) : null}
+            {(report.notices?.length ?? 0) > 0 ? (
+              <details className="kr-markdown-report__details">
+                <summary>提示（{report.notices?.length ?? 0}）</summary>
+                <ul>
+                  {(report.notices ?? []).map((notice, index) => (
+                    <li key={`${index}-${notice}`} className="kr-muted">
+                      {notice}
+                    </li>
+                  ))}
+                </ul>
+              </details>
             ) : null}
             <div className="kr-markdown-modal__footer">
               <span className="kr-muted">

@@ -2122,6 +2122,14 @@ export interface MarkdownImportReport {
   attachmentsCopied: number;
   notes: MarkdownImportItem[];
   warnings: string[];
+  /**
+   * 非错误的处理提示（frontmatter 移除、模板占位未解析、重名附件按最近路径选择等）。
+   * 与 warnings 分开：这些不意味着内容丢失，不应在界面上显示成需要核错的警告。
+   * 旧报告没有该字段时按空数组处理。
+   */
+  notices?: string[];
+  /** 本次导入中「附件重名、已按最近路径选择」的次数（详情见 notices）。 */
+  duplicateAttachments?: number;
 }
 
 /**

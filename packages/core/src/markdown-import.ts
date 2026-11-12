@@ -272,6 +272,21 @@ function addWarning(report: MarkdownImportReport, message: string): void {
   if (!report.warnings.includes(message)) report.warnings.push(message);
 }
 
+/**
+ * 非错误的处理提示（frontmatter 移除、模板占位、重名附件按最近路径选择等）。
+ *
+ * 与 warnings 分开：这些不代表内容丢失或需要核对，界面用「提示」区域展示，
+ * 避免一次导入出现几十条「警告」把真正的问题淹没。
+ */
+function addNotice(report: MarkdownImportReport, message: string): void {
+  if (!report.notices) report.notices = [];
+  if (report.notices.length >= WARNING_LIMIT) {
+    if (!report.notices.includes('（更多提示已省略）')) report.notices.push('（更多提示已省略）');
+    return;
+  }
+  if (!report.notices.includes(message)) report.notices.push(message);
+}
+
 function parseFrontmatterTags(yaml: string): string[] {
   const tags: string[] = [];
   const lines = yaml.split('\n');
@@ -319,7 +334,7 @@ function stripFrontmatter(
   const match = /^\s*---[ \t]*\n([\s\S]*?)\n(?:---|\.\.\.)[ \t]*(?:\n|$)/.exec(source);
   if (!match) return { content: source, tags: [] };
   const tags = parseFrontmatterTags(match[1] ?? '');
-  addWarning(report, `「${relativePath}」已移除 YAML frontmatter`);
+  addNotice(report, `「${relativePath}」已移除 YAML frontmatter（正文已保留，frontmatter 不参与笔记正文）`);
   let rest = source.slice(match[0].length);
   if (tags.length > 0) {
     rest = `${rest.replace(/\s+$/, '')}\n\n> 标签：${tags.join(', ')}\n`;
@@ -369,7 +384,7 @@ function preprocessMarkdown(
         const language = (fenceMatch[2] ?? '').toLowerCase();
         if ((language === 'mermaid' || language === 'dataview') && !warnedMermaid) {
           warnedMermaid = true;
-          addWarning(report, 'Mermaid/Dataview 未渲染，已按原样保留');
+          addNotice(report, 'Mermaid/Dataview 代码块保持原样（不渲染）');
         }
         output.push(line);
         continue;
@@ -652,7 +667,12 @@ function resolveAttachmentPath(
           : 0;
     });
     const chosen = sorted[0]!;
-    addWarning(report, `附件重名，已按最近路径选择：${chosen.relativePath}`);
+    const sameDir = relativeDirOf(chosen.relativePath) === noteRelativeDir;
+    // 没有同目录候选才需要提示，并汇总成一条警告，避免几十条「附件重名」刷屏。
+    if (!sameDir) {
+      report.duplicateAttachments = (report.duplicateAttachments ?? 0) + 1;
+      addNotice(report, `附件重名，已按最近路径选择：${chosen.relativePath}`);
+    }
     return {
       absPath: path.resolve(vaultRoot, chosen.relativePath),
       name: chosen.name
@@ -736,6 +756,26 @@ async function replaceMatches(
   return pieces.join('');
 }
 
+/** 未解析的模板占位（Zotero/插件导出常见 `{{annotation.imageBaseName}}`）：不是真实附件。 */
+function isUnresolvedTemplatePlaceholder(value: string): boolean {
+  return /\{\{[\s\S]*?\}\}|\{%[\s\S]*?%\}/.test(value);
+}
+
+/** 每篇笔记只提示一次「含有未解析模板占位」，避免一条笔记里几十个占位刷屏。 */
+function addTemplatePlaceholderNotice(
+  report: MarkdownImportReport,
+  noteAbsPath: string,
+  target: string
+): void {
+  const noteName = path.basename(noteAbsPath);
+  const prefix = `「${noteName}」含有未解析模板占位`;
+  if (report.notices?.some((notice) => notice.startsWith(prefix))) return;
+  addNotice(
+    report,
+    `${prefix}（例如 ${target.slice(0, 120)}），已原样保留，不当作附件`
+  );
+}
+
 async function replaceEmbeds(
   store: Store,
   vaultRoot: string,
@@ -751,6 +791,10 @@ async function replaceEmbeds(
     const target = (targetRaw ?? '').replace(/#.*$/, '').trim();
     const alias = safeLabel((aliasRaw ?? '').trim()) || path.basename(target);
     if (!target) return match.text;
+    if (isUnresolvedTemplatePlaceholder(target)) {
+      addTemplatePlaceholderNotice(report, noteAbsPath, target);
+      return match.text;
+    }
     const resolved = resolveAttachmentPath(
       vaultRoot,
       noteAbsPath,
@@ -795,6 +839,10 @@ async function replaceEmbeds(
       const alt = match.groups[0] ?? '';
       const rawTarget = match.groups[1] ?? '';
       if (/^(?:https?:|data:|studianda-asset:|file:)/i.test(rawTarget.trim())) return match.text;
+      if (isUnresolvedTemplatePlaceholder(rawTarget)) {
+        addTemplatePlaceholderNotice(report, noteAbsPath, rawTarget.trim());
+        return match.text;
+      }
       const resolved = resolveAttachmentPath(
         vaultRoot,
         noteAbsPath,
@@ -921,16 +969,20 @@ function createEmptyReport(vaultPath: string): MarkdownImportReport {
     skippedAttachments: 0,
     attachmentsCopied: 0,
     notes: [],
-    warnings: []
+    warnings: [],
+    notices: [],
+    duplicateAttachments: 0
   };
 }
 
-/** 旧版（schema/结果文件）报告没有 skippedExisting 时按 0 兜底。 */
+/** 旧版（schema/结果文件）报告没有 skippedExisting/notices 时按默认值兜底。 */
 function withReportDefaults(report: MarkdownImportReport | null): MarkdownImportReport | null {
   if (!report) return null;
   return {
     ...report,
-    skippedExisting: Number(report.skippedExisting ?? 0) || 0
+    skippedExisting: Number(report.skippedExisting ?? 0) || 0,
+    notices: Array.isArray(report.notices) ? report.notices : [],
+    duplicateAttachments: Number(report.duplicateAttachments ?? 0) || 0
   };
 }
 
@@ -1274,6 +1326,14 @@ export async function runMarkdownImport(
     total: input.files.length,
     currentPath: ''
   });
+  // 重名附件：成功解析的按「最近路径」选择，只汇总成一条警告；每一条选择明细在 notices，
+  // 避免一次导入几十条「附件重名，已按最近路径选择」把真正的失败警告挤下去。
+  if ((report.duplicateAttachments ?? 0) > 0) {
+    addWarning(
+      report,
+      `附件重名：${report.duplicateAttachments} 个附件已按最近路径选择（详情见下方「提示」，请核对是否为目标文件）`
+    );
+  }
   return { report, cancelled: cancelled || checkCancel() };
 }
 
@@ -1645,13 +1705,14 @@ function isImportReport(value: unknown): value is MarkdownImportReport {
   return Array.isArray(candidate.notes) && typeof candidate.requested === 'number';
 }
 
-/** settings 里的报告裁剪：只保留统计 + 前 5 条警告 + 失败项明细，避免撑大 settings。 */
+/** settings 里的报告裁剪：只保留统计 + 前 5 条警告/提示 + 失败项明细，避免撑大 settings。 */
 function trimImportReport(report: MarkdownImportReport | null): MarkdownImportReport | null {
   if (!report) return null;
   return {
     ...report,
     notes: report.notes.filter((item) => item.status === 'failed').slice(0, 20),
-    warnings: report.warnings.slice(0, 5)
+    warnings: report.warnings.slice(0, 5),
+    notices: (report.notices ?? []).slice(0, 30)
   };
 }
 

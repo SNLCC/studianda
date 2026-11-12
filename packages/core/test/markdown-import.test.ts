@@ -311,10 +311,10 @@ describe('Markdown 语法映射', () => {
         files: ['syntax.md', 'target.md']
       });
       expect(report.imported).toBe(2);
-      expect(report.warnings.some((warning) => warning.includes('frontmatter'))).toBe(true);
-      expect(
-        report.warnings.some((warning) => warning.includes('Mermaid/Dataview 未渲染'))
-      ).toBe(true);
+      const notices = report.notices ?? [];
+      expect(notices.some((notice) => notice.includes('frontmatter'))).toBe(true);
+      expect(notices.some((notice) => notice.includes('Mermaid/Dataview'))).toBe(true);
+      expect(report.warnings.some((warning) => warning.includes('frontmatter'))).toBe(false);
       const note = store.listStandaloneNotes().find((item) => item.content.includes('标题'))!;
       expect(note.content).not.toContain('other: 丢弃');
       expect(note.content).toContain('> 标签：alpha, beta');
