@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type React from 'react';
+import { markdownJobFingerprint } from '@studianda/shared';
 import type {
   AnnotationRecord,
   BacklinkRecord,
@@ -215,6 +216,39 @@ export function isMarkdownJobTerminal(status: string): boolean {
 }
 
 /**
+ * 已关闭终态任务的指纹（本机 localStorage）：关闭扫描/导入任务卡后，
+ * 页面挂载/窗口 focus/10s 兜底轮询/SSE 恢复都不会再把同一终态卡片弹回来。
+ */
+const DISMISSED_MARKDOWN_JOBS_KEY = 'studianda.markdown.dismissedJobs';
+
+type MarkdownJobKind = 'scan' | 'import';
+
+type DismissedMarkdownJobs = Partial<Record<MarkdownJobKind, string>>;
+
+/** 读取已关闭任务指纹；localStorage 不可用/内容损坏时按未关闭处理。 */
+export function readDismissedMarkdownJobs(): DismissedMarkdownJobs {
+  try {
+    const raw = window.localStorage.getItem(DISMISSED_MARKDOWN_JOBS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const result: DismissedMarkdownJobs = {};
+    if (typeof parsed.scan === 'string' && parsed.scan) result.scan = parsed.scan;
+    if (typeof parsed.import === 'string' && parsed.import) result.import = parsed.import;
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function writeDismissedMarkdownJobs(value: DismissedMarkdownJobs): void {
+  try {
+    window.localStorage.setItem(DISMISSED_MARKDOWN_JOBS_KEY, JSON.stringify(value));
+  } catch {
+    // 只影响「关闭后不再弹回」，不影响任务本身。
+  }
+}
+
+/**
  * 独立笔记标题：取内容第一个非空行，去掉常见 Markdown 标记与内部引用语法，截断到 40 字。
  * 导出为纯函数便于 SSR/冒烟测试。
  */
@@ -355,7 +389,22 @@ export function StandaloneNotesView({
   const [markdownDialogOpen, setMarkdownDialogOpen] = useState(false);
   const [markdownBusy, setMarkdownBusy] = useState<'picking' | 'scanning' | null>(null);
   const [markdownError, setMarkdownError] = useState('');
-  const [scanJob, setScanJob] = useState<MarkdownScanJob | null>(initialScanJob);
+  // 用户关闭过的终态任务指纹（本机持久化）：挂载/轮询/SSE 恢复时跳过，避免卡片自动弹回。
+  // 用 useState 惰性初始化只读一次 localStorage（组件高频重渲染时不做同步 IO）。
+  const [initialDismissedJobs] = useState<DismissedMarkdownJobs>(() =>
+    readDismissedMarkdownJobs()
+  );
+  const dismissedJobsRef = useRef<DismissedMarkdownJobs>(initialDismissedJobs);
+  const [scanJob, setScanJob] = useState<MarkdownScanJob | null>(() => {
+    if (
+      initialScanJob &&
+      isMarkdownJobTerminal(initialScanJob.status) &&
+      dismissedJobsRef.current.scan === markdownJobFingerprint(initialScanJob)
+    ) {
+      return null;
+    }
+    return initialScanJob;
+  });
   const [scanRetryNonce, setScanRetryNonce] = useState(0);
   const [scanPollExhausted, setScanPollExhausted] = useState(false);
   const autoRestartedScanRef = useRef(false);
@@ -370,12 +419,74 @@ export function StandaloneNotesView({
   const [statusFetchError, setStatusFetchError] = useState('');
   const [fullResultError, setFullResultError] = useState('');
   const fullResultRetryRef = useRef<(() => void) | null>(null);
-  const [restoredImportJob, setRestoredImportJob] = useState<MarkdownImportJob | null>(
-    initialRestoredImportJob
-  );
+  const [restoredImportJob, setRestoredImportJob] = useState<MarkdownImportJob | null>(() => {
+    if (
+      initialRestoredImportJob &&
+      isMarkdownJobTerminal(initialRestoredImportJob.status) &&
+      dismissedJobsRef.current.import === markdownJobFingerprint(initialRestoredImportJob)
+    ) {
+      return null;
+    }
+    return initialRestoredImportJob;
+  });
   const [importRestoreNotice, setImportRestoreNotice] = useState(initialImportRestoreNotice);
+  const scanJobRef = useRef<MarkdownScanJob | null>(scanJob);
+  const importJobRef = useRef<MarkdownImportJob | null>(restoredImportJob);
+  scanJobRef.current = scanJob;
+  importJobRef.current = restoredImportJob;
   jobsRunningRef.current =
     scanJob?.status === 'running' || restoredImportJob?.status === 'running';
+
+  /** 写入状态并同步 ref，避免连续异步事件读到旧快照。 */
+  const commitScanJob = (next: MarkdownScanJob | null): void => {
+    scanJobRef.current = next;
+    setScanJob(next);
+  };
+  const commitImportJob = (next: MarkdownImportJob | null): void => {
+    importJobRef.current = next;
+    setRestoredImportJob(next);
+  };
+  const rememberDismissedJob = (
+    kind: MarkdownJobKind,
+    job: MarkdownScanJob | MarkdownImportJob
+  ): void => {
+    if (!isMarkdownJobTerminal(job.status)) return;
+    const next = { ...dismissedJobsRef.current, [kind]: markdownJobFingerprint(job) };
+    dismissedJobsRef.current = next;
+    writeDismissedMarkdownJobs(next);
+  };
+  const clearDismissedJob = (kind: MarkdownJobKind): void => {
+    if (!dismissedJobsRef.current[kind]) return;
+    const next = { ...dismissedJobsRef.current };
+    delete next[kind];
+    dismissedJobsRef.current = next;
+    writeDismissedMarkdownJobs(next);
+  };
+  const isDismissedJob = (
+    kind: MarkdownJobKind,
+    job: MarkdownScanJob | MarkdownImportJob
+  ): boolean =>
+    isMarkdownJobTerminal(job.status) &&
+    dismissedJobsRef.current[kind] === markdownJobFingerprint(job);
+  /** 应用扫描任务状态：终态且已被用户关闭 → 保持隐藏；新任务（running）→ 清除关闭标记。 */
+  const applyScanJob = (incoming: MarkdownScanJob): void => {
+    const merged = mergeLiteMarkdownJob(scanJobRef.current, incoming);
+    if (!isMarkdownJobTerminal(merged.status)) {
+      if (merged.status === 'running') clearDismissedJob('scan');
+      commitScanJob(merged);
+      return;
+    }
+    commitScanJob(isDismissedJob('scan', merged) ? null : merged);
+  };
+  const applyImportJob = (incoming: MarkdownImportJob): void => {
+    const merged = mergeLiteMarkdownJob(importJobRef.current, incoming);
+    if (!isMarkdownJobTerminal(merged.status)) {
+      if (merged.status === 'running') clearDismissedJob('import');
+      commitImportJob(merged);
+      return;
+    }
+    commitImportJob(isDismissedJob('import', merged) ? null : merged);
+  };
   const selectedNote = notes.find((note) => note.id === selectedId) ?? null;
   const draft = selectedNote ? (drafts[selectedNote.id] ?? selectedNote.content) : '';
   const dirty = selectedNote ? draft !== selectedNote.content : false;
@@ -532,7 +643,7 @@ export function StandaloneNotesView({
     if (!cancelMarkdownImport) return;
     try {
       const job = await cancelMarkdownImport();
-      setRestoredImportJob(job);
+      applyImportJob(job);
       setImportRestoreNotice(
         job.status === 'cancelled' ? '上次导入已取消。' : `导入任务状态：${job.status}`
       );
@@ -619,14 +730,17 @@ export function StandaloneNotesView({
       }
       if (startMarkdownScan && getMarkdownScanStatus) {
         const job = await startMarkdownScan(vaultPath);
-        setScanJob(job);
+        applyScanJob(job);
         if (job.status === 'done' && job.scan) {
           setMarkdownScan(job.scan);
           setMarkdownDialogOpen(true);
-          setScanJob(null);
+          // 扫描完成、选择弹窗已经打开：用户随后关闭弹窗时，任务卡不应再自动
+          // 出现（原来的恢复轮询会把 done 卡片反复弹回来）。这里记一次已关闭。
+          rememberDismissedJob('scan', job);
+          commitScanJob(null);
         } else if (job.status === 'error') {
           setMarkdownError(`扫描失败：${job.error || '未知错误'}`);
-          setScanJob(null);
+          commitScanJob(null);
         }
       } else if (scanMarkdownVault) {
         // 兼容旧 core：没有后台扫描时退回同步扫描。
@@ -656,7 +770,7 @@ export function StandaloneNotesView({
         failures = 0;
         setScanPollExhausted(false);
         setMarkdownError('');
-        setScanJob(job);
+        applyScanJob(job);
         if (job.status === 'running') {
           timer = setTimeout(poll, 600);
           return;
@@ -665,25 +779,28 @@ export function StandaloneNotesView({
           if (job.scan) {
             setMarkdownScan(job.scan);
             setMarkdownDialogOpen(true);
+            // 选择弹窗打开后，done 任务卡就不必再露出；记住已关闭，避免 focus/
+            // 10s 兜底轮询/重进页面时又弹回来。
+            rememberDismissedJob('scan', job);
           } else {
             setMarkdownError('扫描完成但没有返回结果，请重试。');
           }
-          setScanJob(null);
+          commitScanJob(null);
           return;
         }
         if (job.status === 'cancelled') {
           setMarkdownError('扫描已取消。');
-          setScanJob(null);
+          commitScanJob(null);
           return;
         }
         if (job.status === 'interrupted') {
           setMarkdownError('上次扫描任务因进程重启中断，请重新选择目录。');
-          setScanJob(null);
+          commitScanJob(null);
           return;
         }
         if (job.status === 'error') {
           setMarkdownError(`扫描失败：${job.error || '未知错误'}`);
-          setScanJob(null);
+          commitScanJob(null);
         }
       } catch (error) {
         if (cancelled) return;
@@ -719,10 +836,8 @@ export function StandaloneNotesView({
     if (getMarkdownJobsSummary) {
       try {
         const snapshot = await getMarkdownJobsSummary();
-        setScanJob((previous) => mergeLiteMarkdownJob(previous, snapshot.scanJob));
-        setRestoredImportJob((previous) =>
-          mergeLiteMarkdownJob(previous, snapshot.importJob)
-        );
+        applyScanJob(snapshot.scanJob);
+        applyImportJob(snapshot.importJob);
         setStatusFetchError('');
         return;
       } catch {
@@ -732,10 +847,8 @@ export function StandaloneNotesView({
     if (getMarkdownJobs) {
       try {
         const snapshot = await getMarkdownJobs();
-        setScanJob((previous) => mergeLiteMarkdownJob(previous, snapshot.scanJob));
-        setRestoredImportJob((previous) =>
-          mergeLiteMarkdownJob(previous, snapshot.importJob)
-        );
+        applyScanJob(snapshot.scanJob);
+        applyImportJob(snapshot.importJob);
         setStatusFetchError('');
         return;
       } catch {
@@ -750,7 +863,7 @@ export function StandaloneNotesView({
     if (getMarkdownScanStatus) {
       try {
         const job = await getMarkdownScanStatus();
-        setScanJob((previous) => mergeLiteMarkdownJob(previous, job));
+        applyScanJob(job);
         scanOk = true;
       } catch (error) {
         scanError = error instanceof Error ? error.message : String(error);
@@ -760,7 +873,7 @@ export function StandaloneNotesView({
     if (getMarkdownImportStatus) {
       try {
         const job = await getMarkdownImportStatus();
-        setRestoredImportJob((previous) => mergeLiteMarkdownJob(previous, job));
+        applyImportJob(job);
         importOk = true;
       } catch (error) {
         importError = error instanceof Error ? error.message : String(error);
@@ -791,15 +904,18 @@ export function StandaloneNotesView({
     if (!cancelMarkdownScan || !scanJob) return;
     try {
       const job = await cancelMarkdownScan();
-      setScanJob(job);
       if (job.status !== 'running') {
         setMarkdownError(
           job.status === 'cancelled'
             ? '扫描已取消。'
             : `扫描未完成：${job.error || job.status}`
         );
-        setScanJob(null);
+        // 用户主动取消：记住该终态，避免下次轮询/重进页面又弹出取消卡片。
+        rememberDismissedJob('scan', job);
+        commitScanJob(null);
+        return;
       }
+      applyScanJob(job);
     } catch (error) {
       setMarkdownError(
         `取消扫描失败：${error instanceof Error ? error.message : String(error)}`
@@ -827,34 +943,43 @@ export function StandaloneNotesView({
     }
 
     if (scanResult && scanResult.status !== 'idle') {
-      setScanJob(scanResult);
+      applyScanJob(scanResult);
       if (scanResult.status === 'running') {
         autoRecoveryRunningRef.current = true;
       } else if (isMarkdownJobTerminal(scanResult.status)) {
         autoRecoveryRunningRef.current = false;
       }
-      if (scanResult.status === 'interrupted') {
+      if (scanResult.status === 'interrupted' && !isDismissedJob('scan', scanResult)) {
         setMarkdownError('上次扫描任务因进程重启中断。');
       }
     }
     if (importResult && importResult.status !== 'idle') {
-      setRestoredImportJob(importResult);
+      applyImportJob(importResult);
       if (importResult.status === 'running') {
         autoRecoveryRunningRef.current = true;
         setImportRestoreNotice('上次导入任务仍在运行，可查看进度或取消。');
       } else if (importResult.status === 'done' && importResult.report) {
-        setImportRestoreNotice(
-          `上次导入完成：导入 ${importResult.report.imported} 篇、更新 ${importResult.report.updated} 篇。`
-        );
+        if (!isDismissedJob('import', importResult)) {
+          setImportRestoreNotice(
+            `上次导入完成：导入 ${importResult.report.imported} 篇、更新 ${importResult.report.updated} 篇。`
+          );
+        }
       } else if (importResult.status === 'interrupted') {
-        setImportRestoreNotice('上次导入任务因进程重启中断。');
+        if (!isDismissedJob('import', importResult)) {
+          setImportRestoreNotice('上次导入任务因进程重启中断。');
+        }
       }
     }
 
+    // 已被用户关闭的终态任务不再自动恢复（用户明确不想继续）。
     const scanInterrupted =
-      scanResult?.status === 'interrupted' && scanResult.input?.vaultPath;
+      scanResult?.status === 'interrupted' &&
+      scanResult.input?.vaultPath &&
+      !isDismissedJob('scan', scanResult);
     const importInterrupted =
-      importResult?.status === 'interrupted' && importResult.input;
+      importResult?.status === 'interrupted' &&
+      importResult.input &&
+      !isDismissedJob('import', importResult);
     if (importInterrupted && !pendingAutoImportInputRef.current) {
       pendingAutoImportInputRef.current = importResult!.input ?? null;
     }
@@ -870,7 +995,7 @@ export function StandaloneNotesView({
       autoRecoveryRunningRef.current = true;
       setMarkdownError('检测到中断，正在自动重新开始上次扫描…');
       try {
-        setScanJob(await startMarkdownScan(scanResult!.input!.vaultPath));
+        applyScanJob(await startMarkdownScan(scanResult!.input!.vaultPath));
       } catch (error) {
         autoRecoveryRunningRef.current = false;
         setMarkdownError(
@@ -896,7 +1021,7 @@ export function StandaloneNotesView({
       autoRecoveryRunningRef.current = true;
       setImportRestoreNotice('检测到中断，正在自动重新开始上次导入…');
       try {
-        setRestoredImportJob(await startMarkdownImport(input));
+        applyImportJob(await startMarkdownImport(input));
       } catch (error) {
         autoRecoveryRunningRef.current = false;
         setImportRestoreNotice(
@@ -913,7 +1038,7 @@ export function StandaloneNotesView({
       autoRecoveryRunningRef.current = true;
       setImportRestoreNotice('检测到中断，正在自动重新开始上次导入…');
       try {
-        setRestoredImportJob(await startMarkdownImport(importResult!.input!));
+        applyImportJob(await startMarkdownImport(importResult!.input!));
       } catch (error) {
         autoRecoveryRunningRef.current = false;
         setImportRestoreNotice(
@@ -961,11 +1086,9 @@ export function StandaloneNotesView({
           sseLastEventRef.current = Date.now();
           setSseFallback(false);
           setSseNotice('');
-          // SSE 事件一律按 lite 合并：只更新进度，保留已有 scan/report。
-          setScanJob((previous) => mergeLiteMarkdownJob(previous, snapshot.scanJob));
-          setRestoredImportJob((previous) =>
-            mergeLiteMarkdownJob(previous, snapshot.importJob)
-          );
+          // SSE 事件一律按 lite 合并：只更新进度，保留已有 scan/report；已关闭终态不弹回。
+          applyScanJob(snapshot.scanJob);
+          applyImportJob(snapshot.importJob);
           // terminal/interrupted（含 lite 终态）立即读取完整结果与 input。
           const forceFull =
             Boolean(snapshot.terminal) ||
@@ -1046,7 +1169,7 @@ export function StandaloneNotesView({
       setImportRestoreNotice('扫描完成，继续上次未完成的导入…');
       try {
         const job = await startMarkdownImport(input);
-        setRestoredImportJob((previous) => mergeLiteMarkdownJob(previous, job));
+        applyImportJob(job);
       } catch (error) {
         autoRecoveryRunningRef.current = false;
         setImportRestoreNotice(
@@ -1061,7 +1184,7 @@ export function StandaloneNotesView({
     if (!input?.vaultPath && getMarkdownScanStatus) {
       try {
         const job = await getMarkdownScanStatus();
-        setScanJob((previous) => mergeLiteMarkdownJob(previous, job));
+        applyScanJob(job);
         input = job.input;
       } catch {
         // 使用现有状态
@@ -1073,7 +1196,7 @@ export function StandaloneNotesView({
     try {
       setMarkdownError('');
       const job = await startMarkdownScan(input.vaultPath);
-      setScanJob(job);
+      applyScanJob(job);
     } catch (error) {
       autoRecoveryRunningRef.current = false;
       setMarkdownError(
@@ -1087,7 +1210,7 @@ export function StandaloneNotesView({
     if (!input && getMarkdownImportStatus) {
       try {
         const job = await getMarkdownImportStatus();
-        setRestoredImportJob((previous) => mergeLiteMarkdownJob(previous, job));
+        applyImportJob(job);
         input = job.input;
       } catch {
         // 使用现有状态
@@ -1098,7 +1221,7 @@ export function StandaloneNotesView({
     autoRecoveryRunningRef.current = true;
     try {
       const job = await startMarkdownImport(input);
-      setRestoredImportJob(job);
+      applyImportJob(job);
       setImportRestoreNotice('已重新开始上次导入。');
     } catch (error) {
       autoRecoveryRunningRef.current = false;
@@ -1114,7 +1237,7 @@ export function StandaloneNotesView({
     if (job && job.status === 'done' && !job.report && getMarkdownImportStatus) {
       try {
         job = await getMarkdownImportStatus();
-        setRestoredImportJob((previous) => mergeLiteMarkdownJob(previous, job!));
+        applyImportJob(job!);
       } catch (error) {
         setFullResultError(
           `读取完整导入结果失败：${
@@ -1142,7 +1265,7 @@ export function StandaloneNotesView({
     if (job && job.status === 'done' && !job.scan && getMarkdownScanStatus) {
       try {
         job = await getMarkdownScanStatus();
-        setScanJob((previous) => mergeLiteMarkdownJob(previous, job!));
+        applyScanJob(job!);
       } catch (error) {
         setFullResultError(
           `读取完整扫描结果失败：${
@@ -1163,21 +1286,29 @@ export function StandaloneNotesView({
     setMarkdownDialogOpen(false);
     setMarkdownScan(null);
     setMarkdownError('');
-    if (report) {
-      setRestoredImportJob({
-        status: 'done',
-        phase: 'finalizing',
-        total: report.requested,
-        done: report.requested,
-        currentPath: '',
-        report,
-        error: ''
-      });
-      setImportRestoreNotice(
-        `上次导入完成：导入 ${report.imported} 篇、更新 ${report.updated} 篇。`
-      );
-      onMarkdownImported?.(report);
+    if (!report) return;
+    setImportRestoreNotice(
+      `上次导入完成：导入 ${report.imported} 篇、更新 ${report.updated} 篇。`
+    );
+    onMarkdownImported?.(report);
+    // 用报告生成的任务卡只作兜底；优先读取服务端完整状态（含 input/完成时间），
+    // 这样「关闭卡片」记下的指纹与之后的轮询/SSE 完全一致，不会被再次弹回。
+    const fallbackJob: MarkdownImportJob = {
+      status: 'done',
+      phase: 'finalizing',
+      total: report.requested,
+      done: report.requested,
+      currentPath: '',
+      report,
+      error: ''
+    };
+    if (!getMarkdownImportStatus) {
+      applyImportJob(fallbackJob);
+      return;
     }
+    void getMarkdownImportStatus()
+      .then((job) => applyImportJob(job && job.status !== 'idle' ? job : fallbackJob))
+      .catch(() => applyImportJob(fallbackJob));
   };
 
   const renderFolderInlineEditor = (
@@ -1426,16 +1557,18 @@ export function StandaloneNotesView({
         <div className="kr-standalone__head-actions">
           <button
             type="button"
-            className="kr-ghost"
+            className={`kr-ghost${scanJob?.status === 'running' ? ' is-busy' : ''}`}
             onClick={() => void beginMarkdownImport()}
-            disabled={markdownBusy !== null}
+            disabled={markdownBusy !== null || scanJob?.status === 'running'}
             title="选择笔记文件夹并导入 Markdown 笔记（图片会自动复制，其他附件会复制为本地附件）"
           >
             {markdownBusy === 'picking'
               ? '选择目录…'
-              : markdownBusy === 'scanning'
-                ? '扫描文件夹…'
-                : '导入 Markdown 笔记'}
+              : scanJob?.status === 'running'
+                ? `正在扫描…（已扫描 ${scanJob.done} 个文件）`
+                : markdownBusy === 'scanning'
+                  ? '正在扫描…'
+                  : '导入 Markdown 笔记'}
           </button>
           <button type="button" className="kr-primary" onClick={onCreate} disabled={creating}>
             {creating ? '新建中…' : '+ 新建笔记'}
@@ -1496,7 +1629,13 @@ export function StandaloneNotesView({
         </p>
       ) : null}
       {scanJob && scanJob.status !== 'idle' ? (
-        <div className={`kr-job-card kr-job-card--scan is-${scanJob.status}`} role="status">
+        <div
+          className={`kr-job-card kr-job-card--scan is-${scanJob.status}${
+            scanJob.status === 'running' ? ' is-prominent' : ''
+          }`}
+          role="status"
+          aria-live={scanJob.status === 'running' ? 'polite' : 'off'}
+        >
           <div className="kr-job-card__head">
             <strong>扫描任务</strong>
             <span className="kr-muted">
@@ -1510,36 +1649,54 @@ export function StandaloneNotesView({
                       ? '已取消'
                       : '失败'}
             </span>
-            <button
-              type="button"
-              className="kr-link-button"
-              onClick={() => {
-                setScanJob(null);
-                setMarkdownError('');
-                setScanPollExhausted(false);
-              }}
-            >
-              关闭
-            </button>
+            {scanJob.status !== 'running' ? (
+              <button
+                type="button"
+                className="kr-link-button"
+                onClick={() => {
+                  rememberDismissedJob('scan', scanJob);
+                  commitScanJob(null);
+                  setMarkdownError('');
+                  setScanPollExhausted(false);
+                }}
+              >
+                关闭
+              </button>
+            ) : null}
           </div>
           {scanJob.status === 'running' ? (
             <>
-              <p>
-                正在扫描：{scanJob.currentPath || '准备中'}（{scanJob.done}/{scanJob.total}，
-                {scanPercent}%）
+              <p className="kr-job-card__count">
+                已扫描 <strong>{scanJob.done}</strong> 个文件
+                {scanJob.total > 0 ? `（共 ${scanJob.total} 个，${scanPercent}%）` : '（总数统计中…）'}
               </p>
               <progress
-                value={Math.min(scanJob.done, Math.max(1, scanJob.total))}
-                max={Math.max(1, scanJob.total)}
+                className="kr-job-card__progress"
+                value={
+                  scanJob.total > 0
+                    ? Math.min(scanJob.done, Math.max(1, scanJob.total))
+                    : undefined
+                }
+                max={scanJob.total > 0 ? Math.max(1, scanJob.total) : undefined}
                 aria-label="扫描笔记库进度"
               />
-              <button
-                type="button"
-                onClick={() => void cancelCurrentScan()}
-                disabled={!cancelMarkdownScan}
-              >
-                取消扫描
-              </button>
+              <p className="kr-job-card__path" title={scanJob.currentPath}>
+                当前：{scanJob.currentPath || '准备中'}
+              </p>
+              {scanJob.input?.vaultPath ? (
+                <p className="kr-muted kr-job-card__vault" title={scanJob.input.vaultPath}>
+                  文件夹：{scanJob.input.vaultPath}
+                </p>
+              ) : null}
+              <div className="kr-job-card__actions">
+                <button
+                  type="button"
+                  onClick={() => void cancelCurrentScan()}
+                  disabled={!cancelMarkdownScan}
+                >
+                  取消扫描
+                </button>
+              </div>
             </>
           ) : scanJob.status === 'done' || isMarkdownResultMissing(scanJob) ? (
             isMarkdownResultMissing(scanJob) ? (
@@ -1593,8 +1750,11 @@ export function StandaloneNotesView({
       ) : null}
       {restoredImportJob && restoredImportJob.status !== 'idle' ? (
         <div
-          className={`kr-job-card kr-job-card--import is-${restoredImportJob.status}`}
+          className={`kr-job-card kr-job-card--import is-${restoredImportJob.status}${
+            restoredImportJob.status === 'running' ? ' is-prominent' : ''
+          }`}
           role="status"
+          aria-live={restoredImportJob.status === 'running' ? 'polite' : 'off'}
         >
           <div className="kr-job-card__head">
             <strong>导入任务</strong>
@@ -1609,44 +1769,63 @@ export function StandaloneNotesView({
                       ? '已取消'
                       : '失败'}
             </span>
-            <button
-              type="button"
-              className="kr-link-button"
-              onClick={() => {
-                setRestoredImportJob(null);
-                setImportRestoreNotice('');
-              }}
-            >
-              关闭
-            </button>
-          </div>
-          {importRestoreNotice ? <p className="kr-muted">{importRestoreNotice}</p> : null}
-          {restoredImportJob.status === 'running' ? (
-            <p>
-              导入进行中（{restoredImportJob.done}/{restoredImportJob.total}
-              {restoredImportJob.total > 0
-                ? `，${Math.round(
-                    (restoredImportJob.done / restoredImportJob.total) * 100
-                  )}%`
-                : ''}
-              ）。
+            {restoredImportJob.status !== 'running' ? (
               <button
                 type="button"
                 className="kr-link-button"
-                onClick={() => void openRestoredImport()}
+                onClick={() => {
+                  rememberDismissedJob('import', restoredImportJob);
+                  commitImportJob(null);
+                  setImportRestoreNotice('');
+                }}
               >
-                查看导入进度
+                关闭
               </button>
-              {cancelMarkdownImport ? (
+            ) : null}
+          </div>
+          {importRestoreNotice ? <p className="kr-muted">{importRestoreNotice}</p> : null}
+          {restoredImportJob.status === 'running' ? (
+            <>
+              <p className="kr-job-card__count">
+                已处理 <strong>{restoredImportJob.done}</strong>
+                {restoredImportJob.total > 0 ? ` / ${restoredImportJob.total}` : ''} 篇
+                {restoredImportJob.total > 0
+                  ? `（${Math.round(
+                      (restoredImportJob.done / restoredImportJob.total) * 100
+                    )}%）`
+                  : ''}
+              </p>
+              <progress
+                className="kr-job-card__progress"
+                value={Math.min(
+                  restoredImportJob.done,
+                  Math.max(1, restoredImportJob.total)
+                )}
+                max={Math.max(1, restoredImportJob.total)}
+                aria-label="导入笔记进度"
+              />
+              {restoredImportJob.currentPath ? (
+                <p className="kr-job-card__path" title={restoredImportJob.currentPath}>
+                  当前：{restoredImportJob.currentPath}
+                </p>
+              ) : null}
+              <div className="kr-job-card__actions">
                 <button
                   type="button"
-                  className="kr-link-button"
-                  onClick={() => void cancelRestoredImport()}
+                  onClick={() => void openRestoredImport()}
                 >
-                  取消导入
+                  查看导入进度
                 </button>
-              ) : null}
-            </p>
+                {cancelMarkdownImport ? (
+                  <button
+                    type="button"
+                    onClick={() => void cancelRestoredImport()}
+                  >
+                    取消导入
+                  </button>
+                ) : null}
+              </div>
+            </>
           ) : restoredImportJob.status === 'done' || isMarkdownResultMissing(restoredImportJob) ? (
             isMarkdownResultMissing(restoredImportJob) ? (
               <p className="kr-page-error" role="alert">

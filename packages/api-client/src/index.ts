@@ -44,6 +44,7 @@ import type {
   NoteAssetReindexResult,
   NotePurgeResult,
   ReferenceGraph,
+  ReferenceNodeKind,
   LegacyMigrationReport,
   MaintenanceStatus,
   ModelTestResult,
@@ -194,8 +195,14 @@ export interface ApiClient {
     documentId: string;
     id?: string;
   }): Promise<BacklinkRecord[]>;
-  /** 全库引用网络（关系图），支持按节点分页。 */
-  getReferenceGraph(options?: { limit?: number; offset?: number }): Promise<ReferenceGraph>;
+  /** 全库引用网络（关系图）。all=true 一次取全量（超硬上限由服务端标注 truncated）；否则按节点分页。 */
+  getReferenceGraph(options?: {
+    limit?: number;
+    offset?: number;
+    kinds?: ReferenceNodeKind[];
+    search?: string;
+    all?: boolean;
+  }): Promise<ReferenceGraph>;
   /** 清理没有任何笔记/批注引用的本地图片资源；dryRun 只统计不删除。 */
   gcNoteAssets(dryRun?: boolean, includeDeleted?: boolean): Promise<NoteAssetGcReport>;
   /** 本地图片资源使用情况（文件数/占用/孤儿/上次清理）。 */
@@ -559,10 +566,22 @@ export interface ApiClient {
   previewZoteroAnnotations(documentId: string): Promise<ZoteroAnnotationImportReport>;
   importZoteroAnnotations(documentId: string): Promise<ZoteroAnnotationImportReport>;
   getSpeechConfig(): Promise<SpeechConfigRecord>;
+  /**
+   * 按当前正在编辑的播报方式取音色：
+   * - `mode=model` 必须同时给 platform 连接与模型，服务端不会回退到旧的 TTS 地址；
+   * - `mode=custom` 可带 `url`（未保存的服务地址也能取音色）；
+   * - `mode=system` 读取本机 Windows 已安装音色。
+   */
   getSpeechVoices(options?: {
+    mode?: 'system' | 'model' | 'custom';
     connectionId?: string;
     model?: string;
+    url?: string;
   }): Promise<{
+    mode?: 'system' | 'model' | 'custom';
+    connection_id?: string;
+    model?: string;
+    url?: string;
     voices: string[];
     labels?: Record<string, string>;
     message?: string;
@@ -950,8 +969,12 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
 
     getReferenceGraph: (options) => {
       const query = new URLSearchParams();
+      if (options?.all === true) query.set('all', '1');
       if (typeof options?.limit === 'number') query.set('limit', String(options.limit));
       if (typeof options?.offset === 'number') query.set('offset', String(options.offset));
+      if (options?.kinds && options.kinds.length > 0) query.set('kinds', options.kinds.join(','));
+      const search = options?.search?.trim();
+      if (search) query.set('search', search);
       const suffix = query.toString() ? `?${query.toString()}` : '';
       return request<ReferenceGraph>(`/reference-graph${suffix}`);
     },
@@ -1742,10 +1765,20 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     getSpeechConfig: () => request<SpeechConfigRecord>('/speech/config'),
     getSpeechVoices: (options) => {
       const params = new URLSearchParams();
-      if (options?.connectionId) params.set('connection_id', options.connectionId);
-      if (options?.model) params.set('model', options.model);
+      if (options?.mode) params.set('mode', options.mode);
+      // 空串也显式传递：model 模式下 connection_id= 能让服务端明确回答「先选平台」，
+      // 而不是把它当成“没传”去走自定义服务的旧地址回退。
+      if (options?.connectionId !== undefined) {
+        params.set('connection_id', options.connectionId);
+      }
+      if (options?.model !== undefined) params.set('model', options.model);
+      if (options?.url) params.set('url', options.url);
       const query = params.toString();
       return request<{
+        mode?: 'system' | 'model' | 'custom';
+        connection_id?: string;
+        model?: string;
+        url?: string;
         voices: string[];
         labels?: Record<string, string>;
         message?: string;

@@ -165,6 +165,39 @@ function routeNoteForMissedGuard(guard: DocumentMentionGuard | null): string | u
   return `已用「${guard.terms.slice(0, 3).join('、')}」在本篇文献中核对，没有找到相关表述，因此未读取文献。`;
 }
 
+/**
+ * 解析全模态语音回复：约定模型返回 JSON {"transcript":"逐字转写","answer":"回答"}。
+ *
+ * 模型不一定听话（返回 Markdown 代码块 / 前后夹解释 / 只给纯文字回答）：尽量从中找出
+ * transcript+answer 合法 JSON；找不到时返回 null，调用方退回「整段文字当回答、无转写」，
+ * 不能因为解析失败让整轮语音提问失败。
+ */
+function parseOmniAudioReply(raw: string): { transcript: string; answer: string } | null {
+  const text = raw
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '')
+    .trim();
+  if (!text) return null;
+  const candidates = [text];
+  const brace = /\{[\s\S]*\}/.exec(text);
+  if (brace && brace[0] !== text) candidates.push(brace[0]);
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as { transcript?: unknown; answer?: unknown } | null;
+      if (!parsed || typeof parsed !== 'object') continue;
+      const answer = typeof parsed.answer === 'string' ? parsed.answer.trim() : '';
+      if (!answer) continue;
+      const transcript =
+        typeof parsed.transcript === 'string' ? parsed.transcript.trim() : '';
+      return { transcript, answer };
+    } catch {
+      // 尝试下一个候选（例如去掉 Markdown 代码块后的整段 JSON）
+    }
+  }
+  return null;
+}
+
 async function answerQuestionInner(
   store: Store,
   secrets: SecretStore,
@@ -192,9 +225,31 @@ async function answerQuestionInner(
         notice: '尚未配置支持音频的全模态模型，无法直接识别语音。'
       };
     }
-    const format = input.audio.mimeType.includes('wav') ? 'wav' : 'webm';
+    // 输入音频必须是「裸 base64」：OpenAI 兼容/全模态接口的 input_audio.data 不接受
+    // `data:audio/x;base64,` 前缀（带上会被判 400）。客户端仍可能传 data URL，
+    // 这里统一去掉前缀，保证请求体合法。
+    const audioData = input.audio.data.replace(/^data:[^,]*,/, '').trim();
+    // format 由 mimeType 推导（wav 优先）：多数全模态模型只稳定支持 wav/mp3，
+    // 之前的实现把所有非 wav 都写成 webm，遇到 mp3/ogg/m4a 会直接 400。
+    const audioMime = String(input.audio.mimeType ?? '').toLowerCase();
+    const format = audioMime.includes('wav')
+      ? 'wav'
+      : audioMime.includes('mpeg') || audioMime.includes('mp3')
+        ? 'mp3'
+        : audioMime.includes('ogg') || audioMime.includes('opus')
+          ? 'ogg'
+          : audioMime.includes('m4a') || audioMime.includes('mp4') || audioMime.includes('aac')
+            ? 'm4a'
+            : 'webm';
+    // 语音直问由全模态模型自己转写：不再要求客户端先用 ASR。同一请求若带文字
+    // （旧客户端/文字+语音混合）仍作为 text part 一起发送，模型可以对照。
+    const audioTranscript = (input.question ?? '').trim() || (input.voice_original ?? '').trim();
     const audioSystem =
-      '你是全模态文献助手。请直接理解用户语音的内容；如果语音是在提问，就回答；如果语音是选中文字/指令，就按语音要求处理。不要假装听到了不存在的内容。';
+      '你是全模态文献助手。请先逐字转写用户语音的内容，再据此回答：' +
+      '如果语音是在提问，就回答；如果语音是选中文字/指令，就按语音要求处理。' +
+      '不要假装听到了不存在的内容。' +
+      '只返回一个 JSON 对象 {"transcript":"逐字转写","answer":"回答"}，' +
+      '不要输出其它文字、解释或 Markdown 代码块。';
     // 独立问答的多会话：语音提问也要能看到本会话更早的文字轮次，否则口头追问同样会丢指代。
     const audioSession =
       !input.documentId && typeof input.qa_session_id === 'string' && input.qa_session_id.trim()
@@ -204,7 +259,9 @@ async function answerQuestionInner(
     let audioDropped = 0;
     if (audioSession) {
       const prepared = prepareHistory(
-        qaHistoryPairsFromSession(store, audioSession, ''),
+        // 本轮转写（audioTranscript）要一起传进来：服务端已把带「（语音）」前缀的本轮消息落库，
+        // 不排除掉它会把同一句口头提问在历史里再发一遍。
+        qaHistoryPairsFromSession(store, audioSession, audioTranscript),
         Math.max(
           0,
           chatInputLimit(store) -
@@ -225,17 +282,18 @@ async function answerQuestionInner(
       {
         role: 'user',
         content: [
+          ...(audioTranscript ? [{ type: 'text', text: audioTranscript }] : []),
           {
             type: 'input_audio',
             input_audio: {
-              data: `data:${input.audio.mimeType};base64,${input.audio.data}`,
+              data: audioData,
               format
             }
           }
         ]
       }
     ];
-    const response = await fetch(`${config.baseUrl}/chat/completions`, {
+    const response = await fetch(`${config.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -249,16 +307,36 @@ async function answerQuestionInner(
       signal: signal ?? AbortSignal.timeout(120_000)
     });
     if (!response.ok) {
-      throw new Error(`全模态模型返回 HTTP ${response.status}`);
+      // 错误信息带上 provider 响应体摘要：HTTP 400 常见原因是音频格式/字段不符合该平台，
+      // 没有响应体用户（和日志）都无法判断到底是哪一种。
+      let detail = '';
+      try {
+        detail = (await response.text()).replace(/\s+/g, ' ').trim().slice(0, 300);
+      } catch {
+        // 响应体读不到时只报状态码。
+      }
+      throw new Error(
+        `全模态模型返回 HTTP ${response.status}${detail ? `：${detail}` : ''}`
+      );
     }
     const payload = (await response.json()) as {
       choices?: Array<{ message?: { content?: unknown } }>;
     };
-    const answer = payload.choices?.[0]?.message?.content;
-    if (typeof answer !== 'string' || !answer.trim()) {
+    const rawAnswer = payload.choices?.[0]?.message?.content;
+    if (typeof rawAnswer !== 'string' || !rawAnswer.trim()) {
       throw new Error('全模态模型没有返回文字回答');
     }
-    const audioNoticeParts = ['本次录音已直接交给当前会话模型理解，未先经过 ASR 转文字。'];
+    // 约定模型返回 {"transcript":"逐字转写","answer":"回答"}。解析成功时把逐字转写作为
+    // 可选字段回传（界面显示/持久化用）；模型没按格式返回时整段文字当回答、转写留空，
+    // 不能因为解析失败让整轮语音提问失败。
+    const parsedReply = parseOmniAudioReply(rawAnswer);
+    const answerText = parsedReply?.answer ?? rawAnswer.trim();
+    const modelTranscript = parsedReply?.transcript ?? '';
+    const audioNoticeParts = [
+      modelTranscript
+        ? '本轮录音由全模态模型直接理解并给出逐字转写；转写文字会写入会话的用户消息。'
+        : '本轮录音由全模态模型直接理解；模型没有返回可用的逐字转写，用户消息保留为语音占位。'
+    ];
     if (audioPrior.length > 0) {
       audioNoticeParts.push('本轮语音提问已带入本会话更早轮次的文字记录作为上下文。');
     }
@@ -268,8 +346,9 @@ async function answerQuestionInner(
       );
     }
     return {
-      answer: answer.trim(),
+      answer: answerText,
       sources: [],
+      ...(modelTranscript ? { audio_transcript: modelTranscript } : {}),
       ...memoryUnused('为语音直接回答'),
       ...(audioSession
         ? {
@@ -1253,21 +1332,103 @@ async function answerQuestionInner(
   }
 
   if (sources.length === 0 && memoryHits.length === 0) {
+    // 无文献内容聊天：
+    // - document_only：用户明确要求只用文献，保持「无法回答」，不偷偷改用模型知识；
+    // - 其它来源策略：库内没有命中 ≠ 不能聊天。通用知识/纯聊天改为直接调用会话模型
+    //   凭自身知识回答（answer_mode='direct'），并如实说明没有使用库内原文、不编号引用。
+    if (input.source_policy === 'document_only') {
+      return {
+        answer: null,
+        sources,
+        ...chapterFields,
+        routing,
+        route_note: routeNote,
+        reading_scope: scope,
+        reading_rigor: input.reading_rigor ?? 'auto',
+        model_knowledge: false,
+        web_search: Boolean(shouldSearch),
+        answer_mode: 'library',
+        ...memoryFields,
+        notice:
+          '本地没有检索到相关原文，且本轮来源限定为「仅文献」，暂时无法回答。可以先确认 PDF 是否包含可提取文本（扫描件需要 OCR）；独立问答也可以勾选「笔记/批注」后再问。' +
+          (readingFailure ? ` 完整阅读未完成：${trimText(readingFailure, 200)}` : '')
+      };
+    }
+    const knowledgeSystem =
+      '你是文献阅读助手。本轮没有检索到任何库内原文页，也没有可用的笔记/批注。' +
+      '请直接回答用户的问题：通用知识、常识、日常对话可以凭你自己的知识回答；' +
+      '如果问题需要具体文献依据而当前没有，请明确说明「本次没有检索到库内原文」，' +
+      '不要编造页码、文献原句或 [1][2] 这类引用编号。';
+    const knowledgeUser = `问题：${question}${
+      selection ? `\n\n用户引用的原文：\n${trimText(selection, 2000)}` : ''
+    }`;
+    const knowledgeConversation = qaSession
+      ? await prepareQaConversation({
+          store,
+          session: qaSession,
+          config,
+          baseSystem: knowledgeSystem,
+          user: knowledgeUser,
+          question,
+          inputLimit: chatInputLimit(store),
+          signal,
+          onStage
+        })
+      : null;
+    let knowledgeSystemPrompt = knowledgeSystem;
+    if (knowledgeConversation?.summaryBlock) {
+      knowledgeSystemPrompt += knowledgeConversation.summaryBlock;
+    }
+    if (knowledgeConversation?.omittedBlock) {
+      knowledgeSystemPrompt += knowledgeConversation.omittedBlock;
+    }
+    if (qaSession) knowledgeSystemPrompt += staleCitationBlock(true, false);
+    const knowledgeAnswer = await callChatModel(
+      config,
+      knowledgeSystemPrompt,
+      knowledgeUser,
+      1600,
+      signal,
+      onDraft,
+      undefined,
+      qaSession ? chatInputLimit(store) : undefined,
+      '通用知识回答',
+      knowledgeConversation?.prior ?? []
+    );
+    const knowledgeNoticeParts = [
+      '本轮没有检索到库内原文；以下回答来自模型自身知识，未引用库内页。'
+    ];
+    if (readingFailure) {
+      knowledgeNoticeParts.push(
+        `完整阅读未完成，已退回模型知识回答：${trimText(readingFailure, 200)}`
+      );
+    }
+    if (knowledgeConversation) {
+      if (knowledgeConversation.stats.compacted > 0) {
+        knowledgeNoticeParts.push(
+          `已把本会话更早的 ${knowledgeConversation.stats.compacted} 轮对话压缩成摘要（完整历史仍在会话里）。`
+        );
+      }
+      if (knowledgeConversation.stats.dropped > 0) {
+        knowledgeNoticeParts.push(
+          `会话历史超出模型输入预算，为容量省略了 ${knowledgeConversation.stats.dropped} 轮（从最旧开始）。`
+        );
+      }
+    }
     return {
-      answer: null,
-      sources,
+      answer: knowledgeAnswer,
+      sources: [],
       ...chapterFields,
       routing,
       route_note: routeNote,
       reading_scope: scope,
       reading_rigor: input.reading_rigor ?? 'auto',
-      model_knowledge: input.source_policy !== 'document_only',
+      model_knowledge: true,
       web_search: Boolean(shouldSearch),
-      answer_mode: 'library',
+      answer_mode: 'direct',
       ...memoryFields,
-      notice:
-        '本地没有检索到相关原文，暂时无法回答。可以先确认 PDF 是否包含可提取文本（扫描件需要 OCR）；独立问答也可以勾选「笔记/批注」后再问。' +
-        (readingFailure ? ` 完整阅读未完成：${trimText(readingFailure, 200)}` : '')
+      ...(knowledgeConversation ? { qa_context: knowledgeConversation.stats } : {}),
+      notice: knowledgeNoticeParts.join('；')
     };
   }
 

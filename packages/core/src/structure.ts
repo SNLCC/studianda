@@ -1,4 +1,5 @@
 import type { LayoutLine, LayoutPage, OutlineEntry, PdfLayout } from './pdf-layout.js';
+import { looksLikeReferenceText } from './references.js';
 
 export interface PageMask {
   id: string;
@@ -129,6 +130,14 @@ export function pageLabel(lines: LayoutLine[], limit = 80): string {
   return line ? line.slice(0, limit) : '';
 }
 
+/** 章节词标题（Abstract / 参考文献 / 结论 …）：整行是这些词，或「词 + 短副标题」。 */
+const SECTION_WORD =
+  /^(?:abstract|introduction|background|related\s+work|literature\s+review|methods?|methodology|materials?\s+and\s+methods?|experimental\s+(?:setup|results?)|results?|discussion|conclusions?|limitations|future\s+work|acknowledg(?:e)?ments?|references|bibliography|works\s+cited|appendix|摘要|引言|前言|绪论|导论|背景|方法|研究方法|材料与方法|结果|讨论|结论|局限性|致谢|参考文献|引用文献|参考资料|附录)(?:\s*[:：—–-].{0,40})?$/i;
+
+/** 作者/单位/邮箱这类首页装饰行：即使居中、字号偏大也不该当成章节标题。 */
+const AUTHOR_OR_AFFILIATION =
+  /(?:\bauthors?\b|corresponding\s+author|作者|@|大学|学院|研究院|研究所|university|college|institute|department|laborator)/i;
+
 export function heading(
   text: string,
   size?: number,
@@ -139,14 +148,31 @@ export function heading(
   // 纯日期、页码、标点残片不应当成为目录标题。
   if (!/[\p{L}\u3400-\u9fff]/u.test(line)) return null;
   if (/^\d{4}\s*[-/.]\s*\d{1,2}/.test(line)) return null;
-  const numbered = line.match(
-    /^(?:第[一二三四五六七八九十百\d]+[章节]|\d+(?:\.\d+){0,3}[.)]?\s+(?:[A-Z][a-z]|[A-Z]{2,}|[\u4e00-\u9fff]))/
-  );
-  const chapter = line.match(/^(?:chapter|section)\s+\d+\b/i);
+  // 作者/单位行（带逗号、邮箱）不是标题，哪怕带编号。
+  if (/(?:[,，]|@)/.test(line) && AUTHOR_OR_AFFILIATION.test(line)) return null;
+  // 纯书目条目（"[1] Smith, J. (2020)…"）是参考文献，不是章节标题：
+  // 否则文末参考文献会被拆进目录、内容块也会把条目当标题。
+  if (looksLikeReferenceText(line)) return null;
+
+  // 中文章节：第一章 / 第一节 / 一、 / （一） / 1、 / 1．
+  const cjkChapter = line.match(/^第([一二三四五六七八九十百千\d]+)([章节节篇部])/);
+  if (cjkChapter) return { title: line, level: cjkChapter[2] === '章' ? 1 : 2 };
+  const cjkOrdered = line.match(/^[一二三四五六七八九十百千]{1,4}[、.．)）]\s*(?=[\u4e00-\u9fffA-Z])/);
+  if (cjkOrdered) return { title: line, level: 2 };
+  const cjkParen = line.match(/^[（(][一二三四五六七八九十百千]{1,4}[)）]\s*(?=[\u4e00-\u9fffA-Z])/);
+  if (cjkParen) return { title: line, level: 3 };
+
+  // 阿拉伯数字编号：1 / 1.1 / 1.1.1；分隔符支持 . ． 、 ) ） 或纯空格（"1 引言"）。
+  const numbered = line.match(/^(\d+(?:[.．]\d+){0,3})(?:[.．、)）]\s*|\s+)(?=[A-Z\u4e00-\u9fff])/);
+  const chapter = line.match(/^(?:chapter|section|part)\s+[ivxlcdm\d]+\b/i);
   if (numbered || chapter) {
+    // "1 This is a whole sentence of body text…" 这种只有空格、没有编号分隔符的长行
+    // 更可能是正文里的编号列表项，不当标题。
+    const explicitSeparator = /^\d+(?:[.．]\d+)*[.．、)）]/.test(line);
+    if (!explicitSeparator && !chapter && line.length > 60) return null;
     // “1 Department of A, University…” 这类编号作者行不是小节标题：
     // 没有 1./1.1 这种显式编号、字号又不比正文大时，按普通正文处理。
-    const explicitNumber = /^\d+(?:\.\d+){0,3}[.)]/.test(line);
+    const explicitNumber = /^\d+(?:[.．]\d+){0,3}[.．、)）]/.test(line);
     const looksLikeAffiliation =
       !explicitNumber &&
       (line.includes(',') || line.split(/\s+/).length > 7) &&
@@ -154,22 +180,46 @@ export function heading(
       bodySize != null &&
       size <= bodySize * 1.04;
     if (looksLikeAffiliation) return null;
-    const prefix = line.match(/\d+(?:\.\d+)*/);
-    return { title: line, level: prefix ? prefix[0].split('.').length : 1 };
+    if (numbered?.[1]) {
+      return { title: line, level: numbered[1].split(/[.．]/).length };
+    }
+    return { title: line, level: 1 };
   }
   // 常见的罗马数字/字母编号小节标题（如 "I. INTRODUCTION"、"A. System Overview"）。
-  const roman = line.match(/^[IVXLC]{1,6}\.\s+[A-Z][A-Za-z\u4e00-\u9fff]/);
+  const roman = line.match(/^[IVXLC]{1,6}\.\s+(?:[A-Z][A-Za-z]|[\u4e00-\u9fff])/);
   if (roman) return { title: line, level: 1 };
-  const lettered = line.match(/^[A-Z]\.\s+[A-Z][a-z]/);
+  const lettered = line.match(/^[A-Z]\.\s+(?:[A-Z][a-z]|[\u4e00-\u9fff])/);
   if (lettered) return { title: line, level: 2 };
-  if (
-    /^(?:abstract|introduction|methods?|results?|discussion|conclusions?|acknowledg(?:e)?ments?|references|bibliography|appendix|摘要|引言|方法|结果|讨论|结论|参考文献)$/i.test(
-      line
-    )
-  ) {
+  if (SECTION_WORD.test(line)) {
     return { title: line, level: 1 };
   }
   return null;
+}
+
+/**
+ * 全篇正文字号中位数（pt）。
+ *
+ * 单页中位数在"封面/版权页只有少数大字号行"或"整页都是标题"时会把正文字号带偏，
+ * 所以标题判定统一对比全篇中位数（页面自己的中位数只在没有字号时兜底）。
+ * 只统计有实际宽度的行，避免页码/孤立符号拉低中位数。
+ */
+export function documentBodySize(
+  layout: PdfLayout,
+  masks: PageMask[] = [],
+  marginNoise?: Set<string>
+): number | undefined {
+  const sizes: number[] = [];
+  for (const page of layout.pages) {
+    for (const line of visibleLines(page, masks)) {
+      if (typeof line.size !== 'number' || !(line.size > 0)) continue;
+      if (line.bbox[2] - line.bbox[0] <= 0.12) continue;
+      if (marginNoise?.has(line.text.replace(/\s+/g, ' ').trim())) continue;
+      sizes.push(line.size);
+    }
+  }
+  if (sizes.length === 0) return undefined;
+  sizes.sort((left, right) => left - right);
+  return sizes[Math.floor(sizes.length / 2)];
 }
 
 export function sectionTree(
@@ -256,7 +306,9 @@ export function repeatedMarginTexts(layout: PdfLayout): Set<string> {
       counts.set(text, (counts.get(text) ?? 0) + 1);
     }
   }
-  const threshold = Math.max(3, Math.ceil(layout.pages.length * 0.3));
+  // 2 页以内的短文没有"重复 3 次"的机会：页眉/页脚在两页都出现就该排除。
+  const threshold =
+    layout.pages.length <= 2 ? 2 : Math.max(3, Math.ceil(layout.pages.length * 0.3));
   return new Set(
     [...counts.entries()].filter(([, count]) => count >= threshold).map(([text]) => text)
   );
@@ -267,6 +319,8 @@ export function documentStructure(layout: PdfLayout, masks: PageMask[]): Structu
     return sectionTree(layout.outline, layout.pages.length);
   }
   const marginNoise = repeatedMarginTexts(layout);
+  // 全篇正文字号中位数：单页中位数在封面/标题页会严重偏大，导致正文页的标题判定失真。
+  const documentSize = documentBodySize(layout, masks, marginNoise);
   const entries: Array<{ title: string; page: number; level: number; origin: string }> = [];
   for (const page of layout.pages) {
     const lines = visibleLines(page, masks).filter(
@@ -276,7 +330,9 @@ export function documentStructure(layout: PdfLayout, masks: PageMask[]): Structu
       .map((line) => line.size)
       .filter((size): size is number => typeof size === 'number' && size > 0)
       .sort((left, right) => left - right);
-    const bodySize = sizes.length > 0 ? sizes[Math.floor(sizes.length / 2)] : undefined;
+    const pageSize = sizes.length > 0 ? sizes[Math.floor(sizes.length / 2)] : undefined;
+    // 优先全篇中位数；全篇没有字号信息时退回本页中位数。
+    const bodySize = documentSize ?? pageSize;
     const maxSize = sizes.length > 0 ? sizes[sizes.length - 1] : undefined;
     for (const line of lines) {
       let item = heading(line.text, line.size, bodySize);
@@ -285,6 +341,9 @@ export function documentStructure(layout: PdfLayout, masks: PageMask[]): Structu
         line.bbox[0] + line.bbox[2] > 0.7 &&
         line.bbox[0] + line.bbox[2] < 1.3 &&
         line.bbox[2] - line.bbox[0] < 0.86;
+      const looksLikeAuthor =
+        /[,，]/.test(line.text) &&
+        /(大学|学院|研究院|研究所|系|@|university|college|institute)/i.test(line.text);
       if (
         !item &&
         maxSize != null &&
@@ -294,7 +353,8 @@ export function documentStructure(layout: PdfLayout, masks: PageMask[]): Structu
         line.size >= bodySize * 1.18 &&
         centered &&
         line.bbox[1] < 0.4 &&
-        line.text.trim().length >= 3
+        line.text.trim().length >= 3 &&
+        !looksLikeAuthor
       ) {
         item = { title: line.text.trim(), level: 1 };
       }
@@ -307,14 +367,12 @@ export function documentStructure(layout: PdfLayout, masks: PageMask[]): Structu
         line.size != null &&
         line.size >= bodySize * 1.22 &&
         line.text.trim().length >= 3 &&
-        line.text.trim().length <= 90
+        line.text.trim().length <= 90 &&
+        !looksLikeAuthor
       ) {
         item = { title: line.text.trim(), level: 1 };
       }
       // 非首页/非居中的大字号章节标题；作者与单位行单独排除。
-      const looksLikeAuthor =
-        /[,，]/.test(line.text) &&
-        /(大学|学院|研究院|研究所|系|@|university|college|institute)/i.test(line.text);
       if (
         !item &&
         bodySize != null &&

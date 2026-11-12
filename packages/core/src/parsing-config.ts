@@ -257,6 +257,11 @@ function isLoopback(value: string): boolean {
   }
 }
 
+/** 地址是否本机（区域识别回退视觉模型时用来判断是否触及 allow_remote 隐私开关）。 */
+export function isLoopbackUrl(value: string): boolean {
+  return isLoopback(value);
+}
+
 /** 地址归属层级：只描述可达性（本机/局域网/公网），不评价服务优劣。 */
 function serviceTier(value: string): string {
   if (!value) return '';
@@ -396,9 +401,15 @@ export function checkParsingService(
         message:
           'MinerU 在线精准解析使用官方固定入口（' +
           url +
-          '），提交任务前没有可用的只读探测接口，因此无法预先校验 Token——识别时若 Token 无效会明确报错。' +
+          '），提交任务前没有可用的只读探测接口，因此无法预先校验 Token——' +
+          '整页识别失败时以实际返回的错误为准（HTTP 状态/批次状态/返回 message/超时都会原样提示并写入诊断日志）；' +
+          '区域框选识别永远不会调用 MinerU（它只支持整页/整文档解析），会改用本机 OCR 或你配置的视觉模型，结果里会注明来源。' +
           '识别会把这一页作为单页 PDF 上传到 MinerU 的服务器。',
-        detail: [`地址：${url}`, `模型版本：${config.mineru_online_model}`]
+        detail: [
+          `地址：${url}`,
+          `模型版本：${config.mineru_online_model}`,
+          '区域框选：不调用 MinerU（改用本机 OCR/视觉模型，并在结果里注明）'
+        ]
       };
     }
     if (config.mode === 'mineru_agent') {
@@ -411,9 +422,14 @@ export function checkParsingService(
         message:
           'MinerU 轻量解析（Agent）使用官方固定入口（' +
           url +
-          '），提交任务前没有可用的只读探测接口，因此无法预先校验——识别时若被限频会明确报错。' +
+          '），提交任务前没有可用的只读探测接口，因此无法预先校验——' +
+          '整页识别失败时以实际返回的错误为准（HTTP 状态/任务状态/返回 message/超时/限频都会原样提示并写入诊断日志）；' +
+          '区域框选识别永远不会调用 MinerU（它只支持整页/整文档解析），会改用本机 OCR 或你配置的视觉模型，结果里会注明来源。' +
           '识别会把这一页作为单页 PDF 上传到 MinerU 的服务器。',
-        detail: [`地址：${url}`]
+        detail: [
+          `地址：${url}`,
+          '区域框选：不调用 MinerU（改用本机 OCR/视觉模型，并在结果里注明）'
+        ]
       };
     }
     return {

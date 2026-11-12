@@ -194,6 +194,11 @@ interface QaAskInput extends QaAskExtras {
   /** 重新生成上一轮回答（不追加用户消息；服务端保留最后一条用户问题并重答）。 */
   regenerate?: boolean;
   audio?: { data: string; mimeType: string; filename?: string };
+  /**
+   * 语音直问标记：音频放在 voiceAudioRef，mutationFn 取一次后立即清空，
+   * 避免录音 base64 随 React Query mutation 变量长期驻留。
+   */
+  voice?: boolean;
 }
 
 export interface QaViewProps {
@@ -261,6 +266,13 @@ export function QaView({
   // ChatPanel 内部维护「笔记/批注」勾选；父级只记最近一次的口径，重发路径沿用它（默认勾选）。
   const [lastIncludeMemory, setLastIncludeMemory] = useState(true);
   const askAbortRef = useRef<AbortController | null>(null);
+  // 待发送的语音录音（base64）：mutationFn 读取一次后立即清空，避免被 mutation 变量长期持有；
+  // 录音不落库，会话里只保存转写文字（防止逐轮累积音频）。
+  const voiceAudioRef = useRef<{
+    data: string;
+    mimeType: string;
+    filename?: string;
+  } | null>(null);
   // 当前乐观用户消息的 id：请求结束只清掉「这一条」，避免清掉用户刚发的下一条。
   const askedOptimisticIdRef = useRef<string | null>(null);
 
@@ -489,6 +501,10 @@ export function QaView({
     mutationFn: (input: QaAskInput) => {
       const controller = new AbortController();
       askAbortRef.current = controller;
+      // 语音直问的录音只在这里取一次并立即清空：不放进 mutation 变量，
+      // 避免上一次录音的 base64 长期驻留内存；录音不落库，只有转写文字进入会话。
+      const voiceAudio = input.voice ? voiceAudioRef.current ?? undefined : input.audio;
+      if (input.voice) voiceAudioRef.current = null;
       // 每轮提问都重新计时（预算确认/继续阅读/重新生成的重发也一样）。
       askStartedAtRef.current = performance.now();
       setLastAnswerDurationMs(null);
@@ -500,7 +516,7 @@ export function QaView({
         confirmSearch: input.confirmSearch,
         search_token: input.searchToken,
         confirm_gap_search: input.confirmGapSearch,
-        audio: input.audio,
+        audio: voiceAudio,
         // auto 即「库内检索会话」；只有用户显式选跨文献精读才传 corpus。
         reading_scope: input.readingScope,
         reading_rigor: input.readingRigor,
@@ -558,6 +574,15 @@ export function QaView({
       }
       setBudgetWarning(null);
       resetDraft();
+      // 语音直问：全模态模型返回逐字转写后，先把乐观用户消息显示成「（语音）转写」；
+      // 服务端已把持久化的用户消息补写成同样内容，随后刷新会话详情会保持一致。
+      const audioTranscript =
+        typeof response.audio_transcript === 'string' ? response.audio_transcript.trim() : '';
+      if (audioTranscript) {
+        setOptimisticUser((current) =>
+          current ? { ...current, content: `（语音）${audioTranscript}` } : current
+        );
+      }
       // 本轮回答耗时：从 mutationFn 开始算到拿到完整响应（预算确认重发会重新计时）。
       const answerStartedAt = askStartedAtRef.current;
       askStartedAtRef.current = null;
@@ -891,7 +916,9 @@ export function QaView({
     const speechConfig = speechConfigQuery.data;
     if (!speechConfig) return null;
     if (!speechConfig.input_enabled) return '语音输入未开启：请到设置 → 语音识别里开启';
-    if (speechConfig.asr_mode !== 'system' && !speechConfig.has_asr_key) {
+    // 直接语音（全模态）由模型自己转写，不依赖本地 ASR 是否已配置；只有普通
+    // 「语音转文字填入输入框」才要求识别服务可用。
+    if (!speechConfig.direct_audio && speechConfig.asr_mode !== 'system' && !speechConfig.has_asr_key) {
       return '还没有可用的语音识别模型：请在设置 → 语音识别里填写识别服务与密钥';
     }
     return null;
@@ -956,11 +983,20 @@ export function QaView({
   };
 
   const handleAskAudio = async (audio: Blob): Promise<void> => {
+    // 直接语音（全模态）：先转成 16k 单声道 WAV 再发送——webm/opus 多数全模态接口不支持，
+    // 之前直接把 webm + `data:` 前缀发出去会 400。转换失败就退回原始录音，不阻断提问。
+    // 语音转写由全模态模型完成（不再在客户端先跑 ASR）；转写会随响应 audio_transcript 回来。
+    let payload = audio;
+    try {
+      payload = await blobToWav(audio);
+    } catch {
+      payload = audio;
+    }
     const dataUrl = await new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(String(reader.result));
       reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(audio);
+      reader.readAsDataURL(payload);
     });
     const comma = dataUrl.indexOf(',');
     const data = comma >= 0 ? dataUrl.slice(comma + 1) : '';
@@ -970,12 +1006,21 @@ export function QaView({
     resetDraft();
     const optimisticId = `local-${crypto.randomUUID()}`;
     askedOptimisticIdRef.current = optimisticId;
+    // 先显示占位；服务端在模型返回逐字转写后把会话里的用户消息补写成「（语音）转写」，
+    // 本轮响应也会带 audio_transcript，这里在 onSuccess 里同步更新乐观消息。
     setOptimisticUser({ id: optimisticId, role: 'user', content: '（语音提问）' });
+    // 音频只放进 ref，由 mutationFn 取一次并清空（不随 mutation 变量驻留）。
+    voiceAudioRef.current = {
+      data,
+      mimeType: payload.type || 'audio/webm',
+      filename: payload.type.includes('wav') ? 'speech.wav' : 'speech.webm'
+    };
     askMutation.mutate({
+      // 不再传文字问题：转写由全模态模型完成（服务端会先落占位，成功后补写正文）。
       question: '',
       confirmSearch: false,
       includeMemory: lastIncludeMemory,
-      audio: { data, mimeType: audio.type || 'audio/webm', filename: 'speech.webm' }
+      voice: true
     });
   };
 
@@ -1314,8 +1359,8 @@ export function QaView({
               activeSessionId &&
               lastUserMessage &&
               lastUserMessage.content.trim() !== '' &&
-              // 语音提问在会话里只记了占位文本，不能拿它当文字问题重答。
-              lastUserMessage.content.trim() !== '（语音提问）'
+              // 语音提问（正文是「（语音）转写」或占位）不能拿它当文字问题重答。
+              !lastUserMessage.content.trim().startsWith('（语音')
                 ? () => {
                     if (!activeSessionId || !lastUserMessage) return;
                     setBudgetWarning(null);

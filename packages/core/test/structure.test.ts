@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { LayoutPage, PdfLayout } from '../src/pdf-layout.js';
 import {
+  documentBodySize,
+  documentStructure,
   expandSections,
   heading,
   navigationNodes,
@@ -276,5 +278,87 @@ describe('unified reading order (two columns + cross-column title)', () => {
     expect(
       readingOrderLines({ page: 1, width: 600, height: 800, lines }).map((line) => line.text)
     ).toEqual(['first', 'later']);
+  });
+});
+
+describe('标题规则：中文编号与全篇字号基准', () => {
+  it('识别中文章节编号（第一章/一、/（一）/1、/1．）与章节词', () => {
+    expect(heading('第一章 绪论')).toMatchObject({ level: 1 });
+    expect(heading('第二节 数据来源')).toMatchObject({ level: 2 });
+    expect(heading('一、导言')).toMatchObject({ level: 2 });
+    expect(heading('（一）研究背景')).toMatchObject({ level: 3 });
+    expect(heading('(二) 数据与方法')).toMatchObject({ level: 3 });
+    expect(heading('1、引言')).toMatchObject({ level: 1 });
+    expect(heading('1．绪论')).toMatchObject({ level: 1 });
+    expect(heading('1 引言', 10, 10)).toMatchObject({ level: 1 });
+    expect(heading('2.1 研究方法')).toMatchObject({ level: 2 });
+    expect(heading('摘要')).toMatchObject({ level: 1 });
+    expect(heading('参考文献')).toMatchObject({ level: 1 });
+    expect(heading('致谢')).toMatchObject({ level: 1 });
+    expect(heading('本文认为这是普通正文。')).toBeNull();
+  });
+
+  it('排除作者单位、文献条目与正文长句', () => {
+    expect(heading('1 北京大学计算机学院，北京 100871', 10, 10)).toBeNull();
+    expect(heading('[1] Smith, J. (2020). Alpha study. Journal A.', 9, 10)).toBeNull();
+    expect(
+      heading('1 This is a whole body sentence that was hard wrapped by the layout engine', 10, 10)
+    ).toBeNull();
+  });
+
+  it('用全篇正文字号中位数，而不是封面单页的大字号', () => {
+    const layout: PdfLayout = {
+      author: '',
+      outline: [],
+      pages: [
+        {
+          page: 1,
+          width: 600,
+          height: 800,
+          lines: [
+            { text: '封面大标题', bbox: [0.2, 0.1, 0.8, 0.16], size: 28 },
+            { text: '作者：张三', bbox: [0.3, 0.2, 0.7, 0.24], size: 12 }
+          ]
+        },
+        {
+          page: 2,
+          width: 600,
+          height: 800,
+          lines: [
+            { text: '第一章 绪论', bbox: [0.1, 0.08, 0.4, 0.11], size: 14 },
+            { text: '正文第一行要足够长，才能作为正文字号样本。', bbox: [0.1, 0.15, 0.9, 0.17], size: 10 },
+            { text: '正文第二行同样比较长，继续提供正文字号样本。', bbox: [0.1, 0.19, 0.9, 0.21], size: 10 },
+            { text: '正文第三行仍然比较长，避免中位数被标题带偏。', bbox: [0.1, 0.23, 0.9, 0.25], size: 10 },
+            { text: '正文第四行用来凑够正文字号样本的数量。', bbox: [0.1, 0.27, 0.9, 0.29], size: 10 },
+            { text: '正文第五行同样是十号字的正文内容。', bbox: [0.1, 0.31, 0.9, 0.33], size: 10 }
+          ]
+        }
+      ]
+    };
+    expect(documentBodySize(layout)).toBe(10);
+    expect(documentStructure(layout, []).map((node) => node.title)).toEqual([
+      '封面大标题',
+      '第一章 绪论'
+    ]);
+  });
+
+  it('跨页重复的页眉文字不进入章节标题', () => {
+    const header = '某某大学博士学位论文';
+    const body = '正文内容放在页面中部，用来提供正文字号样本。';
+    const makePages = (count: number): PdfLayout['pages'] =>
+      [1, 2, 3, 4].slice(0, count).map((page) => ({
+        page,
+        width: 600,
+        height: 800,
+        lines: [
+          { text: header, bbox: [0.3, 0.02, 0.7, 0.05], size: 14 },
+          { text: body, bbox: [0.1, 0.3, 0.9, 0.33], size: 10 },
+          { text: `${body}（续）`, bbox: [0.1, 0.35, 0.9, 0.38], size: 10 },
+          { text: `${body}（再续）`, bbox: [0.1, 0.4, 0.9, 0.43], size: 10 }
+        ]
+      }));
+    expect(documentStructure({ pages: makePages(4), author: '', outline: [] }, [])).toEqual([]);
+    // 2 页短文里的重复页眉同样要排除（旧阈值 3 在 2 页文档上永远达不到）。
+    expect(documentStructure({ pages: makePages(2), author: '', outline: [] }, [])).toEqual([]);
   });
 });

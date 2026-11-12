@@ -9,9 +9,12 @@ import { createWorker } from 'tesseract.js';
 import type { OcrLine, OcrPageResult, ParsingConfigRecord } from '@studianda/shared';
 import {
   getParsingConfig,
+  isLoopbackUrl,
   parsingConfigForUse,
   resolveVisionProfile
 } from './parsing-config.js';
+import { resolveVisualService } from './model-services.js';
+import { appendErrorLog } from './error-log.js';
 import type { SecretStore } from './secrets.js';
 import type { Store } from './store.js';
 import { OCR_LANGUAGE_MIN_BYTES, selectedOcrLanguages } from './ocr-languages.js';
@@ -333,6 +336,136 @@ async function singlePagePdf(
   return pdf.save();
 }
 
+/** MinerU 单步请求超时（与既有 120 秒一致）。 */
+const MINERU_STEP_TIMEOUT_MS = 120_000;
+/** MinerU 轮询次数上限：100 次 × 3 秒 ≈ 5 分钟。 */
+const MINERU_POLL_MAX_ATTEMPTS = 100;
+
+/** MinerU 轮询间隔：测试/调试可用环境变量缩短（默认 3 秒；未设置时不能用 Number('')=0）。 */
+function mineruPollIntervalMs(): number {
+  const raw = (process.env.STUDIANDA_MINERU_POLL_INTERVAL_MS ?? '').trim();
+  if (!raw) return 3000;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : 3000;
+}
+
+/** 从响应文本里提取可读 message（JSON msg/message/detail/error/err_msg，或原始文本片段）。 */
+function errorBodyDetail(raw: string): string {
+  const text = raw.trim();
+  if (!text) return '';
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    for (const key of ['msg', 'message', 'detail', 'error', 'err_msg']) {
+      const value = parsed[key];
+      if (typeof value === 'string' && value.trim()) return value.trim().slice(0, 300);
+    }
+  } catch {
+    // 不是 JSON：按原文截断
+  }
+  return text.replace(/\s+/g, ' ').slice(0, 300);
+}
+
+function isTimeoutError(error: unknown): boolean {
+  const name = (error as { name?: unknown } | null)?.name;
+  return name === 'TimeoutError' || name === 'AbortError';
+}
+
+/**
+ * MinerU 请求统一出口：把超时/网络失败、HTTP 状态 + 返回 message 转成用户能核对、
+ * 能据此处理的错误（Token 无效 / 限频 / 服务端错误 / 超时），不吞原始信息。
+ */
+async function mineruFetch(
+  label: string,
+  step: string,
+  url: string,
+  init: RequestInit = {}
+): Promise<Response> {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(MINERU_STEP_TIMEOUT_MS) });
+  } catch (error) {
+    if (isTimeoutError(error)) {
+      throw new Error(
+        `${label}${step}超时（${MINERU_STEP_TIMEOUT_MS / 1000} 秒没有响应）：可能是网络不可达或被 MinerU 限频，请稍后重试。`
+      );
+    }
+    throw new Error(
+      `${label}${step}网络请求失败：${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+}
+
+/** HTTP 非 2xx：带上状态码、MinerU 返回的 message 与可操作的提示。 */
+async function mineruHttpError(
+  label: string,
+  step: string,
+  response: Response
+): Promise<Error> {
+  let detail = '';
+  try {
+    detail = errorBodyDetail(await response.text());
+  } catch {
+    detail = '';
+  }
+  const status = response.status;
+  const hint =
+    status === 401 || status === 403
+      ? '（MinerU Token 无效或没有权限：请到「设置 → 识别方式」检查 Token）'
+      : status === 429
+        ? '（请求被 MinerU 限频：请稍后重试）'
+        : status >= 500
+          ? '（MinerU 服务端错误：可稍后重试）'
+          : '';
+  return new Error(
+    `${label}${step}失败：HTTP ${status}${detail ? `：${detail}` : ''}${hint}`
+  );
+}
+
+/** 读 MinerU 的 JSON 响应；返回非 JSON（网关错误页等）时保留原文片段。 */
+async function readMineruJson<T>(
+  label: string,
+  step: string,
+  response: Response
+): Promise<T> {
+  const raw = await response.text();
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    throw new Error(
+      `${label}${step}返回的不是 JSON（HTTP ${response.status}）：${errorBodyDetail(raw) || '空响应'}`
+    );
+  }
+}
+
+/**
+ * MinerU 的 code 字段：0 = 成功，缺失视为成功（老代理/测试桩可能不返回 code），
+ * 其它值视为被拒绝并带上它给的 message。
+ */
+function mineruCodeRejected(body: { code?: unknown }): boolean {
+  if (body.code === undefined || body.code === null) return false;
+  return Number(body.code) !== 0;
+}
+
+/** MinerU 返回 code != 0：把 code 与它给的 message 原样带给用户。 */
+function mineruRejected(
+  label: string,
+  step: string,
+  body: { code?: unknown; msg?: unknown; message?: unknown }
+): Error {
+  const code = body.code ?? '';
+  const message =
+    typeof body.msg === 'string' && body.msg.trim()
+      ? body.msg.trim().slice(0, 300)
+      : typeof body.message === 'string' && body.message.trim()
+        ? body.message.trim().slice(0, 300)
+        : '';
+  const hint = label.includes('在线')
+    ? '（若与 Token/权限有关，请到「设置 → 识别方式」检查 MinerU Token）'
+    : '';
+  return new Error(
+    `${label}${step}被拒绝：code=${String(code)}${message ? `，${message}` : ''}${hint}`
+  );
+}
+
 /** MinerU 官方轻量解析 Agent：单文件上传 → 轮询 → 下载 Markdown，无需 Token。 */
 async function recognizeMineruAgent(
   store: Store,
@@ -342,57 +475,80 @@ async function recognizeMineruAgent(
   rendered: Awaited<ReturnType<typeof renderPdfPage>>,
   baseUrl: string
 ): Promise<OcrPageResult> {
+  const label = 'MinerU 轻量解析（Agent）';
   const base = baseUrl.replace(/\/+$/, '');
-  const created = await fetch(`${base}/parse/file`, {
+  const created = await mineruFetch(label, '申请上传', `${base}/parse/file`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ file_name: 'page.pdf' }),
-    signal: AbortSignal.timeout(120_000)
+    body: JSON.stringify({ file_name: 'page.pdf' })
   });
-  if (!created.ok) throw new Error(`MinerU 轻量解析申请上传返回 HTTP ${created.status}`);
-  const createdBody = (await created.json()) as {
+  if (!created.ok) throw await mineruHttpError(label, '申请上传', created);
+  const createdBody = await readMineruJson<{
     code?: number;
+    msg?: unknown;
+    message?: unknown;
     data?: { task_id?: unknown; file_url?: unknown };
-  };
-  if (createdBody.code !== 0) throw new Error('MinerU 轻量解析没有受理这次上传');
+  }>(label, '申请上传', created);
+  if (mineruCodeRejected(createdBody)) throw mineruRejected(label, '申请上传', createdBody);
   const taskId = createdBody.data?.task_id;
   const fileUrl = createdBody.data?.file_url;
   if (typeof taskId !== 'string' || typeof fileUrl !== 'string') {
-    throw new Error('MinerU 轻量解析返回的上传信息不完整');
+    throw new Error(`${label}返回的上传信息不完整（缺少 task_id 或 file_url）`);
   }
   const singlePage = await singlePagePdf(rendered);
-  const uploaded = await fetch(fileUrl, {
+  const uploaded = await mineruFetch(label, '上传文件', fileUrl, {
     method: 'PUT',
-    body: new Uint8Array(singlePage),
-    signal: AbortSignal.timeout(120_000)
+    body: new Uint8Array(singlePage)
   });
-  if (!uploaded.ok) throw new Error(`上传到 MinerU 轻量解析失败 HTTP ${uploaded.status}`);
+  if (!uploaded.ok) throw await mineruHttpError(label, '上传文件', uploaded);
   let markdownUrl = '';
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 3000));
-    const polled = await fetch(`${base}/parse/${encodeURIComponent(taskId)}`, {
-      signal: AbortSignal.timeout(120_000)
-    });
-    if (!polled.ok) throw new Error(`MinerU 轻量解析查询返回 HTTP ${polled.status}`);
-    const pollBody = (await polled.json()) as {
+  let lastState = '';
+  for (let attempt = 0; attempt < MINERU_POLL_MAX_ATTEMPTS; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, mineruPollIntervalMs()));
+    const polled = await mineruFetch(
+      label,
+      '查询任务',
+      `${base}/parse/${encodeURIComponent(taskId)}`
+    );
+    if (!polled.ok) throw await mineruHttpError(label, '查询任务', polled);
+    const pollBody = await readMineruJson<{
       code?: number;
-      data?: { state?: string; markdown_url?: unknown; err_msg?: unknown };
-    };
-    if (pollBody.code !== 0) throw new Error('MinerU 轻量解析查询任务被拒绝');
-    const state = pollBody.data?.state ?? '';
-    if (state === 'done') {
-      markdownUrl = typeof pollBody.data?.markdown_url === 'string'
-        ? pollBody.data.markdown_url
-        : '';
+      msg?: unknown;
+      message?: unknown;
+      data?: {
+        state?: string;
+        markdown_url?: unknown;
+        err_msg?: unknown;
+        err_code?: unknown;
+      };
+    }>(label, '查询任务', polled);
+    if (mineruCodeRejected(pollBody)) throw mineruRejected(label, '查询任务', pollBody);
+    lastState = pollBody.data?.state ?? '';
+    if (lastState === 'done') {
+      markdownUrl =
+        typeof pollBody.data?.markdown_url === 'string' ? pollBody.data.markdown_url : '';
       break;
     }
-    if (state === 'failed') throw new Error('MinerU 轻量解析失败');
+    if (lastState === 'failed') {
+      const message = typeof pollBody.data?.err_msg === 'string' ? pollBody.data.err_msg : '';
+      const errCode = pollBody.data?.err_code;
+      throw new Error(
+        `${label}失败${message ? `：${message.slice(0, 300)}` : ''}` +
+          (errCode != null ? `（错误码 ${String(errCode)}）` : '')
+      );
+    }
   }
-  if (!markdownUrl) throw new Error('MinerU 轻量解析仍在处理这一页或没有返回 Markdown 地址');
-  const downloaded = await fetch(markdownUrl, { signal: AbortSignal.timeout(120_000) });
-  if (!downloaded.ok) throw new Error(`下载 MinerU Markdown 返回 HTTP ${downloaded.status}`);
+  if (!markdownUrl) {
+    throw new Error(
+      lastState === 'done'
+        ? `${label}返回完成但没有 Markdown 地址（task_id=${taskId}）`
+        : `${label}轮询超时：${MINERU_POLL_MAX_ATTEMPTS} 次查询内任务仍未完成（最后状态：${lastState || '未知'}，task_id=${taskId}）。MinerU 可能繁忙/限频，请稍后重试或在 MinerU 控制台查看该任务。`
+    );
+  }
+  const downloaded = await mineruFetch(label, '下载 Markdown 文件', markdownUrl);
+  if (!downloaded.ok) throw await mineruHttpError(label, '下载 Markdown 文件', downloaded);
   const text = (await downloaded.text()).trim();
-  if (!text) throw new Error('MinerU 轻量解析返回了空 Markdown');
+  if (!text) throw new Error(`${label}返回了空 Markdown`);
   store.cacheOcrPage(documentId, page, text, []);
   return {
     page,
@@ -413,34 +569,39 @@ async function recognizeMineruOnline(
   baseUrl: string,
   onlineModel: string
 ): Promise<OcrPageResult> {
+  const label = 'MinerU 在线精准解析';
   const base = baseUrl.replace(/\/+$/, '');
   const key = secrets.get('parsing.service_key')?.trim() ?? '';
-  if (!key) throw new Error('MinerU 在线服务需要 mineru.net 的 API Token');
+  if (!key) {
+    throw new Error(
+      'MinerU 在线服务需要 mineru.net 的 API Token：请到「设置 → 识别方式」填写（Token 只保存在本机并加密）。'
+    );
+  }
   const auth = { Authorization: `Bearer ${key}` };
-  const applied = await fetch(`${base}/file-urls/batch`, {
+  const applied = await mineruFetch(label, '申请上传', `${base}/file-urls/batch`, {
     method: 'POST',
     headers: { ...auth, 'content-type': 'application/json' },
-    body: JSON.stringify({ files: [{ name: 'page.pdf' }], model_version: onlineModel }),
-    signal: AbortSignal.timeout(120_000)
+    body: JSON.stringify({ files: [{ name: 'page.pdf' }], model_version: onlineModel })
   });
-  if (!applied.ok) throw new Error(`MinerU 在线申请上传返回 HTTP ${applied.status}`);
-  const appliedBody = (await applied.json()) as {
+  if (!applied.ok) throw await mineruHttpError(label, '申请上传', applied);
+  const appliedBody = await readMineruJson<{
     code?: number;
+    msg?: unknown;
+    message?: unknown;
     data?: { batch_id?: unknown; file_urls?: unknown };
-  };
-  if (appliedBody.code !== 0) throw new Error('MinerU 在线服务没有受理这次上传申请');
+  }>(label, '申请上传', applied);
+  if (mineruCodeRejected(appliedBody)) throw mineruRejected(label, '申请上传', appliedBody);
   const batchId = appliedBody.data?.batch_id;
   const urls = appliedBody.data?.file_urls;
   if (typeof batchId !== 'string' || !Array.isArray(urls) || typeof urls[0] !== 'string') {
-    throw new Error('MinerU 在线服务返回的上传信息不完整');
+    throw new Error(`${label}返回的上传信息不完整（缺少 batch_id 或 file_urls）`);
   }
   const singlePage = await singlePagePdf(rendered);
-  const uploaded = await fetch(urls[0], {
+  const uploaded = await mineruFetch(label, '上传文件', urls[0], {
     method: 'PUT',
-    body: new Uint8Array(singlePage),
-    signal: AbortSignal.timeout(120_000)
+    body: new Uint8Array(singlePage)
   });
-  if (!uploaded.ok) throw new Error(`上传到 MinerU 在线存储失败 HTTP ${uploaded.status}`);
+  if (!uploaded.ok) throw await mineruHttpError(label, '上传文件', uploaded);
   type OnlineRow = {
     state?: string;
     full_zip_url?: unknown;
@@ -448,46 +609,62 @@ async function recognizeMineruOnline(
     err_code?: unknown;
   };
   let row: OnlineRow | null = null;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 3000));
-    const polled = await fetch(`${base}/extract-results/batch/${encodeURIComponent(batchId)}`, {
-      headers: auth,
-      signal: AbortSignal.timeout(120_000)
-    });
-    if (!polled.ok) throw new Error(`MinerU 在线查询批次返回 HTTP ${polled.status}`);
-    const body = (await polled.json()) as {
+  let lastState = '';
+  for (let attempt = 0; attempt < MINERU_POLL_MAX_ATTEMPTS; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, mineruPollIntervalMs()));
+    const polled = await mineruFetch(
+      label,
+      '查询批次',
+      `${base}/extract-results/batch/${encodeURIComponent(batchId)}`,
+      { headers: auth }
+    );
+    if (!polled.ok) throw await mineruHttpError(label, '查询批次', polled);
+    const body = await readMineruJson<{
+      code?: number;
+      msg?: unknown;
+      message?: unknown;
       data?: { extract_result?: unknown };
-    };
+    }>(label, '查询批次', polled);
+    if (mineruCodeRejected(body)) throw mineruRejected(label, '查询批次', body);
     const rows = body.data?.extract_result as OnlineRow[] | OnlineRow | undefined;
     row = Array.isArray(rows) ? (rows[0] ?? null) : (rows ?? null);
-    const state = row?.state ?? '';
-    if (state === 'done') break;
-    if (state === 'failed') {
+    lastState = row?.state ?? '';
+    if (lastState === 'done') break;
+    if (lastState === 'failed') {
       const message = typeof row?.err_msg === 'string' ? row.err_msg : '';
-      throw new Error(`MinerU 在线解析失败${message ? `：${message.slice(0, 200)}` : ''}`);
+      const errCode = row?.err_code;
+      throw new Error(
+        `${label}失败${message ? `：${message.slice(0, 300)}` : ''}` +
+          (errCode != null ? `（错误码 ${String(errCode)}）` : '')
+      );
     }
+  }
+  if (lastState !== 'done') {
+    throw new Error(
+      `${label}轮询超时：${MINERU_POLL_MAX_ATTEMPTS} 次查询内批次仍未完成（最后状态：${lastState || '未知'}，batch_id=${batchId}）。MinerU 可能繁忙/限频，请稍后重试或在 MinerU 控制台查看该批次。`
+    );
   }
   const zipUrl = row?.full_zip_url;
   if (typeof zipUrl !== 'string' || !zipUrl) {
-    throw new Error('MinerU 在线服务没有返回结果包地址');
+    throw new Error(`${label}返回完成但没有结果包地址（batch_id=${batchId}）`);
   }
-  const zipped = await fetch(zipUrl, { signal: AbortSignal.timeout(120_000) });
-  if (!zipped.ok) throw new Error(`下载 MinerU 结果包失败 HTTP ${zipped.status}`);
+  const zipped = await mineruFetch(label, '下载结果包', zipUrl);
+  if (!zipped.ok) throw await mineruHttpError(label, '下载结果包', zipped);
   const bytes = new Uint8Array(await zipped.arrayBuffer());
-  if (bytes.byteLength > 120 * 1024 * 1024) throw new Error('MinerU 结果包超过 120 MB');
+  if (bytes.byteLength > 120 * 1024 * 1024) throw new Error(`${label}结果包超过 120 MB`);
   let archive: Record<string, Uint8Array>;
   try {
     archive = unzipSync(bytes);
   } catch {
-    throw new Error('MinerU 结果包不是有效 zip');
+    throw new Error(`${label}结果包不是有效 zip（下载可能不完整或被网络拦截）`);
   }
   const entry = Object.entries(archive).find(
     ([name]) => name.split('/').pop() === 'full.md'
   );
-  if (!entry) throw new Error('MinerU 结果包里没有 full.md');
-  if (entry[1].byteLength > 8 * 1024 * 1024) throw new Error('MinerU full.md 超过 8 MB');
+  if (!entry) throw new Error(`${label}结果包里没有 full.md`);
+  if (entry[1].byteLength > 8 * 1024 * 1024) throw new Error(`${label}full.md 超过 8 MB`);
   const text = strFromU8(entry[1]).trim();
-  if (!text) throw new Error('MinerU full.md 为空');
+  if (!text) throw new Error(`${label}full.md 为空`);
   store.cacheOcrPage(documentId, page, text, []);
   return {
     page,
@@ -496,6 +673,25 @@ async function recognizeMineruOnline(
     image: { width: rendered.width, height: rendered.height },
     engine: 'mineru_online'
   };
+}
+
+/**
+ * MinerU 整页识别统一包装：失败时把**真实原因**（HTTP 状态/批次状态/返回 message/超时）
+ * 原样写进错误日志（诊断可见），再把同一个错误抛给调用方 → OCR 路由 → 阅读页/识别页错误提示。
+ * 不吞信息、不笼统报"识别失败"。
+ */
+async function runMineruPage(
+  store: Store,
+  mode: 'mineru_agent' | 'mineru_online',
+  page: number,
+  run: () => Promise<OcrPageResult>
+): Promise<OcrPageResult> {
+  try {
+    return await run();
+  } catch (error) {
+    appendErrorLog(store.dataDir, `ocr:page:${mode}:p${page}`, error);
+    throw error;
+  }
 }
 
 /** 本机 Tesseract OCR：不依赖 sharp/libvips/OpenCV，只处理当前页图像。 */
@@ -515,17 +711,21 @@ export async function recognizePage(
     return recognizeVision(store, secrets, documentId, page, rendered, config);
   }
   if (config.mode === 'mineru_agent') {
-    return recognizeMineruAgent(store, secrets, documentId, page, rendered, config.service_url);
+    return runMineruPage(store, 'mineru_agent', page, () =>
+      recognizeMineruAgent(store, secrets, documentId, page, rendered, config.service_url)
+    );
   }
   if (config.mode === 'mineru_online') {
-    return recognizeMineruOnline(
-      store,
-      secrets,
-      documentId,
-      page,
-      rendered,
-      config.service_url,
-      config.mineru_online_model
+    return runMineruPage(store, 'mineru_online', page, () =>
+      recognizeMineruOnline(
+        store,
+        secrets,
+        documentId,
+        page,
+        rendered,
+        config.service_url,
+        config.mineru_online_model
+      )
     );
   }
   if (config.mode !== 'local') {
@@ -600,6 +800,20 @@ export interface RegionRecognition {
   textReflowed: string;
   bbox: [number, number, number, number];
   engine: string;
+  /** 来源说明（回退原因、实际调用的服务）。回退到视觉模型时必须说明 MinerU 没有被调用。 */
+  engine_note?: string;
+  /** 回退来源：识别方式为 mineru_* 等不支持裁图的方式时记录原始识别方式。 */
+  fallback_from?: string;
+}
+
+/** 识别方式的中文名（结果说明/错误提示共用，避免把 mineru_online 这种内部值直接给用户看）。 */
+export function parsingModeLabel(mode: string): string {
+  if (mode === 'local') return '本机 Tesseract';
+  if (mode === 'vision') return '视觉模型';
+  if (mode === 'custom') return '自定义解析服务';
+  if (mode === 'mineru_online') return 'MinerU 在线精准解析';
+  if (mode === 'mineru_agent') return 'MinerU 轻量解析（Agent）';
+  return mode;
 }
 
 /** 区域 OCR 的视觉指令：只转录选区，不解释不补写，图像内指令不执行。 */
@@ -642,30 +856,122 @@ async function cropRenderedRegion(
   return canvas.encode('png');
 }
 
-async function regionVisionText(
+/** 区域识别可用的视觉模型目标（显式 profile：baseUrl + apiKey + model + 模型来源）。 */
+export interface RegionVisionTarget {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  /** 模型来源：识别设置里显式选的，还是「模型服务」里绑定的视觉/全模态模型。 */
+  origin: 'parsing-config' | 'model-services';
+}
+
+function visionHost(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).host || baseUrl;
+  } catch {
+    return baseUrl;
+  }
+}
+
+/** 给用户看的模型描述：模型名 + 地址 host + 来源（不含密钥）。 */
+function regionVisionTargetLabel(target: RegionVisionTarget): string {
+  return `${target.model}（${visionHost(target.baseUrl)}，${
+    target.origin === 'parsing-config' ? '来自识别设置' : '来自「模型服务」的视觉/全模态绑定'
+  }）`;
+}
+
+/** 选区裁图只在用户允许时才发往远程服务；本机地址不受限。 */
+function assertRegionVisionAllowed(config: ParsingConfigRecord, target: RegionVisionTarget): void {
+  if (!config.allow_remote && !isLoopbackUrl(target.baseUrl)) {
+    throw new Error('请先在识别设置中允许向所选远程服务发送页面图像。');
+  }
+}
+
+/** vision 模式的目标：解析配置里的 connection_id + model（主路径）。 */
+function regionVisionTargetFromConfig(
   store: Store,
   secrets: SecretStore,
-  config: ParsingConfigRecord,
-  crop: Buffer
-): Promise<string> {
+  config: ParsingConfigRecord
+): RegionVisionTarget | null {
   const model = config.model.trim();
-  if (!model) throw new Error('请先选择支持图像的识别模型。');
+  if (!model) return null;
   const profile = resolveVisionProfile(store, secrets, config);
-  if (!profile) throw new Error('vision 模式需要先配置模型服务地址。');
+  if (!profile?.baseUrl) return null;
+  return { baseUrl: profile.baseUrl, apiKey: profile.apiKey, model, origin: 'parsing-config' };
+}
+
+/**
+ * 当前识别方式不支持裁图（MinerU 系列等）时的区域识别目标。
+ *
+ * 用户很可能已经在「模型服务」里配了视觉/全模态模型，或之前选过 OCR 视觉模型：
+ * 依次尝试（1）解析配置里保存的视觉模型 →（2）模型服务的视觉/全模态模型。
+ * 都没有才报错。**这里不会调用 MinerU**（MinerU 只支持整页/整文档解析）。
+ */
+function resolveRegionVisionFallback(
+  store: Store,
+  secrets: SecretStore,
+  config: ParsingConfigRecord
+): RegionVisionTarget | null {
+  const configured = regionVisionTargetFromConfig(store, secrets, config);
+  if (configured) return configured;
+  const visual = resolveVisualService(store, secrets);
+  if (visual) {
+    return {
+      baseUrl: visual.baseUrl,
+      apiKey: visual.apiKey,
+      model: visual.model,
+      origin: 'model-services'
+    };
+  }
+  return null;
+}
+
+/** 区域识别回退到视觉模型时的来源说明（用户据此确认 MinerU 没有被调用）。 */
+function regionFallbackEngineNote(
+  mode: string,
+  target: RegionVisionTarget
+): { engine_note: string; fallback_from: string } {
+  const modeLabel = parsingModeLabel(mode);
+  const mineruNote = mode.startsWith('mineru')
+    ? 'MinerU 没有被调用，因此不存在 MinerU 出错。'
+    : '原识别方式没有被调用。';
+  return {
+    fallback_from: mode,
+    engine_note:
+      `当前整页识别方式是${modeLabel}（${mode}）：它不支持只识别框选区域，` +
+      `本次区域识别改用视觉模型：${regionVisionTargetLabel(target)}，只发送裁出的选区图片。` +
+      mineruNote
+  };
+}
+
+/** 没有可用视觉模型时的错误：说清「区域不会调用 MinerU」以及去哪里配置。 */
+function regionVisionUnsupportedMessage(mode: string): string {
+  const tail = mode.startsWith('mineru')
+    ? `当前识别方式是${parsingModeLabel(mode)}，区域框选不会调用 MinerU，本次也没有调用 MinerU。`
+    : '';
+  return (
+    '未配置可用视觉模型：请在设置→识别方式选择视觉模型，或在模型服务为模型勾选视觉/全模态。' +
+    tail
+  );
+}
+
+async function regionVisionText(target: RegionVisionTarget, crop: Buffer): Promise<string> {
+  if (!target.model.trim()) throw new Error('请先选择支持图像的识别模型。');
+  const baseUrl = target.baseUrl.replace(/\/+$/, '');
   // 区域识别输出上限：min(任务上限 4096, 官方登记的最大输出)；官方没登记时就是 4096。
   const regionMaxTokens = requestMaxTokensFor(
     TASK_MAX_TOKENS.ocrRegionVision,
-    profile.baseUrl,
-    model
+    baseUrl,
+    target.model
   );
-  const response = await fetch(`${profile.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+  const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      ...(profile.apiKey ? { Authorization: `Bearer ${profile.apiKey}` } : {})
+      ...(target.apiKey ? { Authorization: `Bearer ${target.apiKey}` } : {})
     },
     body: JSON.stringify({
-      model,
+      model: target.model,
       max_tokens: regionMaxTokens,
       messages: [
         {
@@ -828,7 +1134,10 @@ export async function ensureOcrBoxes(
 /**
  * 区域 OCR：只对裁出的选区识别。
  *
- * - 支持本机 Tesseract、vision、custom；MinerU 系列明确不支持（避免把整页发出去）。
+ * - 本机 Tesseract、vision、custom 按原方式处理；
+ * - MinerU 系列等不支持裁图的方式**回退到已配置的视觉模型**（只发裁出的选区图片），
+ *   完全没有可用视觉模型时才报「未配置可用视觉模型」；
+ * - vision 模式与回退路径都受 `parsing.allow_remote` 约束：不允许发远程时不发。
  * - 返回逐行原文 `text` 与整理成段的 `textReflowed`；落库用 addVisualChunk（bbox=选区），
  *   不写 page_edits、不覆盖整页缓存。
  */
@@ -869,16 +1178,32 @@ export async function recognizeRegion(
         normalized.y1
       ];
       store.addVisualChunk(documentId, page, textLayer, bbox);
-      return { text: textLayer, textReflowed: reflowLines(textLayer), bbox, engine: 'text_layer' };
+      return {
+        text: textLayer,
+        textReflowed: reflowLines(textLayer),
+        bbox,
+        engine: 'text_layer',
+        engine_note: '直接取 PDF 文本层：没有调用 OCR/视觉模型，也没有上传页面图像。'
+      };
     }
   }
-  if (config.mode.startsWith('mineru')) {
-    throw new Error('区域识别暂不支持当前识别方式，请改用本机或视觉模型。');
+  // MinerU 系列等不支持「只裁选区」的方式：先确认有可用的视觉模型回退，再渲染/裁图
+  // （没有模型时直接给配置指引，不做无意义的整页渲染）。这里不会调用 MinerU。
+  const needsVisionFallback =
+    config.mode !== 'local' && config.mode !== 'vision' && config.mode !== 'custom';
+  const fallbackTarget = needsVisionFallback
+    ? resolveRegionVisionFallback(store, secrets, config)
+    : null;
+  if (needsVisionFallback && !fallbackTarget) {
+    throw new Error(regionVisionUnsupportedMessage(config.mode));
   }
+  if (fallbackTarget) assertRegionVisionAllowed(config, fallbackTarget);
   const rendered = await renderPdfPage(documentId, page, store, 2, 'region');
   const crop = await cropRenderedRegion(rendered, normalized);
   let text = '';
   let engine = '';
+  let engine_note = '';
+  let fallback_from: string | undefined;
   if (config.mode === 'local') {
     const parts: string[] = [];
     try {
@@ -899,14 +1224,38 @@ export async function recognizeRegion(
     }
     text = parts.join('\n');
     engine = 'tesseract.js';
+    engine_note = '区域识别使用本机 Tesseract：页面图像只在本机处理，没有上传。';
   } else if (config.mode === 'vision') {
-    text = await regionVisionText(store, secrets, config, crop);
+    const target = regionVisionTargetFromConfig(store, secrets, config);
+    if (!target) throw new Error('未配置可用视觉模型：请在设置→识别方式选择视觉模型。');
+    assertRegionVisionAllowed(config, target);
+    text = await regionVisionText(target, crop);
     engine = 'vision';
+    engine_note = `区域识别使用 vision 模式的视觉模型：${regionVisionTargetLabel(
+      target
+    )}，只发送裁出的选区图片。`;
   } else if (config.mode === 'custom') {
     text = await regionCustomText(secrets, crop, config.service_url);
     engine = 'custom';
+    engine_note = `区域识别使用自定义解析服务（${visionHost(
+      config.service_url
+    )}），只发送裁出的选区图片。`;
+  } else if (fallbackTarget) {
+    // MinerU 系列等不支持「只裁选区」的方式：回退到用户已配置的视觉模型，
+    // 仍然只发送裁出的选区图片（不发整页/整份 PDF）。结果里明确写「MinerU 没有被调用」。
+    const note = regionFallbackEngineNote(config.mode, fallbackTarget);
+    engine_note = note.engine_note;
+    fallback_from = note.fallback_from;
+    try {
+      text = await regionVisionText(fallbackTarget, crop);
+    } catch (error) {
+      // 回退视觉模型失败也写错误日志（诊断可查），并原样抛给 UI。
+      appendErrorLog(store.dataDir, `ocr:region:${config.mode}:p${page}`, error);
+      throw error;
+    }
+    engine = 'vision';
   } else {
-    throw new Error('区域识别暂不支持当前识别方式，请改用本机或视觉模型。');
+    throw new Error(regionVisionUnsupportedMessage(config.mode));
   }
   if (!text.trim()) throw new Error('此区域未识别到文字，请扩大选区重试');
   const bbox: [number, number, number, number] = [
@@ -917,5 +1266,12 @@ export async function recognizeRegion(
   ];
   // 区域结果只并入检索索引；不写 page_edits、不覆盖整页识别缓存。
   store.addVisualChunk(documentId, page, text, bbox);
-  return { text, textReflowed: reflowLines(text), bbox, engine };
+  return {
+    text,
+    textReflowed: reflowLines(text),
+    bbox,
+    engine,
+    ...(engine_note ? { engine_note } : {}),
+    ...(fallback_from ? { fallback_from } : {})
+  };
 }

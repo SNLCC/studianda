@@ -8,6 +8,7 @@ import {
   API_ERROR_CODES,
   DOCUMENT_CATEGORY_LABELS,
   DOCUMENT_TYPE_OPTIONS,
+  REFERENCE_GRAPH_ALL_NODE_LIMIT,
   documentCategoryOf,
   documentTypeLabel,
   withAiExportHeader,
@@ -36,6 +37,7 @@ import type {
   ReferenceEntry,
   ReferenceEntryInput,
   ReferenceGraphNode,
+  ReferenceNodeKind,
   RuntimeInfo,
   SearchHit,
   TranslationJobRecord,
@@ -564,8 +566,8 @@ function documentCategory(document: DocumentSummary): DocumentCategory {
 const LIBRARY_SORT_STORAGE_KEY = 'studianda.library.sort';
 const LIBRARY_VIEW_STORAGE_KEY = 'studianda.library.view';
 
-/** 关系图每页节点数（app 请求与视图分页保持一致）。 */
-const REFERENCE_GRAPH_PAGE_SIZE = 120;
+/** 关系图分页兜底的每页节点数（默认 all 全量模式不用它；仅超硬上限退回分页时按 500 一批）。 */
+const REFERENCE_GRAPH_PAGE_SIZE = 500;
 
 /** 字节数显示（彻底删除笔记时提示释放的图片资源大小）。 */
 function formatByteSize(bytes: number): string {
@@ -692,6 +694,9 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
   // 全库引用关系图。
   const [showReferenceGraph, setShowReferenceGraph] = useState(false);
   const [referenceGraphOffset, setReferenceGraphOffset] = useState(0);
+  // 全库节点数超过单页上限时，类型/关键字筛选在服务端先过滤再分页（空数组 = 不过滤）。
+  const [referenceGraphKinds, setReferenceGraphKinds] = useState<ReferenceNodeKind[]>([]);
+  const [referenceGraphSearch, setReferenceGraphSearch] = useState('');
   // 独立会话页（不依附任何文献，可直接在整个文献库提问）。
   const [showQa, setShowQa] = useState(false);
   // 文件夹：null = 全部文献；'' = 未分类；其它 = 真实文件夹 id。
@@ -892,14 +897,44 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     queryFn: () => api.listNoteTags()
   });
 
-  // 全库引用关系图：按 120 个节点一页拉取；只有打开关系图视图时才请求。
+  // 全库引用关系图：默认 all 全量模式，一次返回全部节点+全部边（A 与 B/C/D 的关系边一次画全，
+  // 不再有「D 在别的页只显示 stub」的问题）；只有全库超过服务端硬上限、hasMore=true 时，
+  // 类型筛选/关键字/分页才改走服务端兜底（见 ReferenceGraphView 的 serverSideFilter）。
   const referenceGraphQuery = useQuery({
-    queryKey: ['reference-graph', referenceGraphOffset],
+    queryKey: [
+      'reference-graph',
+      referenceGraphOffset,
+      referenceGraphKinds.join(','),
+      referenceGraphSearch
+    ],
     queryFn: () =>
-      api.getReferenceGraph({ limit: REFERENCE_GRAPH_PAGE_SIZE, offset: referenceGraphOffset }),
+      api.getReferenceGraph({
+        all: true,
+        limit: REFERENCE_GRAPH_PAGE_SIZE,
+        offset: referenceGraphOffset,
+        kinds: referenceGraphKinds,
+        search: referenceGraphSearch
+      }),
     enabled: showReferenceGraph,
     placeholderData: keepPreviousData
   });
+
+  // 极端情况：库从「超过全量硬上限」缩小到上限以内后，清掉残留的服务端筛选，
+  // 让全量 + 客户端过滤重新接管（否则再勾选别的类型会因为数据已被服务端筛掉而看不到）。
+  useEffect(() => {
+    const data = referenceGraphQuery.data;
+    if (!data) return;
+    const counts = data.kindCounts;
+    const fullTotal = counts
+      ? counts.document + counts.note + counts.annotation
+      : data.totalNodes;
+    const allNodeLimit = data.allNodeLimit ?? REFERENCE_GRAPH_ALL_NODE_LIMIT;
+    if (fullTotal > allNodeLimit) return;
+    if (referenceGraphKinds.length === 0 && !referenceGraphSearch) return;
+    setReferenceGraphKinds([]);
+    setReferenceGraphSearch('');
+    setReferenceGraphOffset(0);
+  }, [referenceGraphQuery.data, referenceGraphKinds.length, referenceGraphSearch]);
 
   // 工作台卡片的翻译状态：对当前列表一次批量查询，避免每张卡片各发一次请求。
   // 有翻译任务运行时轮询，任务结束后停止，避免无谓的常驻请求。
@@ -946,6 +981,21 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
   const [tagFilter, setTagFilter] = useState('');
   const [translationNotice, setTranslationNotice] = useState('');
   const [libraryNotice, setLibraryNotice] = useState('');
+  /**
+   * 文件健康检查结果浮窗：检查是用户主动点的一次性动作，结果应该「顶部弹出、几秒消失」，
+   * 而不是一直挂在文献库页内（原来的 libraryNotice 不会自动消失）。
+   * 只有健康检查走这个浮窗，导入错误等其它提示仍留在页内。
+   */
+  const [fileHealthToast, setFileHealthToast] = useState<{
+    message: string;
+    tone: 'ok' | 'warn';
+  } | null>(null);
+  useEffect(() => {
+    if (!fileHealthToast) return undefined;
+    // 约 4.5 秒后自动消失；再次点击检查会替换内容并重新计时。
+    const timer = window.setTimeout(() => setFileHealthToast(null), 4500);
+    return () => window.clearTimeout(timer);
+  }, [fileHealthToast]);
   useEffect(() => {
     try {
       window.localStorage.setItem(LIBRARY_SORT_STORAGE_KEY, sortMode);
@@ -1310,24 +1360,30 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
   };
 
   // 文件健康检查：只读 stat，不读正文；缺失的文献在列表里用「重新连接」修复。
+  // 结果进顶部浮窗（约 4.5 秒自动消失），不再占用页内 libraryNotice 常驻提示。
   const fileHealthMutation = useMutation({
     mutationFn: () => api.getFileHealth(),
     onSuccess: (report) => {
       if (report.missing === 0) {
-        setLibraryNotice(`文件健康检查完成：${report.checked} 篇文献的文件都在。`);
+        setFileHealthToast({
+          message: `文件健康检查完成：${report.checked} 篇文献的文件都在。`,
+          tone: 'ok'
+        });
         return;
       }
       const names = report.issues
         .slice(0, 5)
         .map((issue) => `《${issue.name}》`)
         .join('、');
-      setLibraryNotice(
-        `文件健康检查完成：${report.checked} 篇中 ${report.missing} 篇文件缺失（${names}${
+      setFileHealthToast({
+        message: `文件健康检查完成：${report.checked} 篇中 ${report.missing} 篇文件缺失（${names}${
           report.issues.length > 5 ? ' 等' : ''
-        }）。可在文献卡片的「更多」里重新连接。`
-      );
+        }）。可在文献卡片的「更多」里重新连接。`,
+        tone: 'warn'
+      });
     },
-    onError: (error: Error) => setLibraryNotice(`文件健康检查失败：${error.message}`)
+    onError: (error: Error) =>
+      setFileHealthToast({ message: `文件健康检查失败：${error.message}`, tone: 'warn' })
   });
 
   const deleteMutation = useMutation({
@@ -1833,10 +1889,12 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setFolderId(null);
     resetLibraryFilters();
     setShowReferenceGraph(true);
-    if (referenceGraphOffset !== 0) {
-      // 页码变化会触发新的分页查询；这里只重置 offset。
-      setReferenceGraphOffset(0);
-    } else {
+    // 每次打开都回到「默认一屏看整体」：清空服务端筛选、回到第一页。
+    const hadFilter = referenceGraphKinds.length > 0 || referenceGraphSearch.length > 0;
+    setReferenceGraphKinds([]);
+    setReferenceGraphSearch('');
+    setReferenceGraphOffset(0);
+    if (!hadFilter && referenceGraphOffset === 0) {
       void referenceGraphQuery.refetch();
     }
     setLibraryNotice('');
@@ -3041,6 +3099,14 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
           onOpenNode={openReferenceNode}
           limit={REFERENCE_GRAPH_PAGE_SIZE}
           onPageChange={(offset) => setReferenceGraphOffset(Math.max(0, offset))}
+          onKindFilterChange={(kinds) => {
+            setReferenceGraphKinds(kinds);
+            setReferenceGraphOffset(0);
+          }}
+          onSearchChange={(search) => {
+            setReferenceGraphSearch(search);
+            setReferenceGraphOffset(0);
+          }}
         />
       ) : showStandaloneNotes ? (
         <StandaloneNotesView
@@ -3316,6 +3382,25 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
       {libraryDialogs}
       {documentInfoDialog}
       {usageNoticeDialog}
+      {/* 顶部浮窗：文件健康检查结果，固定居中、几秒后自动消失，可手动关闭。 */}
+      {fileHealthToast ? (
+        <div
+          className={`kr-health-toast kr-health-toast--${fileHealthToast.tone}`}
+          role="status"
+          aria-live="polite"
+        >
+          <span className="kr-health-toast__text">{fileHealthToast.message}</span>
+          <button
+            type="button"
+            className="kr-health-toast__close"
+            aria-label="关闭健康检查提示"
+            title="关闭提示"
+            onClick={() => setFileHealthToast(null)}
+          >
+            ×
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -3523,6 +3608,7 @@ function ReaderPage({
   onUpdateMask,
   onDeleteMask,
   onRecognizeRegion,
+  onAskRegion,
   onQuickAction,
   onUpdateAnnotation,
   onDeleteAnnotation,
@@ -3588,6 +3674,8 @@ function ReaderPage({
     x1: number;
     y1: number;
   }): void;
+  /** 框选区域后「对此处提问」：识别这块区域的文字并作为阅读伙伴引用（不创建批注）。 */
+  onAskRegion?(region: { page: number; x0: number; y0: number; x1: number; y1: number }): void;
   onQuickAction?(action: 'translate' | 'ask' | 'float' | 'copy', quote: string): void;
   onUpdateAnnotation?(id: string, input: { content: string; color: string; style: string }): void;
   onDeleteAnnotation?(id: string): void;
@@ -3859,8 +3947,8 @@ function ReaderPage({
       if (cancelled) return;
       canvas.width = offscreen.width;
       canvas.height = offscreen.height;
-      canvas.style.width = `${Math.floor(viewport.width)}px`;
-      canvas.style.height = `${Math.floor(viewport.height)}px`;
+      // 画布 CSS 尺寸由样式表统一为「铺满页面框」：缩放时页面框先按目标宽度变化、
+      // 清晰位图稍后补上，位图会被浏览器拉伸到页面框而不是留下半页空白（批注/文本层不跳位）。
       const context = canvas.getContext('2d');
       if (!context) throw new Error('无法创建 Canvas 上下文');
       context.drawImage(offscreen, 0, 0);
@@ -4318,6 +4406,12 @@ function ReaderPage({
     }
   }
 
+  // 页面框宽度（width）在缩放停止后会立刻变成目标值，但文本层 span 还是按上一次渲染的
+  // 像素坐标定位的。先把整个文本层 transform 缩放到新宽度（和画布拉伸、百分比定位的
+  // 批注层保持同一口径），等清晰位图与文本层重绘完成后自然回到 1，避免文本层/批注错位。
+  const textScaleRaw = size && size.width > 0 ? width / size.width : 1;
+  const textScale = Math.abs(textScaleRaw - 1) < 0.002 ? 1 : textScaleRaw;
+
   return (
     <div
       ref={hostRef}
@@ -4577,6 +4671,7 @@ function ReaderPage({
       <div
         ref={textLayerRef}
         className="kr-text-layer"
+        style={textScale === 1 ? undefined : { transform: `scale(${textScale})` }}
         onMouseUp={startSelection}
         onClick={handleTextClick}
       />
@@ -4650,24 +4745,43 @@ function ReaderPage({
           style={{ left: `${draft.left}px`, top: `${draft.top}px` }}
           onMouseDown={(event) => event.preventDefault()}
         >
-          {draft.isRegion ? <span className="kr-selection-actions__hint">区域批注</span> : null}
-          {!draft.isRegion ? (
+          {draft.isRegion ? <span className="kr-selection-actions__hint">框选区域</span> : null}
+          {draft.isRegion ? (
+            <button
+              type="button"
+              title="识别这块区域的文字，并以它作为引用向阅读伙伴提问（不会创建批注）"
+              onClick={() => {
+                const rect = draft.rects[0];
+                onAskRegion?.({
+                  page: pageNumber,
+                  x0: rect?.[0] ?? 0,
+                  y0: rect?.[1] ?? 0,
+                  x1: rect?.[2] ?? 1,
+                  y1: rect?.[3] ?? 1
+                });
+                setDraft(null);
+                setSelectionRects([]);
+              }}
+            >对此处提问</button>
+          ) : (
             <>
               <button type="button" onClick={() => onQuickAction?.('translate', draft.quote)}>翻译</button>
               <button type="button" onClick={() => onQuickAction?.('float', draft.quote)}>浮窗提问</button>
               <button type="button" onClick={() => onQuickAction?.('ask', draft.quote)}>提问</button>
             </>
-          ) : null}
+          )}
           <button type="button" onClick={() => setAnnotationEditor({ style: 'highlight', color: 'yellow' })}>高亮</button>
           <button type="button" onClick={() => setAnnotationEditor({ style: 'underline', color: 'yellow' })}>下划线</button>
           <button type="button" onClick={() => setAnnotationEditor({ style: 'margin', color: 'yellow' })}>段落批注</button>
-          <button
-            type="button"
-            onClick={() => {
-              void navigator.clipboard.writeText(draft.quote);
-              onQuickAction?.('copy', draft.quote);
-            }}
-          >复制</button>
+          {draft.quote ? (
+            <button
+              type="button"
+              onClick={() => {
+                void navigator.clipboard.writeText(draft.quote);
+                onQuickAction?.('copy', draft.quote);
+              }}
+            >复制</button>
+          ) : null}
         </div>
       ) : null}
       {draft && annotationEditor ? (
@@ -5570,6 +5684,16 @@ function ReaderView({
   const [chatSessions, setChatSessions] = useState<DocumentChatSessionRecord[]>([]);
   const [sessionsReady, setSessionsReady] = useState(false);
   const [activeSessionId, setActiveSessionId] = useState('');
+  /**
+   * 内联重命名草稿：「更多 → 改名」后会话下拉位置换成输入框。
+   * Electron 渲染进程没有 window.prompt，所以改名必须在应用内完成（Enter 提交 / Esc 取消 / 失焦提交）。
+   * ref 与 state 同步保存草稿：Enter 里先结束再提交时，blur 不会再重复提交一次。
+   */
+  const [chatRenameDraft, setChatRenameDraft] = useState<{
+    sessionId: string;
+    value: string;
+  } | null>(null);
+  const chatRenameDraftRef = useRef<{ sessionId: string; value: string } | null>(null);
   // 消息历史分页：默认只拉「最新一页」，往前翻由「加载更早」按 beforeId 取上一页并前置合并。
   // staleTime=Infinity + 关闭焦点自动刷新：由业务动作显式 invalidate/refetch，避免后台刷新
   // 把用户已经展开的更早历史又折叠回最新一页。
@@ -5741,25 +5865,47 @@ function ReaderView({
   const ocrRegionElapsed = useElapsedSeconds(ocrRegionPending);
   const [ocrJob, setOcrJob] = useState<OcrJobRecord | null>(null);
   const [ocrRegionError, setOcrRegionError] = useState<string | null>(null);
+  /** 区域识别来源提示（如「识别方式是 MinerU，本次改用视觉模型、MinerU 没有被调用」）。 */
+  const [ocrRegionNotice, setOcrRegionNotice] = useState('');
+  useEffect(() => {
+    if (!ocrRegionNotice) return undefined;
+    // 来源提示是信息性的：顶部横幅展示，10 秒后自动消失；重新识别时也会清空。
+    const timer = window.setTimeout(() => setOcrRegionNotice(''), 10_000);
+    return () => window.clearTimeout(timer);
+  }, [ocrRegionNotice]);
   const [ocrRegionResult, setOcrRegionResult] = useState<{
     page: number;
     text: string;
     textReflowed: string;
     bbox: [number, number, number, number];
     engine: string;
+    /** 来源说明：识别方式为 MinerU 时明确写「改用视觉模型、MinerU 没有被调用」。 */
+    engine_note?: string;
+    /** 回退来源（mineru_online / mineru_agent 等）。 */
+    fallback_from?: string;
   } | null>(null);
   const [ocrRegionCopyMessage, setOcrRegionCopyMessage] = useState('');
+  /**
+   * 区域识别完成后做什么：'result' = 弹出识别结果（原 OCR 框选按钮的流程）；
+   * 'ask' = 不弹结果，直接把识别出的文字作为引用打开阅读伙伴提问。
+   */
+  const ocrRegionIntentRef = useRef<'result' | 'ask'>('result');
 
-  const recognizeRegion = async (region: {
-    page: number;
-    x0: number;
-    y0: number;
-    x1: number;
-    y1: number;
-  }): Promise<void> => {
+  const recognizeRegion = async (
+    region: {
+      page: number;
+      x0: number;
+      y0: number;
+      x1: number;
+      y1: number;
+    },
+    options?: { ask?: boolean }
+  ): Promise<void> => {
     if (ocrRegionPending) return;
+    ocrRegionIntentRef.current = options?.ask ? 'ask' : 'result';
     setOcrRegionPending(true);
     setOcrRegionError(null);
+    setOcrRegionNotice('');
     setOcrJob(null);
     try {
       const { jobId } = await api.startOcrRegionJob(document.id, region.page, {
@@ -5777,11 +5923,46 @@ function ReaderView({
         startedAt: new Date().toISOString()
       });
     } catch (error) {
-      setOcrRegionError(
-        `区域识别失败：${error instanceof Error ? error.message : '未知错误'}`
-      );
+      const message = error instanceof Error ? error.message : '未知错误';
       setOcrRegionPending(false);
+      if (ocrRegionIntentRef.current === 'ask') {
+        // 识别服务起不来也要能问：退回「第 N 页框选区域」说明，不打断提问流程。
+        ocrRegionIntentRef.current = 'result';
+        askWithRegionQuote(region.page, '');
+      } else {
+        setOcrRegionError(`区域识别失败：${message}`);
+      }
     }
+  };
+
+  /**
+   * 把「框选区域」作为提问引用打开阅读伙伴：识别出文字就用文字，
+   * 识别不到（或识别服务不可用）时用页码 + 区域说明兜底，而不是只报错。
+   */
+  const askWithRegionQuote = (pageNumber: number, text?: string | null): void => {
+    const clean = (text ?? '').replace(/\s+/g, ' ').trim();
+    setChatQuote(
+      clean ||
+        `第 ${pageNumber} 页的框选区域（未能识别出文字，请根据这块区域的页面截图回答）`
+    );
+    setPanel('chat');
+    openPanel();
+  };
+
+  /** 框选区域便捷菜单「对此处提问」：复用区域 OCR，完成后不弹结果窗，直接进入会话引用。 */
+  const askRegion = (region: {
+    page: number;
+    x0: number;
+    y0: number;
+    x1: number;
+    y1: number;
+  }): void => {
+    setRegionMode(false);
+    if (ocrRegionPending) {
+      setOcrRegionError('区域识别还在进行中，请稍候再提问。');
+      return;
+    }
+    void recognizeRegion(region, { ask: true });
   };
 
   // 轮询区域 OCR 任务：识别在 Core 内异步执行，按钮显示进度；取消后丢弃结果。
@@ -5796,29 +5977,59 @@ function ReaderView({
           const next = await api.getOcrRegionJob(document.id, ocrJob.id);
           if (cancelled) return;
           if (next.state === 'done') {
-            setOcrRegionResult(next.result ? { ...next.result, page: next.page } : null);
+            const intent = ocrRegionIntentRef.current;
+            ocrRegionIntentRef.current = 'result';
             setOcrRegionMode(false);
             setOcrRegionCopyMessage('');
             setOcrRegionPending(false);
             setOcrJob(null);
+            if (intent === 'ask') {
+              // 「对此处提问」：不弹识别结果窗，直接把区域文字带进阅读伙伴。
+              // 但来源说明不能丢：识别方式为 MinerU 时会改用视觉模型，
+              // 用 ReaderView 自己的通知条说清「本次没有使用 MinerU」。
+              const note = next.result?.engine_note;
+              if (note) setOcrRegionNotice(note);
+              askWithRegionQuote(
+                next.page,
+                next.result?.textReflowed || next.result?.text
+              );
+              return;
+            }
+            setOcrRegionResult(next.result ? { ...next.result, page: next.page } : null);
           } else if (next.state === 'failed') {
-            setOcrRegionError(`区域识别失败：${next.error?.message ?? '未知错误'}`);
+            const message = next.error?.message ?? '未知错误';
             setOcrRegionPending(false);
             setOcrJob(null);
+            if (ocrRegionIntentRef.current === 'ask') {
+              ocrRegionIntentRef.current = 'result';
+              askWithRegionQuote(next.page, '');
+            } else {
+              setOcrRegionError(`区域识别失败：${message}`);
+            }
           } else if (next.state === 'cancelled') {
-            setOcrRegionError('区域识别已取消。');
             setOcrRegionPending(false);
             setOcrJob(null);
+            if (ocrRegionIntentRef.current === 'ask') {
+              ocrRegionIntentRef.current = 'result';
+              askWithRegionQuote(next.page, '');
+            } else {
+              setOcrRegionError('区域识别已取消。');
+            }
           } else {
             setOcrJob(next);
           }
         } catch (error) {
           if (cancelled) return;
-          setOcrRegionError(
-            `区域识别状态读取失败：${error instanceof Error ? error.message : '未知错误'}`
-          );
           setOcrRegionPending(false);
           setOcrJob(null);
+          if (ocrRegionIntentRef.current === 'ask') {
+            ocrRegionIntentRef.current = 'result';
+            askWithRegionQuote(ocrJob.page, '');
+          } else {
+            setOcrRegionError(
+              `区域识别状态读取失败：${error instanceof Error ? error.message : '未知错误'}`
+            );
+          }
         }
       })();
     }, 500);
@@ -5994,6 +6205,19 @@ function ReaderView({
   useEffect(() => {
     setZoomInput(`${Math.round(zoom * 100)}%`);
   }, [zoom]);
+  /**
+   * 缩放平滑：滚轮/按钮/快捷键只更新目标缩放（zoom），页面先用 CSS zoom 做预览——
+   * 画布、文本层、批注/高亮/区域框都在同一个页面容器里一起缩放，天然对齐；
+   * 静止 160ms 后再把目标缩放写进真实页宽（renderZoom）并重绘清晰画布。
+   * 这样每个 wheel tick 不再触发整页 PDF 重绘，也就不会出现批注跳位和卡顿。
+   */
+  const [renderZoom, setRenderZoom] = useState(1);
+  useEffect(() => {
+    if (renderZoom === zoom) return undefined;
+    const timer = window.setTimeout(() => setRenderZoom(zoom), 160);
+    return () => window.clearTimeout(timer);
+  }, [zoom, renderZoom]);
+  const previewZoom = renderZoom > 0 ? zoom / renderZoom : 1;
   const zoomAnchorRef = useRef<{
     page: number;
     fx: number;
@@ -6061,16 +6285,18 @@ function ReaderView({
       container.scrollTop +=
         pageRect.top + pageRect.height * anchor.fy - (containerRect.top + anchor.viewY);
     };
+    // 预览（CSS zoom）与真实页宽提交是两次渲染：两次都要按同一页面锚点校正滚动位置，
+    // 否则停下重绘后滚动位置会偏移（滚轮缩放时把鼠标下的那一点保持在原地）。
     correct();
     const settle = window.setTimeout(correct, 220);
     const clear = window.setTimeout(() => {
       if (zoomAnchorRef.current === anchor) zoomAnchorRef.current = null;
-    }, 500);
+    }, 900);
     return () => {
       window.clearTimeout(settle);
       window.clearTimeout(clear);
     };
-  }, [zoom]);
+  }, [zoom, renderZoom]);
   const [baseWidth, setBaseWidth] = useState(820);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const suppressScrollRef = useRef(false);
@@ -6372,6 +6598,22 @@ function ReaderView({
   const regeneratingRef = useRef(false);
   // 消息级操作（编辑并重问 / 从此分支删除）防止连点重入：都含异步的 DB 准备步骤。
   const messageActionRef = useRef(false);
+  // 直接语音提问（全模态）：用户消息先本地占位「（语音提问）」，等回答返回 audio_transcript
+  // 后再落库最终正文（「（语音）转写」；失败则落占位）。这样不必先落库再用会删后续消息的 PATCH。
+  const pendingVoiceTurnRef = useRef<{
+    messageId: string;
+    sessionId: string;
+    quote?: string;
+    quotePage?: number;
+    quoteName?: string;
+  } | null>(null);
+  // 待发送的语音录音（base64）：mutationFn 读取一次后立即清空，避免它被 React Query
+  // 作为 mutation 变量长期持有；录音本身不写数据库，只有转写文字进入会话。
+  const voiceAudioRef = useRef<{
+    data: string;
+    mimeType: string;
+    filename?: string;
+  } | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessageView[]>([]);
   // 历史分页状态：是否还有更早一页、是否正在加载更早一页。
   const [hasEarlierMessages, setHasEarlierMessages] = useState(false);
@@ -6432,9 +6674,12 @@ function ReaderView({
     role: 'user' | 'assistant',
     content: string,
     sources?: ChatSource[],
-    metadata?: Record<string, unknown>
+    metadata?: Record<string, unknown>,
+    // 显式会话 id：语音轮的回答返回后才落库用户消息，期间用户可能已切换会话，
+    // 必须写回提问时的那一个会话（undefined = 用当前 activeSessionId）。
+    sessionIdOverride?: string | null
   ): Promise<void> => {
-    const sessionId = activeSessionId;
+    const sessionId = sessionIdOverride === undefined ? activeSessionId : sessionIdOverride;
     const write = persistQueueRef.current
       .catch(() => undefined)
       .then(() =>
@@ -6695,20 +6940,53 @@ function ReaderView({
     }
   };
 
-  /** 重命名当前会话（prompt，Enter 提交也可用键盘完成）；只 PATCH title/updated。 */
-  const renameActiveChatSession = async (): Promise<void> => {
+  /**
+   * 打开内联改名输入框（替代原 window.prompt：Electron 渲染进程不支持 prompt，
+   * 之前点「改名」没有任何反应）。标题留空是允许的，列表会显示「对话 N」。
+   */
+  const beginChatSessionRename = (): void => {
     const current = chatSessionsRef.current.find((session) => session.id === activeSessionId);
     if (!current) return;
     if (!ensureNoMessageAction()) return;
-    const input = appDialogs.prompt(
-      '重命名这个会话（留空则显示为“对话 N”）',
-      current.title
-    );
-    if (input === null) return;
-    const title = input.trim().slice(0, 120);
+    const draft = { sessionId: current.id, value: current.title };
+    chatRenameDraftRef.current = draft;
+    setChatRenameDraft(draft);
+  };
+
+  /** 取消内联改名（Esc / 点取消）：清空草稿，不写服务端。 */
+  const cancelChatSessionRename = (): void => {
+    chatRenameDraftRef.current = null;
+    setChatRenameDraft(null);
+  };
+
+  /**
+   * 提交内联改名（Enter / 失焦）。先收起输入框再发请求，
+   * 这样随后的 blur 看到草稿已清空，不会再提交一次。
+   */
+  const commitChatSessionRename = async (): Promise<void> => {
+    const draft = chatRenameDraftRef.current;
+    if (!draft) return;
+    chatRenameDraftRef.current = null;
+    setChatRenameDraft(null);
+    const existing = chatSessionsRef.current.find((session) => session.id === draft.sessionId);
+    // 标题没变（仅去掉首尾空格后相同）就不发请求，避免无意义的 updated 变更。
+    if (existing && existing.title.trim() === draft.value.trim()) return;
+    await renameActiveChatSession(draft.value, draft.sessionId);
+  };
+
+  /** 重命名会话（内联输入框调用）；只 PATCH title/updated。 */
+  const renameActiveChatSession = async (
+    titleInput: string,
+    sessionId?: string
+  ): Promise<void> => {
+    const targetId = sessionId ?? activeSessionId;
+    const current = chatSessionsRef.current.find((session) => session.id === targetId);
+    if (!current) return;
+    if (!ensureNoMessageAction()) return;
+    const title = titleInput.trim().slice(0, 120);
     await persistQueueRef.current.catch(() => undefined);
     try {
-      const saved = await api.updateDocumentChatSession(document.id, activeSessionId, {
+      const saved = await api.updateDocumentChatSession(document.id, targetId, {
         title,
         updated: new Date().toISOString()
       });
@@ -6924,6 +7202,11 @@ function ReaderView({
       confirmSearch?: boolean;
       history?: Array<{ question: string; answer?: string }>;
       audio?: { data: string; mimeType: string; filename?: string };
+      /**
+       * 语音直问标记：真正的二进制/ base64 音频放在 voiceAudioRef 里，只在 mutationFn
+       * 内取一次并立即清空，避免它随 React Query 的 mutation 变量长期驻留内存。
+       */
+      voice?: boolean;
       readingScope?: 'auto' | 'local' | 'document' | 'corpus';
       readingRigor?: 'auto' | 'fast' | 'standard' | 'exhaustive';
       readingChapterIndex?: number;
@@ -6938,6 +7221,10 @@ function ReaderView({
     }) => {
       const controller = new AbortController();
       askAbortRef.current = controller;
+      // 语音直问的录音只在这里取一次并立刻清空：不放进 mutation 变量，
+      // 避免 React Query 持有上一次录音的 base64 字符串（内存不随轮次累积）。
+      const voiceAudio = input.voice ? voiceAudioRef.current ?? undefined : input.audio;
+      if (input.voice) voiceAudioRef.current = null;
       // 计时从真正发出请求开始；旧回答的耗时不跨轮显示（新提问/重新生成开始时已清空）。
       askStartedAtRef.current = performance.now();
       setLastAnswerDurationMs(null);
@@ -6954,7 +7241,7 @@ function ReaderView({
             confirmSearch: input.confirmSearch,
             search_token: input.searchToken,
             history: input.history,
-            audio: input.audio,
+            audio: voiceAudio,
             reading_scope: input.readingScope,
             reading_rigor: input.readingRigor,
             reading_chapter_index: input.readingChapterIndex,
@@ -7008,6 +7295,43 @@ function ReaderView({
         setAuditDraft([]);
         return;
       }
+      // 直接语音（全模态）：模型返回逐字转写后，用户消息才按最终正文落库。
+      // 先落库再改需要 PATCH（会删掉后续消息），所以这里在拿到回答后用最终正文写一次，
+      // 并排在助手消息写入之前（persistMessage 队列保证顺序）。
+      const voiceTurn = pendingVoiceTurnRef.current;
+      pendingVoiceTurnRef.current = null;
+      if (voiceTurn) {
+        const transcript =
+          typeof response.audio_transcript === 'string' ? response.audio_transcript.trim() : '';
+        const voiceContent = transcript ? `（语音）${transcript}` : '（语音提问）';
+        setChatMessages((current) =>
+          current.map((message) =>
+            message.id === voiceTurn.messageId ? { ...message, content: voiceContent } : message
+          )
+        );
+        void persistMessage(
+          'user',
+          voiceContent,
+          undefined,
+          {
+            quote: voiceTurn.quote,
+            quotePage: voiceTurn.quotePage,
+            quoteName: voiceTurn.quoteName
+          },
+          voiceTurn.sessionId
+        ).catch(reportPersistFailure);
+        // 首条就是语音时，用转写补一个可读标题（只在标题仍为空时写，不覆盖用户改过的标题）。
+        if (transcript) {
+          const session = chatSessionsRef.current.find(
+            (item) => item.id === voiceTurn.sessionId
+          );
+          if (session && !session.title.trim()) {
+            void touchChatSession(voiceTurn.sessionId, {
+              title: `（语音）${transcript}`.slice(0, 40)
+            });
+          }
+        }
+      }
       setBudgetWarning(null);
       setDraftAnswer('');
       setAskStage('');
@@ -7059,6 +7383,22 @@ function ReaderView({
       void queryClient.invalidateQueries({ queryKey: ['reading-tasks', document.id] });
     },
     onError: (error: Error) => {
+      // 直接语音失败：用户消息按占位正文落库，保证刷新后仍能看到这一轮。
+      const voiceTurn = pendingVoiceTurnRef.current;
+      pendingVoiceTurnRef.current = null;
+      if (voiceTurn) {
+        void persistMessage(
+          'user',
+          '（语音提问）',
+          undefined,
+          {
+            quote: voiceTurn.quote,
+            quotePage: voiceTurn.quotePage,
+            quoteName: voiceTurn.quoteName
+          },
+          voiceTurn.sessionId
+        ).catch(reportPersistFailure);
+      }
       if (error instanceof ApiRequestError && error.status === 409) {
         const details = error.details as { budget?: BudgetEstimate } | undefined;
         if (details?.budget) {
@@ -7107,9 +7447,9 @@ function ReaderView({
     const lastUserMessage = chatMessages[lastUserIndex];
     const trimmed = chatMessages.slice(0, lastUserIndex + 1);
     const localQuestion = lastUserMessage?.content.trim() ?? '';
-    // 语音提问在历史里只有占位文本，不能当文字问题重发；这一步放在 rewind 之前，
+    // 语音提问在历史里是「（语音）转写」/占位，不能当文字问题重发；这一步放在 rewind 之前，
     // 避免"删了 DB 旧回答却又不重发"把两边弄成不一致。
-    if (!localQuestion || localQuestion === '（语音提问）') {
+    if (!localQuestion || localQuestion.startsWith('（语音')) {
       setChatActionError('没有可重新生成的文字问题（语音提问无法重新生成）。');
       return;
     }
@@ -7134,10 +7474,10 @@ function ReaderView({
       });
       const rewindQuestion = rewind.content?.trim() ?? '';
       // 优先用本次会话最后发送的问题；重开文献后 lastQuestion 为空，退回 DB 里最后一条用户问题，
-      // 都不可用（例如 DB 里只有语音占位）时才用本地最后一条用户问题。
+      // 都不可用（例如 DB 里只有「（语音）…」转写正文）时才用本地最后一条用户问题。
       const question =
-        (lastQuestion.trim() === '（语音提问）' ? '' : lastQuestion.trim()) ||
-        (rewindQuestion === '（语音提问）' ? '' : rewindQuestion) ||
+        (lastQuestion.trim().startsWith('（语音') ? '' : lastQuestion.trim()) ||
+        (rewindQuestion.startsWith('（语音') ? '' : rewindQuestion) ||
         localQuestion;
       setLastQuestion(question);
       setBudgetWarning(null);
@@ -7405,7 +7745,13 @@ function ReaderView({
     const speechConfig = speechConfigQuery.data;
     if (!speechConfig) return null;
     if (!speechConfig.input_enabled) return '语音输入未开启：请到设置 → 语音识别里开启';
-    if (speechConfig.asr_mode !== 'system' && !speechConfig.has_asr_key) {
+    // 直接语音（全模态）由模型自己转写，不依赖本地 ASR 是否已配置；只有普通
+    // 「把语音转成文字填入输入框」才要求识别服务可用。
+    if (
+      !speechConfig.direct_audio &&
+      speechConfig.asr_mode !== 'system' &&
+      !speechConfig.has_asr_key
+    ) {
       return '还没有可用的语音识别模型：请在设置 → 语音识别里填写识别服务与密钥';
     }
     return null;
@@ -7603,6 +7949,12 @@ function ReaderView({
       void queryClient.invalidateQueries({ queryKey: ['navigation', document.id] });
       void queryClient.invalidateQueries({ queryKey: ['navigation-preview', document.id] });
       void queryClient.invalidateQueries({ queryKey: ['navigation-status', document.id] });
+    },
+    onError: () => {
+      // 失败（含"0 条目录"这种明确错误）要刷新状态，面板才能显示 failed 与原因，
+      // 而不是停在旧的"已就绪"上让用户以为没反应。
+      void queryClient.invalidateQueries({ queryKey: ['navigation-status', document.id] });
+      void queryClient.invalidateQueries({ queryKey: ['navigation-preview', document.id] });
     }
   });
 
@@ -8384,7 +8736,7 @@ function ReaderView({
     !askMutation.isPending &&
     lastChatMessage?.role === 'assistant' &&
     lastUserQuestionForRegenerate !== '' &&
-    lastUserQuestionForRegenerate !== '（语音提问）';
+    !lastUserQuestionForRegenerate.startsWith('（语音');
 
   return (
     <div className="kr-reader">
@@ -8520,7 +8872,7 @@ function ReaderView({
             className={regionMode ? 'kr-icon-btn is-active' : 'kr-icon-btn'}
             aria-pressed={regionMode}
             aria-label="区域框选"
-            title="框选一块区域作为提问对象"
+            title="框选一块区域：可直接「对此处提问」，也可保存为区域批注"
             onClick={() => {
               setRegionMode((value) => !value);
               setMaskMode(false);
@@ -8650,6 +9002,19 @@ function ReaderView({
           </button>
         </div>
       </header>
+
+      {ocrRegionNotice ? (
+        // 区域识别来源提示：框选区域识别不会调用 MinerU；回退到视觉模型时在这里说清来源，
+        // 避免用户把视觉模型的结果当成 MinerU 的结果（「MinerU 是否出错」也就有了答案）。
+        <p
+          className="kr-outline2__hint"
+          role="status"
+          aria-live="polite"
+          style={{ margin: 0, padding: '6px 14px' }}
+        >
+          {ocrRegionNotice}
+        </p>
+      ) : null}
 
       {structureOpen ? (
         <StructurePanel
@@ -8797,14 +9162,14 @@ function ReaderView({
                       )
                     }
                     onGenerateFromToc={() =>
-                      buildNavigation.mutate({
+                      buildNavigation.mutateAsync({
                         tocPages:
                           previewTocNavigation.data?.toc_pages ??
                           parseTocPagesInput(tocPagesInput, document.pages)
                       })
                     }
                     onClearTocPages={() => buildNavigation.mutate({ tocPages: [] })}
-                    onGenerateFromTitles={() => buildNavigation.mutate({ tocPages: [] })}
+                    onGenerateFromTitles={() => buildNavigation.mutateAsync({ tocPages: [] })}
                     generating={buildNavigation.isPending || navigationBuilding}
                     buildError={buildNavigation.isError ? buildNavigation.error.message : ''}
                     editing={outlineEditing}
@@ -8875,7 +9240,11 @@ function ReaderView({
             </div>
           </aside>
         ) : null}
-        <div className="kr-reader__scroll" ref={scrollRef} onScroll={handleScroll}>
+        <div
+          className={`kr-reader__scroll${previewZoom === 1 ? '' : ' is-zooming'}`}
+          ref={scrollRef}
+          onScroll={handleScroll}
+        >
           {pdfError ? <p className="kr-page-error">PDF 解析失败：{pdfError}</p> : null}
           {!pdf && !pdfError ? <p className="kr-page-status">正在渲染 PDF…</p> : null}
           {pdf ? (
@@ -8883,6 +9252,18 @@ function ReaderView({
               className="kr-pages"
               style={{ alignItems: zoom > 1 ? 'flex-start' : 'center' }}
             >
+              {/*
+                缩放预览层：CSS zoom 让整页内容（画布位图 + 文本层 + 批注/高亮/区域框）
+                一起缩放，视觉上立刻跟手且互不错位；静止 160ms 后才把目标缩放写进
+                真实页宽并重绘清晰画布（见 zoom / renderZoom 状态）。
+              */}
+              <div
+                className="kr-pages__frame"
+                style={{
+                  zoom: previewZoom,
+                  width: `${Math.round(baseWidth * renderZoom)}px`
+                }}
+              >
               {Array.from({ length: pdf.numPages }, (_, index) => (
                 <ReaderPage
                   key={index + 1}
@@ -8890,11 +9271,12 @@ function ReaderView({
                   api={api}
                   documentId={document.id}
                   pageNumber={index + 1}
-                  width={Math.round(baseWidth * zoom)}
+                  width={Math.round(baseWidth * renderZoom)}
                   regionMode={regionMode}
                   maskMode={maskMode}
                   ocrRegionMode={ocrRegionMode}
                   onRecognizeRegion={(region) => void recognizeRegion(region)}
+                  onAskRegion={(region) => void askRegion(region)}
                   totalPages={pdf.numPages}
                   references={referencesQuery.data ?? null}
                   onRequestReferences={() => setReferencesWanted(true)}
@@ -8965,6 +9347,7 @@ function ReaderView({
                   }
                 />
               ))}
+              </div>
             </div>
           ) : null}
         </div>
@@ -9432,23 +9815,79 @@ function ReaderView({
               toolbarExtra={
                 <div className="kr-chat__session-bar">
                   <div className="kr-chat__session-row">
-                    <select
-                      className="kr-chat__session-select"
-                      value={activeSessionId}
-                      onChange={(event) => void switchChatSession(event.target.value)}
-                      disabled={
-                        !sessionsReady || askMutation.isPending || chatSessions.length === 0
-                      }
-                      aria-label="阅读伙伴会话"
-                      title="切换阅读伙伴会话：每个会话独立保存历史"
-                    >
-                      {!sessionsReady ? <option value="">加载会话…</option> : null}
-                      {chatSessions.map((session, index) => (
-                        <option key={session.id} value={session.id}>
-                          {documentChatSessionLabel(session, index)}
-                        </option>
-                      ))}
-                    </select>
+                    {chatRenameDraft ? (
+                      <>
+                        <input
+                          className="kr-chat__session-rename-input"
+                          value={chatRenameDraft.value}
+                          autoFocus
+                          aria-label="会话名称"
+                          placeholder="会话名称（留空显示为「对话 N」）"
+                          title="Enter 保存，Esc 取消"
+                          onFocus={(event) => event.currentTarget.select()}
+                          onChange={(event) => {
+                            const next = {
+                              sessionId: chatRenameDraft.sessionId,
+                              value: event.target.value
+                            };
+                            chatRenameDraftRef.current = next;
+                            setChatRenameDraft(next);
+                          }}
+                          onKeyDown={(event) => {
+                            // 输入法组词中的 Enter/Esc 交给输入法，避免中文标题被提前提交。
+                            if (event.nativeEvent.isComposing) return;
+                            if (event.key === 'Enter') {
+                              event.preventDefault();
+                              void commitChatSessionRename();
+                            } else if (event.key === 'Escape') {
+                              event.preventDefault();
+                              cancelChatSessionRename();
+                            }
+                          }}
+                          onBlur={() => {
+                            // Enter/Esc 已经把草稿清空时，随后的 blur 不再提交一次。
+                            if (chatRenameDraftRef.current) void commitChatSessionRename();
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="kr-chat__session-rename-save"
+                          // 阻止输入框失焦：点「保存」不会先触发 blur 提交一次。
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => void commitChatSessionRename()}
+                          title="保存会话名称（Enter）"
+                        >
+                          保存
+                        </button>
+                        <button
+                          type="button"
+                          className="kr-chat__session-rename-cancel"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={cancelChatSessionRename}
+                          title="取消改名（Esc）"
+                        >
+                          取消
+                        </button>
+                      </>
+                    ) : (
+                      <select
+                        className="kr-chat__session-select"
+                        value={activeSessionId}
+                        onChange={(event) => void switchChatSession(event.target.value)}
+                        disabled={
+                          !sessionsReady || askMutation.isPending || chatSessions.length === 0
+                        }
+                        aria-label="阅读伙伴会话"
+                        title="切换阅读伙伴会话：每个会话独立保存历史"
+                      >
+                        {!sessionsReady ? <option value="">加载会话…</option> : null}
+                        {chatSessions.map((session, index) => (
+                          <option key={session.id} value={session.id}>
+                            {documentChatSessionLabel(session, index)}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                     <button
                       type="button"
                       className="kr-chat__session-new"
@@ -9495,10 +9934,10 @@ function ReaderView({
                           className="kr-chat__session-rename"
                           onClick={() => {
                             closeMoreMenu();
-                            void renameActiveChatSession();
+                            beginChatSessionRename();
                           }}
                           disabled={!sessionsReady || askMutation.isPending || !activeSessionId}
-                          title="重命名当前会话（Enter 保存）"
+                          title="重命名当前会话（Enter 保存 / Esc 取消）"
                         >
                           改名
                         </button>
@@ -9741,6 +10180,9 @@ function ReaderView({
                   payload,
                   isWav ? 'speech.wav' : 'speech.webm'
                 );
+                // 直接语音（全模态）里的转写只用于在会话中显示「说了什么」，
+                // 不再额外调用「按当前页术语校正」——那会多一次模型往返，让语音提问变慢。
+                if (speechConfigQuery.data?.direct_audio) return transcribed.text;
                 if (!speechConfigQuery.data?.correction) return transcribed.text;
                 try {
                   const corrected = await api.correctSpeech({
@@ -9788,11 +10230,20 @@ function ReaderView({
                   setChatActionError('阅读伙伴会话还在准备中，请稍后再试。');
                   return;
                 }
+                // 直接语音（全模态）：先把录音转成 16k 单声道 WAV——webm/opus 多数全模态
+                // 接口不支持，之前把 webm 直接发出去会 400；转换失败就退回原始录音，不阻断。
+                // 语音转写由全模态模型完成（不再在客户端先跑 ASR）。
+                let payload = audio;
+                try {
+                  payload = await blobToWav(audio);
+                } catch {
+                  payload = audio;
+                }
                 const dataUrl = await new Promise<string>((resolve, reject) => {
                   const reader = new FileReader();
                   reader.onload = () => resolve(String(reader.result));
                   reader.onerror = () => reject(reader.error);
-                  reader.readAsDataURL(audio);
+                  reader.readAsDataURL(payload);
                 });
                 const comma = dataUrl.indexOf(',');
                 const data = comma >= 0 ? dataUrl.slice(comma + 1) : '';
@@ -9800,39 +10251,48 @@ function ReaderView({
                 setLastQuestion('（语音直接输入）');
                 setBudgetWarning(null);
                 setDraftAnswer('');
-      setAskStage('');
-      setAuditDraft([]);
+                setAskStage('');
+                setAuditDraft([]);
+                const localMessageId = crypto.randomUUID();
                 setChatMessages((current) => [
                   ...current,
                   {
-                    id: crypto.randomUUID(),
+                    id: localMessageId,
                     role: 'user',
+                    // 先显示占位；回答返回后按 response.audio_transcript 更新为「（语音）转写」。
                     content: '（语音提问）',
                     quote: chatQuote || undefined,
                     quotePage: page,
                     quoteName: document.name
                   }
                 ]);
-                // 用户消息也走串行队列：先于本轮助手回答落库，失败只警告、不清本地历史。
-                void persistMessage('user', '（语音提问）', undefined, {
+                // 用户消息不在提问前落库：等回答返回后按最终正文落一次（避免先落库再用
+                // 会删后续消息的 PATCH 改正文）。onSuccess/onError 会消费这条待写记录。
+                pendingVoiceTurnRef.current = {
+                  messageId: localMessageId,
+                  sessionId: activeSessionId,
                   quote: chatQuote || undefined,
                   quotePage: page,
                   quoteName: document.name
-                }).catch(reportPersistFailure);
+                };
+                // 音频只放进 ref，由 mutationFn 取一次并清空（不随 mutation 变量驻留）；
+                // 录音本身不落库，会话里只保存转写文字。
+                voiceAudioRef.current = {
+                  data,
+                  mimeType: payload.type || 'audio/webm',
+                  filename: payload.type.includes('wav') ? 'speech.wav' : 'speech.webm'
+                };
                 askMutation.mutate({
+                  // 不传文字问题：转写由全模态模型完成。
                   question: '',
                   selection: chatQuote,
                   confirmSearch: false,
                   // 语音直接提问没有 options：沿用最近一次口径（默认纳入笔记/批注）。
                   includeMemory: lastAskExtras.includeMemory ?? true,
-                  audio: {
-                    data,
-                    mimeType: audio.type || 'audio/webm',
-                    filename: 'speech.webm'
-                  }
+                  voice: true
                 });
                 setChatQuote('');
-                // 语音提问时正文是占位文本：首条时用它当会话标题，并推进 updated。
+                // 语音提问：首条时先记占位标题，回答返回后若标题仍为空再用转写补上。
                 const activeSession = chatSessionsRef.current.find(
                   (session) => session.id === activeSessionId
                 );
@@ -9933,6 +10393,14 @@ function ReaderView({
             <p className="kr-muted">
               第 {ocrRegionResult.page} 页 · 识别方式：{ocrRegionResult.engine || '未知'}
             </p>
+            {ocrRegionResult.engine_note ? (
+              <p className="kr-settings__message" role="note">
+                {ocrRegionResult.fallback_from
+                  ? `来源说明（本次区域识别没有使用 ${ocrRegionResult.fallback_from}）：`
+                  : '来源说明：'}
+                {ocrRegionResult.engine_note}
+              </p>
+            ) : null}
             <p className="kr-muted">
               这里只展示框选区域识别出的文字，不会自动写回页面文字；引用前请回原页核对。
             </p>

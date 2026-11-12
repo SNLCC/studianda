@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import type React from 'react';
 import type {
   MarkdownImportItem,
@@ -213,6 +213,22 @@ export function MarkdownImportDialog({
   const effectiveCount = resolveMarkdownSelection ? resolvedCount : selectedCount;
   const effectiveFiles = resolveMarkdownSelection ? resolvedFiles : [...selected];
 
+  // 稳定回调：扫描树把这些回调存在 ref 里，但保持引用稳定可进一步避免父级 render 触发重复加载。
+  const loadScanPage = useCallback(
+    (parent: string, offset: number, limit: number) => {
+      if (!getMarkdownScanTree) {
+        return Promise.reject(new Error('当前运行环境不支持读取扫描树'));
+      }
+      return getMarkdownScanTree(scan.vaultPath, parent, offset, limit);
+    },
+    [getMarkdownScanTree, scan.vaultPath]
+  );
+  const handleScanTreeLoaded = useCallback((loaded: number, total: number) => {
+    setTreeLoaded((current) =>
+      current.loaded === loaded && current.total === total ? current : { loaded, total }
+    );
+  }, []);
+
   // 服务端解析选择（300ms debounce；失败提示可重试）。
   useEffect(() => {
     if (!resolveMarkdownSelection) return;
@@ -255,7 +271,7 @@ export function MarkdownImportDialog({
           if (cancelled) return;
           setResolvedCount(0);
           setSelectionError(
-            `解析选择失败：${error instanceof Error ? error.message : String(error)}`
+            `整理选择失败：${error instanceof Error ? error.message : String(error)}`
           );
         })
         .finally(() => {
@@ -299,7 +315,7 @@ export function MarkdownImportDialog({
           if (!active || requestId !== searchRequestIdRef.current) return;
           setSearchEntries([]);
           setSearchTotal(0);
-          setSearchError('服务端搜索不可用，已回退已加载树内搜索。');
+          setSearchError('搜索暂不可用，已回退到已加载列表内搜索。');
         })
         .finally(() => {
           if (active && requestId === searchRequestIdRef.current) setSearching(false);
@@ -597,7 +613,13 @@ export function MarkdownImportDialog({
   const percent = job ? markdownImportPercent(job) : 0;
 
   return (
-    <div className="kr-modal-backdrop" role="presentation" onClick={() => onClose()}>
+    <div
+      className="kr-modal-backdrop"
+      role="presentation"
+      onClick={() => {
+        if (!running) onClose();
+      }}
+    >
       <div
         className="kr-modal kr-markdown-modal"
         role="dialog"
@@ -605,7 +627,7 @@ export function MarkdownImportDialog({
         aria-label="导入 Markdown 笔记"
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => {
-          if (event.key === 'Escape') onClose();
+          if (event.key === 'Escape' && !running) onClose();
         }}
       >
         <div className="kr-markdown-modal__head">
@@ -786,11 +808,12 @@ export function MarkdownImportDialog({
                 ) : null}
               </p>
             ) : null}
-            <p className="kr-markdown-progress__phase">
-              正在导入：{markdownImportPhaseLabel(job.phase)}（{job.done}/{job.total}，
-              {percent}%）
+            <p className="kr-markdown-progress__count" aria-live="polite">
+              {markdownImportPhaseLabel(job.phase)}：已处理 <strong>{job.done}</strong>
+              {job.total > 0 ? ` / ${job.total}` : ''} 篇（{percent}%）
             </p>
             <progress
+              className="kr-markdown-progress__bar"
               value={Math.min(job.done, Math.max(1, job.total))}
               max={Math.max(1, job.total)}
               aria-label="导入进度"
@@ -853,28 +876,36 @@ export function MarkdownImportDialog({
           </div>
         ) : (
           <>
-            <p className="kr-muted kr-markdown-modal__stats">
-              发现 {scan.notes.length} 篇 Markdown 笔记、{scan.attachments.length} 个附件
-              {scan.attachments.length > 0
-                ? `（共 ${formatBytes(
-                    scan.attachments.reduce((total, item) => total + (item.sizeBytes || 0), 0)
-                  )}）`
-                : ''}
-              。
-            </p>
-            <p className="kr-markdown-modal__hint">
-              图片自动复制（过大自动压缩）；PDF/音频等附件会复制到本地并在点击时用系统程序打开。
-            </p>
-            <p className="kr-muted">
-              只导入 Markdown 笔记与本地附件；不会修改或删除原文件夹中的文件。
-            </p>
-            <p className="kr-muted">
-              请仅导入您拥有合法权利或已获授权的本地笔记与附件；导入内容仅保存在本机，不会上传到
-              Studianda 服务器。因导入内容产生的第三方权利、保密或伦理责任由导入者承担。
-            </p>
-            <p className="kr-muted">
-              本机数据文件与导出备份均为明文，未内置加密；敏感资料请自行使用磁盘加密或系统账户隔离。
-            </p>
+            <div className="kr-markdown-modal__summary">
+              <p className="kr-muted kr-markdown-modal__stats">
+                发现 {scan.notes.length} 篇 Markdown 笔记、{scan.attachments.length} 个附件
+                {scan.attachments.length > 0
+                  ? `（共 ${formatBytes(
+                      scan.attachments.reduce((total, item) => total + (item.sizeBytes || 0), 0)
+                    )}）`
+                  : ''}
+                。
+              </p>
+              <p className="kr-markdown-modal__hint">
+                图片自动复制（过大自动压缩）；PDF/音频等附件会复制到本地并在点击时用系统程序打开。
+              </p>
+              <p className="kr-markdown-modal__guide">
+                第 1 步：搜索或展开文件夹，勾选要导入的笔记；第 2 步：点右下角「导入选中」。
+              </p>
+              <details className="kr-markdown-modal__legal">
+                <summary>隐私与合规说明</summary>
+                <p className="kr-muted">
+                  只导入 Markdown 笔记与本地附件；不会修改或删除原文件夹中的文件。
+                </p>
+                <p className="kr-muted">
+                  请仅导入您拥有合法权利或已获授权的本地笔记与附件；导入内容仅保存在本机，不会上传到
+                  Studianda 服务器。因导入内容产生的第三方权利、保密或伦理责任由导入者承担。
+                </p>
+                <p className="kr-muted">
+                  本机数据文件与导出备份均为明文，未内置加密；敏感资料请自行使用磁盘加密或系统账户隔离。
+                </p>
+              </details>
+            </div>
             <label className="kr-markdown-modal__search">
               <input
                 type="search"
@@ -905,17 +936,16 @@ export function MarkdownImportDialog({
               >
                 清空
               </button>
-              <span className="kr-muted">
-                已选 {effectiveCount} 篇
-                {resolveMarkdownSelection ? '（服务端解析）' : ''}
+              <span className="kr-markdown-modal__selected" role="status">
+                已选 <strong>{effectiveCount}</strong> 篇
                 {search.trim()
                   ? lazyMode
-                    ? `（仅搜索已加载 ${treeLoaded.loaded}/${treeLoaded.total} 项）`
+                    ? `（搜索只覆盖已加载的 ${treeLoaded.loaded}/${treeLoaded.total} 项）`
                     : `（搜索过滤中，共 ${scan.notes.length} 篇）`
                   : ''}
               </span>
             </div>
-            {resolving ? <p className="kr-muted">正在解析选择…</p> : null}
+            {resolving ? <p className="kr-muted">正在整理选择…</p> : null}
             {selectionError ? (
               <p className="kr-page-error" role="alert">
                 {selectionError}
@@ -947,7 +977,7 @@ export function MarkdownImportDialog({
             ) : null}
             {search.trim() && searchMarkdownScan ? (
               <div className="kr-markdown-search">
-                {searching ? <p className="kr-muted">正在服务端搜索…</p> : null}
+                {searching ? <p className="kr-muted">正在搜索…</p> : null}
                 {searchError ? (
                   <p className="kr-page-error" role="alert">
                     {searchError}
@@ -956,7 +986,7 @@ export function MarkdownImportDialog({
                 {searchTotal > 0 || searchEntries.length > 0 ? (
                   <>
                     <p className="kr-muted">
-                      服务端搜索结果：{searchTotal} 项（已显示 {searchEntries.length} 项）
+                      搜索结果：{searchTotal} 项（已显示 {searchEntries.length} 项）
                     </p>
                     <ul className="kr-markdown-search__list">
                       {searchEntries.map((entry) => {
@@ -1016,14 +1046,12 @@ export function MarkdownImportDialog({
                 {searchEntries.length === 0 && searchError && lazyMode ? (
                   <MarkdownScanTree
                     vaultPath={scan.vaultPath}
-                    getPage={(parent, offset, limit) =>
-                      getMarkdownScanTree!(scan.vaultPath, parent, offset, limit)
-                    }
+                    getPage={loadScanPage}
                     selection={selection}
                     keyword={search}
                     onToggleFile={toggleLazyFile}
                     onToggleFolder={toggleLazyFolder}
-                    onLoadedChange={(loaded, total) => setTreeLoaded({ loaded, total })}
+                    onLoadedChange={handleScanTreeLoaded}
                     onClose={onClose}
                     onRescan={onRescan}
                   />
@@ -1032,14 +1060,12 @@ export function MarkdownImportDialog({
             ) : lazyMode ? (
               <MarkdownScanTree
                 vaultPath={scan.vaultPath}
-                getPage={(parent, offset, limit) =>
-                  getMarkdownScanTree!(scan.vaultPath, parent, offset, limit)
-                }
+                getPage={loadScanPage}
                 selection={selection}
                 keyword={search}
                 onToggleFile={toggleLazyFile}
                 onToggleFolder={toggleLazyFolder}
-                onLoadedChange={(loaded, total) => setTreeLoaded({ loaded, total })}
+                onLoadedChange={handleScanTreeLoaded}
                 onClose={onClose}
                 onRescan={onRescan}
               />
@@ -1080,8 +1106,9 @@ export function MarkdownImportDialog({
             ) : null}
             <div className="kr-markdown-modal__footer">
               <span className="kr-muted">
-                已选 {effectiveCount} 篇 Markdown 笔记
-                {resolveMarkdownSelection ? '（服务端解析）' : ''}
+                {effectiveCount > 0
+                  ? '导入在后台进行，不会阻塞其他操作，可随时取消。'
+                  : '先在上方勾选要导入的 Markdown 笔记。'}
               </span>
               <div className="kr-markdown-modal__footer-actions">
                 <button type="button" onClick={() => onClose()}>
@@ -1089,13 +1116,13 @@ export function MarkdownImportDialog({
                 </button>
                 <button
                   type="button"
-                  className="kr-primary"
+                  className="kr-primary kr-markdown-modal__import-button"
                   disabled={
                     effectiveCount === 0 || resolving || Boolean(selectionError) || running
                   }
                   onClick={() => void startImport()}
                 >
-                  导入选中（{effectiveCount}）
+                  {resolving ? '整理中…' : `导入选中的 ${effectiveCount} 篇笔记`}
                 </button>
               </div>
             </div>

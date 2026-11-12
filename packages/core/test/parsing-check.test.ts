@@ -127,6 +127,10 @@ describe('checkParsingService', () => {
     expect(online.tier).toBe('公网');
     expect(online.message).toContain('无法预先校验');
     expect(online.message).toContain('单页 PDF');
+    // 用户追问「怎么知道 MinerU 有没有出错」：自检文案要说明整页失败以实际错误为准，
+    // 并且区域框选永远不会调用 MinerU。
+    expect(online.message).toContain('区域框选识别永远不会调用 MinerU');
+    expect(online.detail.some((item) => item.includes('区域框选：不调用 MinerU'))).toBe(true);
 
     resetParsingSettings();
     saveParsingConfig(store, secrets, { mode: 'mineru_agent', allow_remote: true });
@@ -134,6 +138,7 @@ describe('checkParsingService', () => {
     expect(agent.mode).toBe('mineru_agent');
     expect(agent.ok).toBe(false);
     expect(agent.message).toContain('限频');
+    expect(agent.message).toContain('区域框选识别永远不会调用 MinerU');
   });
 
   it('never performed a network request during the checks above', () => {

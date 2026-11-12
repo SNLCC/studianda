@@ -664,6 +664,14 @@ async function systemTranscribe(
   }
 }
 
+/**
+ * 语音「模型服务」模式的实际调用配置。
+ *
+ * 这里必须只认保存的 `connection_id` 对应的那条平台连接：旧版本可能只存了模型名
+ * （例如 `mimo-v2.5-tts`），或者用户切换平台后留下了上一个平台的模型名/音色。
+ * 找不到连接时直接报「请选择平台」；模型名不属于当前平台时也明确报错，
+ * 不能让请求悄悄回退到别的地址（那样会出现「设置成别的模型，实际还是 MiMo」）。
+ */
 function profile(
   store: Store,
   secrets: SecretStore,
@@ -675,9 +683,25 @@ function profile(
     const connectionId = config[`${kind}_connection_id`];
     const connection = services.connections.find((item) => item.id === connectionId);
     if (!connection) throw new Error('请先在模型服务中选择语音平台');
+    const label = kind === 'tts' ? '语音播报' : '语音识别';
+    const savedModel = config[`${kind}_model`].trim();
+    const models = connection.models ?? [];
+    if (
+      savedModel &&
+      models.length > 0 &&
+      !models.some((item) => item.name === savedModel || item.id === savedModel)
+    ) {
+      throw new Error(
+        `已保存的${label}模型「${savedModel}」不属于当前平台「${connection.name}」，` +
+          `请到设置 → ${label}重新选择平台与模型`
+      );
+    }
+    // 没有保存模型时优先用该平台「有对应能力」的模型，而不是 models[0]
+    //（第一条往往是对会话语义模型，拿它做 TTS/ASR 会直接失败）。
+    const capable = models.find((item) => (item.capabilities ?? []).includes(kind));
     return {
       baseUrl: connection.baseUrl.replace(/\/+$/, ''),
-      model: config[`${kind}_model`] || connection.models[0]?.name || '',
+      model: savedModel || capable?.name || models[0]?.name || '',
       key: secrets.get(`platform.${connection.id}.api_key`)?.trim() ?? ''
     };
   }

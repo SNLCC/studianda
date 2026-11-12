@@ -524,12 +524,26 @@ describe('generated navigation', () => {
     });
     expect(stale.json()).toMatchObject({ state: 'stale' });
 
+    // 这条遮罩把全文都盖住了：按标题规则没有可用行时必须明确报错，
+    // 不能以 0 条目录"生成成功"（用户报告 5：弹窗关闭、没有任何反馈）。
     const rebuilt = await server.inject({
       method: 'POST',
       url: `/api/v1/documents/${documentId}/navigation`,
       headers: headers()
     });
-    expect(rebuilt.json()).toMatchObject({ state: 'ready' });
+    expect(rebuilt.statusCode).toBe(400);
+    expect(rebuilt.json()).toMatchObject({ error: 'bad_request' });
+    expect((rebuilt.json() as { message: string }).message).toContain('按标题规则没有识别到任何目录条目');
+    // 失败时不能覆盖已有目录：原节点仍在，状态是 failed（带错误原因）。
+    expect(
+      ((
+        await server.inject({
+          method: 'GET',
+          url: `/api/v1/documents/${documentId}/navigation`,
+          headers: headers()
+        })
+      ).json() as Array<unknown>).length
+    ).toBeGreaterThan(0);
 
     const removed = await server.inject({
       method: 'DELETE',

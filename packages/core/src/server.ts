@@ -36,8 +36,10 @@ import {
   type OutlineResult,
   type PageData,
   type QaImportMessage,
+  type QaMessageRecord,
   type QaSessionRecord,
   type ReadingPlanRecord,
+  type ReferenceNodeKind,
   type SearchRequest,
   type SettingsMap,
   type TranslationConfigRecord
@@ -88,6 +90,7 @@ import {
   correctTranscript,
   getSpeechConfig,
   listSystemVoices,
+  mimoVoiceList,
   saveSpeechConfig,
   synthesizeSpeech,
   systemSpeechStatus,
@@ -981,10 +984,30 @@ export function buildServer(options: ServerOptions): FastifyInstance {
 
   app.post(`${API_PREFIX}/markdown/import/cancel`, async () => cancelMarkdownImport());
 
-  // 全库引用关系图：文献/笔记/批注节点 + `[[…]]` 引用边（按节点分页）。
+  // 全库引用关系图：文献/笔记/批注节点 + `[[…]]` 引用边。
+  // all=1 为全量模式（一次返回全部节点/边，超硬上限才退回分页）；旧 limit/offset 分页参数保留兼容。
   app.get(`${API_PREFIX}/reference-graph`, async (request, reply) => {
-    const query = request.query as { limit?: string; offset?: string };
-    const paging: { limit?: number; offset?: number } = {};
+    const query = request.query as {
+      limit?: string;
+      offset?: string;
+      kinds?: string;
+      search?: string;
+      all?: string;
+    };
+    const paging: {
+      limit?: number;
+      offset?: number;
+      kinds?: ReferenceNodeKind[];
+      search?: string;
+      all?: boolean;
+    } = {};
+    // 全量模式开关：all=1/true（或 0/false 显式关闭）；非法值 400。
+    if (query.all !== undefined) {
+      const raw = query.all.trim().toLowerCase();
+      if (raw === '1' || raw === 'true') paging.all = true;
+      else if (raw === '0' || raw === 'false') paging.all = false;
+      else return badRequest(reply, 'all 必须是 1/0 或 true/false');
+    }
     if (query.limit !== undefined) {
       if (!/^\d+$/.test(query.limit.trim())) {
         return badRequest(reply, 'limit 必须是 1..500 的整数');
@@ -1005,8 +1028,29 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       }
       paging.offset = offset;
     }
+    // 可选类型过滤（document,note,annotation 逗号分隔）：先过滤再分页，totalNodes 为过滤后总数。
+    if (query.kinds !== undefined) {
+      const kinds = query.kinds
+        .split(',')
+        .map((kind) => kind.trim())
+        .filter((kind) => kind.length > 0);
+      if (
+        kinds.length === 0 ||
+        kinds.some((kind) => kind !== 'document' && kind !== 'note' && kind !== 'annotation')
+      ) {
+        return badRequest(reply, 'kinds 必须是 document/note/annotation（逗号分隔）');
+      }
+      paging.kinds = [...new Set(kinds)] as ReferenceNodeKind[];
+    }
+    // 可选节点名关键字过滤（不区分大小写子串）：同样发生在分页之前。
+    if (query.search !== undefined) {
+      const search = query.search.trim();
+      if (search.length > 100) return badRequest(reply, 'search 最多 100 个字符');
+      if (search) paging.search = search;
+    }
     try {
-      return options.store.getReferenceGraph(paging);
+      // 全量图可能包含数千节点，统一交给带 gzip 的 JSON 响应（客户端没带 Accept-Encoding 时退回普通 JSON）。
+      return await sendJsonMaybeGzip(request, reply, options.store.getReferenceGraph(paging));
     } catch (error) {
       return badRequest(reply, error instanceof Error ? error.message : '读取关系图失败');
     }
@@ -1243,25 +1287,60 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   // 系统语音只读自检：不发送音频/文本，仅读取本机 Windows 语音组件信息。
   app.get(`${API_PREFIX}/speech/system`, async () => systemSpeechStatus());
 
-  app.get(`${API_PREFIX}/speech/voices`, async (request, reply) => {
-    const query = request.query as { connection_id?: string; model?: string };
-    if (query.connection_id) {
+  /**
+   * 音色列表：按客户端当前正在编辑的播报方式取，而不是只按已保存的配置取。
+   *
+   * 关键约束：`mode=model` 时必须用「选中的平台连接 + 模型」取音色；拿不到连接就直接
+   * 返回可操作的中文说明，**绝不回退**到 `config.tts_url`（旧版本存下来的 MiMo 地址）。
+   * 之前正是这个回退导致用户「配置了模型，检测音色还是 MiMo」。
+   */
+  app.get(`${API_PREFIX}/speech/voices`, async (request) => {
+    const query = request.query as {
+      connection_id?: string;
+      model?: string;
+      mode?: string;
+      url?: string;
+    };
+    const config = getSpeechConfig(options.store, options.secrets);
+    const mode: 'system' | 'model' | 'custom' =
+      query.mode === 'system' || query.mode === 'model' || query.mode === 'custom'
+        ? query.mode
+        : config.tts_mode;
+    if (mode === 'model') {
+      const connectionId = (query.connection_id ?? '').trim();
+      if (!connectionId) {
+        return {
+          mode,
+          voices: [],
+          message:
+            '模型服务模式需要先选择「语音平台」：请在上方选择平台与模型后再获取音色（不会回退到旧的 TTS 地址）。'
+        };
+      }
       const connection = resolveModelConnection(
         options.store,
         options.secrets,
-        query.connection_id
+        connectionId
       );
       if (!connection) {
-        return { voices: [], message: '模型服务连接不存在，请重新选择连接的平台。' };
+        return {
+          mode,
+          connection_id: connectionId,
+          voices: [],
+          message: '模型服务连接不存在（可能已删除），请重新选择语音平台。'
+        };
       }
-      const config = getSpeechConfig(options.store, options.secrets);
+      // 显式传来的 model（即使是空串）优先：避免用户换了模型后，服务端还拿已保存的旧模型名。
+      const model = query.model !== undefined ? query.model.trim() : config.tts_model.trim();
       try {
         const list = await voicesForSpeechConnection(
           connection.baseUrl,
           connection.apiKey,
-          (query.model ?? config.tts_model).trim()
+          model
         );
         return {
+          mode,
+          connection_id: connectionId,
+          model,
           voices: list.voices.map((voice) => voice.id),
           labels: Object.fromEntries(list.voices.map((voice) => [voice.id, voice.label])),
           source: list.source,
@@ -1270,22 +1349,41 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         };
       } catch (error) {
         return {
+          mode,
+          connection_id: connectionId,
+          model,
           voices: [],
           message: error instanceof Error ? error.message : '获取音色失败'
         };
       }
     }
-    const config = getSpeechConfig(options.store, options.secrets);
-    if (config.tts_mode === 'system') {
+    if (mode === 'system') {
       try {
-        return { voices: await listSystemVoices() };
+        const voices = await listSystemVoices();
+        return {
+          mode,
+          voices,
+          source: '系统语音',
+          message:
+            voices.length > 0
+              ? `本机 Windows 已安装 ${voices.length} 个 TTS 音色；留空使用系统默认音色。`
+              : '没有检测到已安装的系统 TTS 音色；可留空使用系统默认，或先安装 Windows 语音包。'
+        };
       } catch {
-        return { voices: [], message: '系统语音音色列表读取失败，可留空使用系统默认。' };
+        return {
+          mode,
+          voices: [],
+          source: '系统语音',
+          message: '系统语音音色列表读取失败，可留空使用系统默认。'
+        };
       }
     }
-    if (!config.tts_url) return { voices: [], message: '请先填写 TTS 服务地址。' };
+    // 自定义 OpenAI 兼容服务：优先用客户端当前填写的地址（未保存也能取），其次已保存地址。
+    const url = (query.url ?? config.tts_url).trim();
+    const model = query.model !== undefined ? query.model.trim() : config.tts_model.trim();
+    if (!url) return { mode, voices: [], message: '请先填写 TTS 服务地址。' };
     const key = options.secrets.get('speech.tts_key')?.trim() ?? '';
-    const base = config.tts_url.replace(/\/+$/, '');
+    const base = url.replace(/\/+$/, '');
     for (const path of ['/audio/voices', '/voices']) {
       try {
         const response = await fetch(`${base}${path}`, {
@@ -1314,28 +1412,43 @@ export function buildServer(options: ServerOptions): FastifyInstance {
             return '';
           })
           .filter(Boolean);
-        if (voices.length > 0) return { voices };
+        if (voices.length > 0) {
+          return {
+            mode,
+            url,
+            model,
+            voices,
+            source: '服务接口',
+            message: `来自 TTS 服务 ${base}${path} 的音色列表，共 ${voices.length} 个。`
+          };
+        }
       } catch {
         // try next path
       }
     }
     let host = '';
     try {
-      host = new URL(config.tts_url).hostname;
+      host = new URL(url).hostname;
     } catch {
       host = '';
     }
-    const known =
-      host === 'api.xiaomimimo.com'
-        ? ['mimo_default', '冰糖', '茉莉', '苏打', '白桦', 'Mia', 'Chloe', 'Milo', 'Dean']
-        : [];
-    if (known.length > 0) {
+    if (host === 'api.xiaomimimo.com') {
+      const list = mimoVoiceList(model);
       return {
-        voices: known,
-        message: '平台没有公开音色列表接口，已显示官方文档中的预置音色；仍可手动填写其它音色 ID。'
+        mode,
+        url,
+        model,
+        voices: list.voices.map((voice) => voice.id),
+        labels: Object.fromEntries(list.voices.map((voice) => [voice.id, voice.label])),
+        source: list.source,
+        metadata_url: list.metadata_url,
+        message: list.note
       };
     }
     return {
+      mode,
+      url,
+      model,
       voices: [],
       message: '服务没有返回音色列表，可手动填写音色 ID。'
     };
@@ -4246,23 +4359,62 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     return id ? options.store.getQaSession(id) : options.store.createQaSession('');
   };
 
-  /** 记本轮用户消息；「继续阅读」重发不重复记（同一问题不能出现两条用户消息）。 */
+  /**
+   * 记本轮用户消息；「继续阅读」重发不重复记（同一问题不能出现两条用户消息）。
+   *
+   * 返回落库的消息记录（语音轮成功后用它补写转写正文）；没有落库时返回 null。
+   */
   const persistQaUserTurn = (
     session: QaSessionRecord | null,
     body: Partial<ChatRequest>,
     question: string
-  ): void => {
-    if (!session) return;
-    if (typeof body.taskId === 'string' && body.taskId) return;
+  ): QaMessageRecord | null => {
+    if (!session) return null;
+    if (typeof body.taskId === 'string' && body.taskId) return null;
     try {
-      options.store.appendQaMessage({
+      const text = question.trim();
+      // 语音直问不再由客户端预先 ASR：先如实落一条「（语音提问）」占位，等全模态模型
+      // 返回 audio_transcript 后再补写正文（见 updateVoiceUserTurn）。文字提问照常立即落库。
+      const content = text
+        ? body.audio && typeof body.audio === 'object'
+          ? `（语音）${text}`
+          : text
+        : '（语音提问）';
+      const message = options.store.appendQaMessage({
         sessionId: session.id,
         role: 'user',
-        content: question.trim() || '（语音提问）'
+        content
       });
-      if (question.trim()) options.store.autoTitleQaSession(session.id, question);
+      if (text) options.store.autoTitleQaSession(session.id, text);
+      return message;
     } catch {
       // 会话落库失败不阻断回答；下一轮仍按客户端带回的会话 id 继续。
+      return null;
+    }
+  };
+
+  /**
+   * 语音直问成功后补写用户消息正文：全模态模型返回逐字转写时，把先前的「（语音提问）」
+   * 占位改成「（语音）转写」，让会话历史里能看到用户说了什么。
+   *
+   * 时机在助手消息落库之前，用 editQaUserMessage 不会删掉任何有效回答（此后没有消息）；
+   * 补写失败只影响会话里显示的正文，不影响本轮回答。
+   */
+  const updateVoiceUserTurn = (
+    session: QaSessionRecord | null,
+    userTurn: QaMessageRecord | null,
+    result: ChatResponse
+  ): void => {
+    if (!session || !userTurn) return;
+    const transcript =
+      typeof result.audio_transcript === 'string' ? result.audio_transcript.trim() : '';
+    if (!transcript) return;
+    try {
+      options.store.editQaUserMessage(session.id, userTurn.id, `（语音）${transcript}`);
+      // 首条就是语音时，标题也用转写全文（autoTitleQaSession 只在标题为空时写入）。
+      options.store.autoTitleQaSession(session.id, transcript);
+    } catch {
+      // 补写失败不影响回答；用户消息保留「（语音提问）」占位。
     }
   };
 
@@ -4371,6 +4523,8 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       return badRequest(reply, '问答会话不存在');
     }
     let questionForTurn = questionText;
+    // 语音轮先落占位；模型返回 audio_transcript 后补写用户消息正文（见 updateVoiceUserTurn）。
+    let userTurn: QaMessageRecord | null = null;
     // 同一会话/文献只允许一轮在飞：并发请求直接 409（比让 user/assistant 交错落库安全）。
     const turnKey = chatTurnKeyOf(
       qaSession,
@@ -4386,7 +4540,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       if (previous === null) return badRequest(reply, '没有可重新生成的回答');
       questionForTurn = previous;
     } else {
-      persistQaUserTurn(qaSession, body, questionText);
+      userTurn = persistQaUserTurn(qaSession, body, questionText);
     }
     reply.hijack();
     const raw = reply.raw;
@@ -4452,6 +4606,8 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       const response: ChatResponse = qaSession
         ? { ...result, qa_session_id: qaSession.id }
         : result;
+      // 语音轮：模型返回逐字转写后补写用户消息正文（占位 → 「（语音）转写」）。
+      updateVoiceUserTurn(qaSession, userTurn, response);
       persistQaAssistantTurn(qaSession, response);
       send('result', response);
     } catch (error) {
@@ -4515,6 +4671,8 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       return badRequest(reply, '问答会话不存在');
     }
     let questionForTurn = questionText;
+    // 语音轮先落占位；模型返回 audio_transcript 后补写用户消息正文（见 updateVoiceUserTurn）。
+    let userTurn: QaMessageRecord | null = null;
     // 同一会话/文献只允许一轮在飞：并发请求直接 409（比让 user/assistant 交错落库安全）。
     const turnKey = chatTurnKeyOf(
       qaSession,
@@ -4530,7 +4688,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       if (previous === null) return badRequest(reply, '没有可重新生成的回答');
       questionForTurn = previous;
     } else {
-      persistQaUserTurn(qaSession, body, questionText);
+      userTurn = persistQaUserTurn(qaSession, body, questionText);
     }
     try {
       const controller = new AbortController();
@@ -4582,6 +4740,8 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         const response: ChatResponse = qaSession
           ? { ...result, qa_session_id: qaSession.id }
           : result;
+        // 语音轮：模型返回逐字转写后补写用户消息正文（占位 → 「（语音）转写」）。
+        updateVoiceUserTurn(qaSession, userTurn, response);
         persistQaAssistantTurn(qaSession, response);
         return response;
       } finally {

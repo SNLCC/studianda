@@ -1,10 +1,11 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+﻿import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { recognizeRegion } from '../src/ocr.js';
+import { recognizePage, recognizeRegion } from '../src/ocr.js';
+import { readRecentErrors } from '../src/error-log.js';
 import { saveParsingConfig } from '../src/parsing-config.js';
 import { SecretStore } from '../src/secrets.js';
 import { Store } from '../src/store.js';
@@ -33,12 +34,18 @@ function rawVisualChunks(matchText: string): Array<{ text: string; bbox: string;
   }>;
 }
 
-/** mock 一次视觉/自定义服务调用，返回调用次数与最后一次请求体。 */
-function mockJsonResponse(payload: unknown): { calls: () => number; body: () => string } {
+/** mock 一次视觉/自定义服务调用，返回调用次数、地址与最后一次请求体。 */
+function mockJsonResponse(payload: unknown): {
+  calls: () => number;
+  body: () => string;
+  url: () => string;
+} {
   let calls = 0;
   let body = '';
-  globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+  let url = '';
+  globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
     calls += 1;
+    url = typeof input === 'string' ? input : String((input as { url?: string })?.url ?? '');
     body = typeof init?.body === 'string' ? init.body : '';
     return {
       ok: true,
@@ -46,12 +53,89 @@ function mockJsonResponse(payload: unknown): { calls: () => number; body: () => 
       json: async () => payload
     } as unknown as Response;
   }) as typeof fetch;
-  return { calls: () => calls, body: () => body };
+  return { calls: () => calls, body: () => body, url: () => url };
+}
+
+/** 在「模型服务」里配置一个视觉模型（routing.vision），用于验证区域识别的回退。 */
+function configureVisualService(): void {
+  secrets.set('platform.c-vis.api_key', 'k-vis');
+  store.updateSettings({
+    'model.services': JSON.stringify([
+      {
+        id: 'c-vis',
+        name: '视觉平台',
+        platform: 'custom',
+        baseUrl: 'https://vision.example.com/v1',
+        models: [
+          {
+            id: 'm-vis',
+            name: 'vis-routed-model',
+            capabilities: ['vision'],
+            source: 'manual',
+            enabled: true
+          }
+        ]
+      }
+    ]),
+    'model.routing': JSON.stringify({ vision: { connectionId: 'c-vis', model: 'vis-routed-model' } })
+  });
+}
+
+function clearModelServices(): void {
+  store.updateSettings({ 'model.services': '[]', 'model.routing': '{}' });
 }
 
 function pngSize(dataUrl: string): { width: number; height: number } {
   const buffer = Buffer.from(dataUrl.slice(dataUrl.indexOf(',') + 1), 'base64');
   return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+}
+
+interface FetchRule {
+  /** URL 子串或正则。 */
+  match: string | RegExp;
+  status?: number;
+  /** 原样响应文本（非 JSON 网关页也可）。 */
+  text?: string;
+  /** 响应 JSON（自动序列化）。 */
+  json?: unknown;
+  /** 直接抛出的网络错误（如超时 DOMException）。 */
+  reject?: Error;
+}
+
+/** 按 URL 路由的 fetch mock：用于验证 MinerU 各步骤的 HTTP 状态/返回 message/超时文案。 */
+function mockFetchRules(rules: FetchRule[]): { urls: () => string[] } {
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : String((input as { url?: string })?.url ?? '');
+    void init;
+    calls.push(url);
+    const rule = rules.find((item) =>
+      typeof item.match === 'string' ? url.includes(item.match) : item.match.test(url)
+    );
+    if (!rule) throw new Error(`未预期的请求：${url}`);
+    if (rule.reject) throw rule.reject;
+    const status = rule.status ?? 200;
+    const text =
+      rule.text ?? (rule.json === undefined ? '' : JSON.stringify(rule.json));
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      text: async () => text,
+      json: async () => JSON.parse(text),
+      arrayBuffer: async () => new TextEncoder().encode(text).buffer
+    } as unknown as Response;
+  }) as typeof fetch;
+  return { urls: () => calls };
+}
+
+/** 跑一次整页识别并返回错误消息（用于断言失败文案）。 */
+async function pageRecognitionError(): Promise<string> {
+  try {
+    await recognizePage(store, secrets, documentId, 1);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  throw new Error('期望整页识别失败，但成功了');
 }
 
 beforeAll(async () => {
@@ -78,6 +162,7 @@ afterAll(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  delete process.env.STUDIANDA_MINERU_POLL_INTERVAL_MS;
 });
 
 describe('region OCR', () => {
@@ -106,6 +191,10 @@ describe('region OCR', () => {
     expect(result.textReflowed).toContain('图 1 数据');
     expect(result.bbox).toEqual([0.1, 0.1, 0.6, 0.4]);
     expect(result.engine).toBe('vision');
+    // 纯 vision 模式：说明用了哪个模型/地址，不说 MinerU（没有回退）。
+    expect(result.engine_note).toContain('vision 模式的视觉模型');
+    expect(result.engine_note).toContain('vis-model');
+    expect(result.fallback_from).toBeUndefined();
 
     const chunks = rawVisualChunks(VISION_TEXT);
     expect(chunks).toHaveLength(1);
@@ -169,22 +258,326 @@ describe('region OCR', () => {
     }
   });
 
-  it('rejects MinerU modes for region OCR', async () => {
+  it('MinerU 模式回退到已配置的视觉模型，只发送裁出的选区', async () => {
     saveParsingConfig(store, secrets, {
       mode: 'mineru_online',
       allow_remote: true,
       service_key: 'online-token'
     });
+    // 清掉旧 vision 模式下残留的 parsing.model，让回退走「模型服务」里的视觉模型。
+    store.updateSettings({ 'parsing.model': '' });
+    configureVisualService();
+    const mock = mockJsonResponse({
+      choices: [{ message: { content: 'MINERU-FALLBACK-TEXT' } }]
+    });
     try {
-      await expect(
-        recognizeRegion(store, secrets, documentId, 1, REGION)
-      ).rejects.toThrow('区域识别暂不支持当前识别方式');
+      const result = await recognizeRegion(store, secrets, documentId, 1, {
+        x0: 0.2,
+        y0: 0.2,
+        x1: 0.4,
+        y1: 0.3
+      });
+      expect(mock.calls()).toBe(1);
+      expect(mock.url()).toContain('https://vision.example.com/v1/chat/completions');
+      const body = mock.body();
+      expect(body).toContain('"model":"vis-routed-model"');
+      expect(body).toContain('只转录选区可见文字');
+      const match = body.match(/data:image\/png;base64,([^"]+)/);
+      expect(match).toBeTruthy();
+      // 只发裁图：400×600 页 ×2 渲染，选区 0.2×0.1 → 160×120，而不是整页 800×1200。
+      expect(pngSize(`data:image/png;base64,${match![1]}`)).toEqual({
+        width: 160,
+        height: 120
+      });
+      expect(result.engine).toBe('vision');
+      expect(result.text).toBe('MINERU-FALLBACK-TEXT');
+      // 回退必须可解释：engine 仍是 vision，但来源说明写清「MinerU 不支持框选、本次改用视觉模型、
+      // MinerU 没有被调用」，用户据此能确认 MinerU 没参与、也不存在 MinerU 出错。
+      expect(result.fallback_from).toBe('mineru_online');
+      expect(result.engine_note).toContain('当前整页识别方式是MinerU 在线精准解析');
+      expect(result.engine_note).toContain('不支持只识别框选区域');
+      expect(result.engine_note).toContain('vis-routed-model');
+      expect(result.engine_note).toContain('来自「模型服务」的视觉/全模态绑定');
+      expect(result.engine_note).toContain('只发送裁出的选区图片');
+      expect(result.engine_note).toContain('MinerU 没有被调用，因此不存在 MinerU 出错');
+      expect(rawVisualChunks('MINERU-FALLBACK-TEXT')).toHaveLength(1);
     } finally {
-      saveParsingConfig(store, secrets, { mode: 'vision', model: 'vis-model', allow_remote: true });
+      clearModelServices();
+      saveParsingConfig(store, secrets, {
+        mode: 'vision',
+        model: 'vis-model',
+        allow_remote: true
+      });
+    }
+  });
+
+  it('MinerU 模式 + 没有任何视觉模型时给出明确配置指引', async () => {
+    saveParsingConfig(store, secrets, {
+      mode: 'mineru_online',
+      allow_remote: true,
+      service_key: 'online-token'
+    });
+    store.updateSettings({ 'parsing.model': '' });
+    clearModelServices();
+    try {
+      const message = await recognizeRegion(store, secrets, documentId, 1, REGION).then(
+        () => '',
+        (error: unknown) => (error instanceof Error ? error.message : String(error))
+      );
+      expect(message).toContain(
+        '未配置可用视觉模型：请在设置→识别方式选择视觉模型，或在模型服务为模型勾选视觉/全模态'
+      );
+      // 用户追问「怎么知道 MinerU 有没有出错」：这里也要直说区域框选没有调用 MinerU。
+      expect(message).toContain('区域框选不会调用 MinerU，本次也没有调用 MinerU');
+    } finally {
+      saveParsingConfig(store, secrets, {
+        mode: 'vision',
+        model: 'vis-model',
+        allow_remote: true
+      });
     }
   });
 
   it('requires an existing document before writing a visual chunk', () => {
     expect(() => store.addVisualChunk('missing-document', 1, 'x', null)).toThrow('文档不存在');
+  });
+});
+
+function timedOutError(): Error {
+  const error = new Error('The operation was aborted due to timeout');
+  error.name = 'TimeoutError';
+  return error;
+}
+
+function restoreVisionMode(): void {
+  saveParsingConfig(store, secrets, { mode: 'vision', model: 'vis-model', allow_remote: true });
+}
+
+function enableOnlineMineru(): void {
+  saveParsingConfig(store, secrets, {
+    mode: 'mineru_online',
+    allow_remote: true,
+    service_key: 'online-token'
+  });
+}
+
+function enableAgentMineru(): void {
+  saveParsingConfig(store, secrets, { mode: 'mineru_agent', allow_remote: true });
+}
+
+const ONLINE_APPLY_OK = {
+  match: '/file-urls/batch',
+  json: {
+    code: 0,
+    data: { batch_id: 'batch-1', file_urls: ['https://upload.mineru.test/page.pdf'] }
+  }
+} satisfies FetchRule;
+const ONLINE_UPLOAD_OK: FetchRule = { match: 'upload.mineru.test', status: 200 };
+const AGENT_APPLY_OK = {
+  match: '/parse/file',
+  json: {
+    code: 0,
+    data: { task_id: 'task-1', file_url: 'https://upload.mineru.test/page.pdf' }
+  }
+} satisfies FetchRule;
+
+/**
+ * 整页 MinerU 识别失败时的「可核对」文案：
+ * 用户要能看出是哪个环节（申请上传/上传/轮询/下载）、HTTP 状态、MinerU 返回的 message、
+ * 是超时还是限频，而不是笼统的「识别失败」。
+ */
+describe('MinerU 整页识别失败原因可见', () => {
+  it('在线：HTTP 401 / 403 提示 Token 无效或没有权限，并写入错误日志', async () => {
+    enableOnlineMineru();
+    mockFetchRules([
+      { match: '/file-urls/batch', status: 401, text: '{"code":-1000,"msg":"invalid token"}' }
+    ]);
+    try {
+      const message = await pageRecognitionError();
+      expect(message).toContain('MinerU 在线精准解析申请上传失败：HTTP 401');
+      expect(message).toContain('invalid token');
+      expect(message).toContain('MinerU Token 无效或没有权限');
+      // 诊断日志里能查到这次失败的真实原因（不是只给 UI 看）。
+      expect(
+        readRecentErrors(dataDir, 50).some(
+          (entry) =>
+            entry.context.includes('ocr:page:mineru_online') &&
+            entry.message.includes('HTTP 401')
+        )
+      ).toBe(true);
+    } finally {
+      restoreVisionMode();
+    }
+  });
+
+  it('在线：HTTP 429 明确说被限频（不笼统失败）', async () => {
+    enableOnlineMineru();
+    process.env.STUDIANDA_MINERU_POLL_INTERVAL_MS = '0';
+    mockFetchRules([
+      ONLINE_APPLY_OK,
+      ONLINE_UPLOAD_OK,
+      { match: '/extract-results/batch/batch-1', status: 429, text: '{"msg":"rate limit"}' }
+    ]);
+    try {
+      const message = await pageRecognitionError();
+      expect(message).toContain('MinerU 在线精准解析查询批次失败：HTTP 429');
+      expect(message).toContain('rate limit');
+      expect(message).toContain('请求被 MinerU 限频');
+    } finally {
+      restoreVisionMode();
+      delete process.env.STUDIANDA_MINERU_POLL_INTERVAL_MS;
+    }
+  });
+
+  it('在线：批次失败原样带 MinerU 的 message 与错误码', async () => {
+    enableOnlineMineru();
+    process.env.STUDIANDA_MINERU_POLL_INTERVAL_MS = '0';
+    mockFetchRules([
+      ONLINE_APPLY_OK,
+      ONLINE_UPLOAD_OK,
+      {
+        match: '/extract-results/batch/batch-1',
+        json: {
+          code: 0,
+          data: { extract_result: [{ state: 'failed', err_msg: 'page too large', err_code: -6001 }] }
+        }
+      }
+    ]);
+    try {
+      const message = await pageRecognitionError();
+      expect(message).toContain('MinerU 在线精准解析失败：page too large');
+      expect(message).toContain('（错误码 -6001）');
+    } finally {
+      restoreVisionMode();
+      delete process.env.STUDIANDA_MINERU_POLL_INTERVAL_MS;
+    }
+  });
+
+  it('在线：结果包下载失败区分「下载」环节与 HTTP 状态', async () => {
+    enableOnlineMineru();
+    process.env.STUDIANDA_MINERU_POLL_INTERVAL_MS = '0';
+    mockFetchRules([
+      ONLINE_APPLY_OK,
+      ONLINE_UPLOAD_OK,
+      {
+        match: '/extract-results/batch/batch-1',
+        json: {
+          code: 0,
+          data: {
+            extract_result: [{ state: 'done', full_zip_url: 'https://zip.mineru.test/result.zip' }]
+          }
+        }
+      },
+      { match: 'zip.mineru.test', status: 500, text: 'upstream error' }
+    ]);
+    try {
+      const message = await pageRecognitionError();
+      expect(message).toContain('MinerU 在线精准解析下载结果包失败：HTTP 500');
+      expect(message).toContain('upstream error');
+      expect(message).toContain('MinerU 服务端错误');
+    } finally {
+      restoreVisionMode();
+      delete process.env.STUDIANDA_MINERU_POLL_INTERVAL_MS;
+    }
+  });
+
+  it('在线：网络超时说明 120 秒无响应（不吞原因）', async () => {
+    enableOnlineMineru();
+    mockFetchRules([{ match: '/file-urls/batch', reject: timedOutError() }]);
+    try {
+      const message = await pageRecognitionError();
+      expect(message).toContain('MinerU 在线精准解析申请上传超时（120 秒没有响应）');
+    } finally {
+      restoreVisionMode();
+    }
+  });
+
+  it('在线：轮询超时说明最后状态与 batch_id', async () => {
+    enableOnlineMineru();
+    process.env.STUDIANDA_MINERU_POLL_INTERVAL_MS = '0';
+    mockFetchRules([
+      ONLINE_APPLY_OK,
+      ONLINE_UPLOAD_OK,
+      {
+        match: '/extract-results/batch/batch-1',
+        json: { code: 0, data: { extract_result: [{ state: 'running' }] } }
+      }
+    ]);
+    try {
+      const message = await pageRecognitionError();
+      expect(message).toContain('MinerU 在线精准解析轮询超时');
+      expect(message).toContain('最后状态：running');
+      expect(message).toContain('batch_id=batch-1');
+    } finally {
+      restoreVisionMode();
+      delete process.env.STUDIANDA_MINERU_POLL_INTERVAL_MS;
+    }
+  });
+
+  it('Agent：HTTP 500 与 code != 0 都带真实原因', async () => {
+    enableAgentMineru();
+    mockFetchRules([{ match: '/parse/file', status: 500, text: 'Internal Server Error' }]);
+    try {
+      expect(await pageRecognitionError()).toContain(
+        'MinerU 轻量解析（Agent）申请上传失败：HTTP 500：Internal Server Error'
+      );
+    } finally {
+      restoreVisionMode();
+    }
+
+    enableAgentMineru();
+    mockFetchRules([
+      { match: '/parse/file', json: { code: 10001, msg: 'invalid file' } }
+    ]);
+    try {
+      const message = await pageRecognitionError();
+      expect(message).toContain('MinerU 轻量解析（Agent）申请上传被拒绝：code=10001');
+      expect(message).toContain('invalid file');
+    } finally {
+      restoreVisionMode();
+    }
+  });
+
+  it('Agent：任务失败带 err_msg 与错误码', async () => {
+    enableAgentMineru();
+    process.env.STUDIANDA_MINERU_POLL_INTERVAL_MS = '0';
+    mockFetchRules([
+      AGENT_APPLY_OK,
+      ONLINE_UPLOAD_OK,
+      {
+        match: '/parse/task-1',
+        json: { code: 0, data: { state: 'failed', err_msg: 'scan failed', err_code: 500 } }
+      }
+    ]);
+    try {
+      const message = await pageRecognitionError();
+      expect(message).toContain('MinerU 轻量解析（Agent）失败：scan failed');
+      expect(message).toContain('（错误码 500）');
+    } finally {
+      restoreVisionMode();
+      delete process.env.STUDIANDA_MINERU_POLL_INTERVAL_MS;
+    }
+  });
+
+  it('Agent：Markdown 下载失败区分「下载 Markdown」环节', async () => {
+    enableAgentMineru();
+    process.env.STUDIANDA_MINERU_POLL_INTERVAL_MS = '0';
+    mockFetchRules([
+      AGENT_APPLY_OK,
+      ONLINE_UPLOAD_OK,
+      {
+        match: '/parse/task-1',
+        json: { code: 0, data: { state: 'done', markdown_url: 'https://md.mineru.test/out.md' } }
+      },
+      { match: 'md.mineru.test', status: 404, text: 'not found' }
+    ]);
+    try {
+      const message = await pageRecognitionError();
+      expect(message).toContain('MinerU 轻量解析（Agent）下载 Markdown 文件失败：HTTP 404');
+      expect(message).toContain('not found');
+    } finally {
+      restoreVisionMode();
+      delete process.env.STUDIANDA_MINERU_POLL_INTERVAL_MS;
+    }
   });
 });

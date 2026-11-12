@@ -36,6 +36,22 @@ export interface PdfLayout {
   outline: OutlineEntry[];
 }
 
+/** 拿不到 item 字号时的兜底字号（pt），只用于算行合并阈值。 */
+const MIN_LINE_SIZE = 6;
+/** 同一行的基线容差下限（pt）：上标/不同字体混排的垂直偏移通常 2–4pt。 */
+const MIN_BASELINE_TOLERANCE = 2;
+/** 同一行的基线容差（主字号比例）：0.5×字号 ≈ 上标最大抬高量。 */
+const BASELINE_TOLERANCE_RATIO = 0.5;
+/** 同一行的水平间距下限（pt）。 */
+const MIN_LINE_GAP = 2;
+/**
+ * 同一行的水平间距阈值（主字号比例）。
+ *
+ * 普通词间距只有 0.1–0.3em，中文/两端对齐 PDF 偶尔到 0.5em；表格列间距、
+ * 双栏栏沟通常 ≥1em，用它把「同一行」和「跳到下一栏/下一行」分开。
+ */
+const LINE_GAP_RATIO = 0.9;
+
 /**
  * 页面行阅读顺序（保留旧导出签名）。
  *
@@ -123,21 +139,37 @@ export async function extractPdfLayout(
       const [, , , , x, y] = item.transform as [number, number, number, number, number, number];
       const width = item.width ?? 0;
       const height = item.height ?? 0;
+      // 纯空白项只用来记录行内列间距（表格列），不应单独起行：
+      // 中文/表格 PDF 常把空白做成独立 item，且它的 transform 可能带偏移。
+      if (!item.str.trim()) {
+        if (current) {
+          current.text += ' ';
+          current.gap = Math.max(current.gap, width / (viewport.width || 1));
+          current.x1 = Math.max(current.x1, x + width);
+          current.ended = current.ended || Boolean(item.hasEOL);
+        }
+        continue;
+      }
+      // 阈值按字号比例（pt）：写死的 2pt/20pt 会把上标脚注编号（基线略高、字号小）
+      // 和中文词间距（普遍比西文大）拆成独立行，句子断裂后还会被误判成标题。
+      // 主字号取当前行与当前 item 的较大者，避免把上标自身的字号当基准。
+      const referenceSize = Math.max(current?.size ?? 0, height, MIN_LINE_SIZE);
+      const baselineTolerance = Math.max(
+        MIN_BASELINE_TOLERANCE,
+        referenceSize * BASELINE_TOLERANCE_RATIO
+      );
+      const gapTolerance = Math.max(MIN_LINE_GAP, referenceSize * LINE_GAP_RATIO);
       const startsNewLine =
         current == null ||
-        Math.abs(current.baseline - y) > 2 ||
         current.ended ||
-        (x - current.x1 > 20 && item.str.trim().length > 0);
+        Math.abs(current.baseline - y) > baselineTolerance ||
+        x - current.x1 > gapTolerance;
       if (startsNewLine) {
         pushCurrent();
         current = { text: '', x0: x, y0: y, x1: x + width, y1: y + height, baseline: y, size: height, gap: 0, ended: false };
       }
       const line = current as NonNullable<typeof current>;
       line.text += item.str;
-      // 空白项宽度≈单元格之间的列间距；普通词间距很小，用它区分表格列。
-      if (!item.str.trim()) {
-        line.gap = Math.max(line.gap, width / (viewport.width || 1));
-      }
       line.x0 = Math.min(line.x0, x);
       line.y0 = Math.min(line.y0, y);
       line.x1 = Math.max(line.x1, x + width);

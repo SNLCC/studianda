@@ -274,6 +274,164 @@ describe('内容块识别（版面还原）', () => {
   });
 });
 
+describe('内容块识别：题注/表格/续段/中文标题', () => {
+  it('「Table I lists …」这类正文句子不算题注，真题注仍独立成块', () => {
+    const sample = layout([
+      page(1, [
+        line('4 RESULTS', 60, 40, { size: 14, width: 200 }),
+        line('Table I lists the approximate point sizes used in this sample.', 60, 100),
+        line('The values are illustrative; a real submission should follow the template.', 60, 118),
+        line('TABLE I. Sample Table Within a Column.', 60, 160, { size: 9, width: 300 }),
+        line('Figure 3: Overview of the model pipeline.', 60, 200, { size: 9, width: 300 }),
+        line('Figure 3 shows that the pipeline is stable across runs.', 60, 240),
+        line('图 1 实验装置示意图', 60, 280, { size: 9, width: 300 }),
+        // 中文正文引用「图1显示了…。」带句末标点，是正文不是题注。
+        line('图1显示了实验结果随温度变化。', 60, 320, { size: 9, width: 300 })
+      ])
+    ]);
+    const result = recognizeBlocks(sample, [], { documentId: 'doc-caption' });
+    const captions = result.blocks
+      .filter((block) => block.kind === 'caption')
+      .map((block) => block.text);
+    expect(captions).toEqual([
+      'TABLE I. Sample Table Within a Column.',
+      'Figure 3: Overview of the model pipeline.',
+      '图 1 实验装置示意图'
+    ]);
+    expect(
+      result.blocks.find((block) => block.text.startsWith('Table I lists'))?.kind
+    ).toBe('paragraph');
+    expect(
+      result.blocks.find((block) => block.text.startsWith('Figure 3 shows'))?.kind
+    ).toBe('paragraph');
+    expect(
+      result.blocks.find((block) => block.text.startsWith('图1显示了'))?.kind
+    ).toBe('paragraph');
+  });
+
+  it('同页连续的表格行合成一个表格块（一行一块 → 一张表）', () => {
+    // 三行左边界各差 12pt（超过缩进容差），段落识别会把它们切成三个块；
+    // 垂直间距很紧（≤0.03）且水平重叠，应被合回一张表。
+    const sample = layout([
+      page(1, [
+        line('4 RESULTS', 60, 40, { size: 14, width: 200 }),
+        line('Element Style Size (pt)', 60, 100, { size: 9, width: 300, gap: 0.09 }),
+        line('Title Bold, centered 18', 72, 118, { size: 9, width: 300, gap: 0.09 }),
+        line('Body text Justified 10', 84, 136, { size: 9, width: 300, gap: 0.09 }),
+        line('TABLE I. Sizes used in this sample.', 60, 170, { size: 9, width: 320 })
+      ])
+    ]);
+    const result = recognizeBlocks(sample, [], { documentId: 'doc-table' });
+    const tables = result.blocks.filter((block) => block.kind === 'table');
+    expect(tables).toHaveLength(1);
+    expect(tables[0]?.lines).toBe(3);
+    expect(tables[0]?.text.split('\n')).toEqual([
+      'Element Style Size (pt)',
+      'Title Bold, centered 18',
+      'Body text Justified 10'
+    ]);
+    expect(result.stats.tables).toBe(1);
+  });
+
+  it('栏断点处被硬换行切开的同一段接回一块，大写开头的新段不并', () => {
+    const leftTexts = [
+      'The approach separates the title block from the body and',
+      'keeps the first section single-column so that the title,',
+      'authors, and abstract span the full text width while the',
+      'second section uses two columns with a moderate gutter and',
+      'this paragraph continues across the break into'
+    ];
+    const rightTexts = [
+      'moderate gutter. This arrangement is common in conference',
+      'proceedings and balances readability with information',
+      'density. The right column starts near the top of the page',
+      'and the text keeps flowing in the usual way.'
+    ];
+    const sample = layout([
+      page(1, [
+        ...leftTexts.map((text, index) => line(text, 30, 600 + index * 16, { width: 280 })),
+        ...rightTexts.map((text, index) => line(text, 320, 80 + index * 16, { width: 280 })),
+        line('This second column paragraph starts with a capital letter.', 320, 240, {
+          width: 280
+        })
+      ])
+    ]);
+    const result = recognizeBlocks(sample, [], { documentId: 'doc-columns' });
+    expect(result.blocks).toHaveLength(2);
+    expect(result.blocks[0]?.kind).toBe('paragraph');
+    expect(result.blocks[0]?.lines).toBe(9);
+    expect(result.blocks[0]?.text).toContain('break into moderate gutter.');
+    expect(result.blocks[1]?.kind).toBe('paragraph');
+    expect(result.blocks[1]?.text).toContain('starts with a capital letter');
+  });
+
+  it('中文编号标题（第一章/一、/（一）/1、）分别成块并带层级', () => {
+    const sample = layout([
+      page(1, [
+        line('第一章 绪论', 60, 40, { size: 14, width: 200 }),
+        line('一、研究背景', 60, 80, { size: 12, width: 200 }),
+        line('（一）问题提出', 60, 110, { size: 12, width: 200 }),
+        line('1、研究意义', 60, 140, { size: 12, width: 200 }),
+        line('正文第一行内容，用来验证中文标题不影响正文段落识别。', 60, 180, {
+          size: 10,
+          width: 400
+        }),
+        line('正文第二行内容，继续说明研究背景与问题来源。', 60, 200, {
+          size: 10,
+          width: 400
+        })
+      ])
+    ]);
+    const result = recognizeBlocks(sample, [], { documentId: 'doc-cjk' });
+    const headings = result.blocks
+      .filter((block) => block.kind === 'heading')
+      .map((block) => [block.text, block.level]);
+    expect(headings).toEqual([
+      ['第一章 绪论', 1],
+      ['一、研究背景', 2],
+      ['（一）问题提出', 3],
+      ['1、研究意义', 1]
+    ]);
+    const paragraphs = result.blocks.filter((block) => block.kind === 'paragraph');
+    expect(paragraphs).toHaveLength(1);
+    expect(paragraphs[0]?.text.startsWith('正文第一行内容')).toBe(true);
+  });
+
+  it('公式行独立成块（符号密度规则），不并进正文', () => {
+    const sample = layout([
+      page(1, [
+        line('The relation is given by the following expression.', 60, 100),
+        line('∫ f(x) dx = F(x) ≈ 0', 60, 140, { size: 11, width: 240 }),
+        line('where f is the density function used above.', 60, 180)
+      ])
+    ]);
+    const result = recognizeBlocks(sample, [], { documentId: 'doc-formula' });
+    const formula = result.blocks.find((block) => block.kind === 'formula');
+    expect(formula?.text).toBe('∫ f(x) dx = F(x) ≈ 0');
+    expect(formula?.lines).toBe(1);
+    expect(result.stats.formulas).toBe(1);
+  });
+
+  it('参考文献区里的编号条目不会被标成 heading', () => {
+    const sample = layout([
+      page(1, [
+        line('REFERENCES', 60, 40, { size: 14, width: 200 }),
+        line('1. Smith, J. (2020). Alpha study. Journal A.', 60, 100, { size: 9, width: 380 }),
+        line('2. Doe, A. (2021). Beta study. Journal B.', 60, 130, { size: 9, width: 380 }),
+        line('3. Roe, B. (2022). Gamma study. Journal C.', 60, 160, { size: 9, width: 380 })
+      ])
+    ]);
+    const result = recognizeBlocks(sample, [], { documentId: 'doc-refs' });
+    const headings = result.blocks
+      .filter((block) => block.kind === 'heading')
+      .map((block) => block.text);
+    expect(headings).toEqual(['REFERENCES']);
+    expect(result.blocks.filter((block) => block.kind === 'reference')).toHaveLength(3);
+    expect(result.sections).toHaveLength(1);
+    expect(result.sections[0]?.kind).toBe('references');
+  });
+});
+
 describe('章节级索引片段', () => {
   const result = recognizeBlocks(sampleLayout(), [], {
     documentId: 'doc-1',

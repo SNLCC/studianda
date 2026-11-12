@@ -73,11 +73,17 @@ export function MarkdownScanTree({
   const [scrollTop, setScrollTop] = useState(0);
   const [hint, setHint] = useState('');
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  // 回调放进 ref：父组件每次 render 传入新的内联函数时不会重新加载整棵树（否则会无限重载）。
+  const getPageRef = useRef(getPage);
+  getPageRef.current = getPage;
+  const onLoadedChangeRef = useRef(onLoadedChange);
+  onLoadedChangeRef.current = onLoadedChange;
+  const lastLoadedRef = useRef<{ loaded: number; total: number } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setRoot({ entries: [], total: 0, loading: true, error: '' });
-    loadPage(vaultPath, '', 0, getPage)
+    loadPage(vaultPath, '', 0, (...args) => getPageRef.current(...args))
       .then((page) => {
         if (cancelled) return;
         setUnavailable(false);
@@ -100,7 +106,7 @@ export function MarkdownScanTree({
     return () => {
       cancelled = true;
     };
-  }, [vaultPath, getPage]);
+  }, [vaultPath]);
 
   const loadedRoot = useMemo(
     () => new Map<string, MarkdownTreeEntry[]>([['', root.entries]]),
@@ -126,8 +132,12 @@ export function MarkdownScanTree({
 
   const loadedCount = root.entries.length;
   useEffect(() => {
-    onLoadedChange?.(loadedCount, root.total);
-  }, [loadedCount, root.total, onLoadedChange]);
+    // 去重：已上报过相同数字就不再触发父级 setState，避免「子组件通知 → 父级 render」循环。
+    const previous = lastLoadedRef.current;
+    if (previous && previous.loaded === loadedCount && previous.total === root.total) return;
+    lastLoadedRef.current = { loaded: loadedCount, total: root.total };
+    onLoadedChangeRef.current?.(loadedCount, root.total);
+  }, [loadedCount, root.total]);
 
   const loadFolder = (path: string): void => {
     const existing = pages.get(path);
@@ -143,7 +153,9 @@ export function MarkdownScanTree({
       });
       return next;
     });
-    loadPage(vaultPath, path, existing?.entries.length ?? 0, getPage)
+    loadPage(vaultPath, path, existing?.entries.length ?? 0, (...args) =>
+      getPageRef.current(...args)
+    )
       .then((page) => {
         setPages((current) => {
           const next = new Map(current);
@@ -281,7 +293,7 @@ export function MarkdownScanTree({
             className="kr-link-button"
             onClick={() => {
               setRoot((current) => ({ ...current, loading: true, error: '' }));
-              loadPage(vaultPath, '', 0, getPage)
+              loadPage(vaultPath, '', 0, (...args) => getPageRef.current(...args))
                 .then((page) =>
                   setRoot({
                     entries: page.entries,
@@ -337,7 +349,9 @@ export function MarkdownScanTree({
               className="kr-link-button"
               onClick={() => {
                 setHint('');
-                loadPage(vaultPath, '', root.entries.length, getPage)
+                loadPage(vaultPath, '', root.entries.length, (...args) =>
+                  getPageRef.current(...args)
+                )
                   .then((page) =>
                     setRoot((current) => ({
                       ...current,

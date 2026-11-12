@@ -218,6 +218,65 @@ describe('独立问答：库内检索 + 笔记/批注', () => {
     expect(captured.answerBodies).toHaveLength(0);
   });
 
+  it('库内没有命中且不是 document_only 时：直接凭模型自身知识回答（answer_mode=direct）', async () => {
+    // 用户反馈「是不是不支持无文献内容的聊天了」：通用知识/纯聊天不能被本地检索挡死。
+    const captured: Captured = { routeBodies: [], answerBodies: [] };
+    mockModel(captured);
+    const response = await answerQuestion(store, secrets, {
+      question: '地球到月球的平均距离大约是多少？'
+    });
+    expect(response.answer_mode).toBe('direct');
+    expect(response.answer).toContain('库内检索回答');
+    expect(response.sources).toEqual([]);
+    expect(response.model_knowledge).toBe(true);
+    // notice 如实说明没有用库内原文、回答来自模型自身知识。
+    expect(response.notice).toContain('本轮没有检索到库内原文');
+    expect(response.notice).toContain('模型自身知识');
+    expect(captured.answerBodies).toHaveLength(1);
+    const answerBody = captured.answerBodies[0] ?? {};
+    const system = ((answerBody.messages ?? []) as Array<{ role: string; content: string }>)
+      .filter((message) => message.role === 'system')
+      .map((message) => message.content)
+      .join('\n');
+    expect(system).toContain('不要编造');
+    expect(answerUserText(captured)).toContain('地球到月球');
+  });
+
+  it('空库（没有任何文献）也支持凭模型知识聊天', async () => {
+    const emptyDir = mkdtempSync(path.join(tmpdir(), 'studianda-qa-empty-'));
+    const emptyStore = new Store(emptyDir);
+    try {
+      const captured: Captured = { routeBodies: [], answerBodies: [] };
+      mockModel(captured);
+      const response = await answerQuestion(emptyStore, secrets, {
+        question: '今天适合出去散步吗？'
+      });
+      expect(response.answer_mode).toBe('direct');
+      expect(response.answer).toContain('库内检索回答');
+      expect(response.sources).toEqual([]);
+      expect(response.notice).toContain('本轮没有检索到库内原文');
+    } finally {
+      emptyStore.close();
+      rmSync(emptyDir, { recursive: true, force: true });
+    }
+  });
+
+  it('document_only 时库内没有命中仍拒绝回答（不偷偷改用模型知识）', async () => {
+    const captured: Captured = { routeBodies: [], answerBodies: [] };
+    mockModel(captured);
+    const response = await answerQuestion(store, secrets, {
+      question: '地球到月球的平均距离大约是多少？',
+      source_policy: 'document_only'
+    });
+    expect(response.answer).toBeNull();
+    expect(response.answer_mode).toBe('library');
+    expect(response.model_knowledge).toBe(false);
+    expect(response.notice).toContain('暂时无法回答');
+    expect(response.notice).toContain('仅文献');
+    // 没有调用最终回答模型。
+    expect(captured.answerBodies).toHaveLength(0);
+  });
+
   it('模型未配置时也只返回检索片段与记忆来源，并如实说明', async () => {
     const saved = {
       base: process.env.STUDIANDA_MODEL_BASE_URL,

@@ -622,6 +622,9 @@ body:has(.kr-desktop) {
   line-height: 1;
   user-select: text;
   cursor: text;
+  /* 缩放缓存期间页面框先变宽、文本层用 transform 等比拉伸到新宽度：必须从左上角缩放，
+     否则文本层会相对页面框偏移（批注/选区看上去就会“跳”）。 */
+  transform-origin: 0 0;
 }
 
 .kr-text-layer span {
@@ -4465,8 +4468,10 @@ a {
 /* 页面使用 img，按原始比例缩放，不经过 canvas 重绘 */
 .kr-page__image {
   display: block;
+  /* 画布位图始终铺满页面框：缩放时先拉伸旧位图，清晰重绘在后台完成，
+     页面框（以及百分比定位的批注/文本层）不会因为位图还没画好而跳动。 */
   width: 100%;
-  height: auto;
+  height: 100%;
   background: #fff;
   box-shadow: 0 10px 30px rgb(0 0 0 / 12%);
   user-select: none;
@@ -6492,25 +6497,44 @@ font-weight: 500;
   box-shadow: 0 8px 24px rgb(45 58 48 / 12%);
 }
 .kr-chat__reading-options {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+  /* 用 flex 而不是 grid：选项组之间允许换行，组内（范围 + 已选 N 篇）永远不拆。
+     旧 grid 把「已选 N 篇」用 grid-column:1/-1 放到独立一行，选了「跨文献精读」后
+     立刻多出一行，窄侧栏下很难看。 */
+  display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 4px;
   padding: 4px 0 2px;
 }
-.kr-chat__reading-options > select {
-  width: 100%;
-  max-width: none;
+.kr-chat__reading-group {
+  display: inline-flex;
+  align-items: center;
+  /* 整组不压缩：放不下时整组换行，而不是把「跨文献精读」/「已选 N 篇」压成半截。 */
+  flex: 0 0 auto;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  white-space: nowrap;
+}
+.kr-chat__reading-options select {
+  flex: 0 1 auto;
+  width: auto;
+  max-width: 128px;
   min-width: 0;
   padding: 3px 2px;
   font-size: var(--kr-fs-micro);
+}
+.kr-chat__reading-group > select {
+  /* 选择框优先保宽度：宁可整组换行，也不把「跨文献精读」压成省略号。 */
+  flex: 0 0 auto;
 }
 .kr-chat__reading-options > span {
   display: none;
 }
 .kr-chat__scope-button {
-  grid-column: 1 / -1;
+  flex: 0 0 auto;
   justify-self: start;
+  white-space: nowrap;
   padding: 1px 5px;
   border: 1px solid var(--kr-line);
   border-radius: 4px;
@@ -9583,6 +9607,60 @@ font-size: var(--kr-fs-body);
   background: transparent;
 }
 
+/* ---- 关系图 Phase 8：一屏优先 / 全库统计 / 关键字搜索 / 大图提示 ---- */
+.kr-graph__filter-count {
+  margin-left: 5px;
+  color: var(--kr-ink-faint);
+  font-size: var(--kr-fs-micro);
+  font-variant-numeric: tabular-nums;
+}
+.kr-graph__filter.is-active .kr-graph__filter-count {
+  color: inherit;
+  opacity: 0.75;
+}
+.kr-graph__search {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 200px;
+  min-width: 150px;
+}
+.kr-graph__search input {
+  flex: 1;
+  min-height: 28px;
+  padding: 3px 9px;
+  border: 1px solid var(--kr-line);
+  border-radius: 7px;
+  background: var(--kr-paper-raised);
+  color: var(--kr-ink);
+  font-size: var(--kr-fs-caption);
+}
+.kr-graph__search input:focus-visible {
+  outline: 2px solid var(--kr-celadon);
+  outline-offset: 1px;
+}
+.kr-graph__search-clear {
+  min-height: 26px;
+  padding: 2px 8px;
+  font-size: var(--kr-fs-caption);
+}
+.kr-graph__notice {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--kr-line-strong);
+  border-left: 3px solid var(--kr-vermilion);
+  border-radius: 8px;
+  background: var(--kr-paper);
+  color: var(--kr-ink-soft);
+  font-size: var(--kr-fs-caption);
+  line-height: 1.5;
+}
+.kr-graph__busy {
+  margin: 0;
+  color: var(--kr-ink-faint);
+  font-size: var(--kr-fs-caption);
+}
+
 /* ---- 笔记图片上限设置 ---- */
 .kr-note-image-limits {
   display: flex;
@@ -10353,6 +10431,8 @@ font-size: var(--kr-fs-body);
 /* ---- 会话：笔记/批注作为补充材料（本轮新增；append-only，不改既有规则） ---- */
 .kr-chat__memory-toggle {
   grid-column: 1 / -1;
+  /* 阅读选项容器是 flex（见 .kr-chat__reading-options）：笔记/批注仍单独占一行。 */
+  flex: 1 0 100%;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -11965,4 +12045,230 @@ details.kr-outline2__card > summary::-webkit-details-marker {
 
 .kr-usage-notice__footer .kr-secondary {
   padding: 7px 12px;
+}
+
+/* ---- 阅读页缩放预览层 ----
+   滚轮/按钮缩放时，页面先由 CSS zoom 统一预览：画布位图、文本层、批注/高亮/区域框
+   都在同一个页面框里一起缩放，所以不会出现批注错位；静止后再提交真实页宽并重绘清晰位图。 */
+.kr-pages__frame {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  position: relative;
+}
+
+/* 缩放预览期间关掉浏览器滚动锚定：缩放会改变整页高度，锚定会和滚轮锚点校正互相拉扯。 */
+.kr-reader__scroll.is-zooming {
+  overflow-anchor: none;
+}
+
+/* 顶部浮窗：文件健康检查结果（固定居中、约 4.5 秒自动消失，可手动关闭） */
+.kr-health-toast {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1400;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: min(680px, calc(100vw - 32px));
+  padding: 10px 12px;
+  border: 1px solid var(--kr-line-strong);
+  border-left: 4px solid var(--kr-celadon-deep);
+  border-radius: 10px;
+  background: var(--kr-paper-raised);
+  color: var(--kr-ink);
+  font-size: var(--kr-fs-caption);
+  line-height: 1.55;
+  box-shadow: 0 14px 36px rgb(35 27 14 / 22%);
+  animation: kr-health-toast-in 160ms ease-out;
+}
+
+.kr-health-toast--warn {
+  border-left-color: var(--kr-vermilion-deep, #9b3d30);
+}
+
+.kr-health-toast__text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.kr-health-toast__close {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--kr-line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--kr-ink-soft);
+  font-size: var(--kr-fs-body);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.kr-health-toast__close:hover {
+  border-color: var(--kr-celadon);
+  background: var(--kr-celadon-soft);
+  color: var(--kr-ink);
+}
+
+@keyframes kr-health-toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+/* 阅读伙伴内联改名：会话下拉的位置换成输入框（Electron 不支持 window.prompt） */
+.kr-chat__session-rename-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 24px;
+  box-sizing: border-box;
+  padding: 0 6px;
+  border: 1px solid var(--kr-celadon);
+  border-radius: var(--kr-radius-md);
+  background: var(--kr-paper-raised);
+  color: var(--kr-ink);
+  font: inherit;
+  font-size: var(--kr-fs-caption);
+  line-height: 1;
+}
+
+.kr-chat__session-row > button.kr-chat__session-rename-save,
+.kr-chat__session-row > button.kr-chat__session-rename-cancel {
+  flex: none;
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius-md);
+  background: var(--kr-paper-raised);
+  color: var(--kr-ink-soft);
+  font: inherit;
+  font-size: var(--kr-fs-caption);
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.kr-chat__session-row > button.kr-chat__session-rename-save {
+  border-color: var(--kr-celadon);
+  background: var(--kr-celadon-soft);
+  color: var(--kr-celadon-deep);
+}
+
+.kr-chat__session-row > button.kr-chat__session-rename-save:hover {
+  border-color: var(--kr-celadon-deep);
+}
+
+.kr-chat__session-row > button.kr-chat__session-rename-cancel:hover {
+  border-color: var(--kr-line-strong);
+  color: var(--kr-ink);
+}
+
+/* 内联改名时只留输入框 + 保存/取消，窄侧栏里不会把输入框挤到只有几十像素。 */
+.kr-chat__session-row:has(.kr-chat__session-rename-input) > .kr-chat__session-new,
+.kr-chat__session-row:has(.kr-chat__session-rename-input) > .kr-chat__session-search-toggle,
+.kr-chat__session-row:has(.kr-chat__session-rename-input) > .kr-chat__session-more {
+  display: none;
+}
+
+/* ---- 导入 Markdown：扫描进度更醒目 / 关闭终态任务卡（本轮修复） ---- */
+.kr-markdown-modal {
+  overflow: auto;
+}
+.kr-markdown-modal__summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kr-markdown-modal__guide {
+  margin: 0;
+  color: var(--kr-celadon-deep);
+  font-size: var(--kr-fs-caption);
+  font-weight: 600;
+}
+.kr-markdown-modal__legal {
+  font-size: var(--kr-fs-caption);
+}
+.kr-markdown-modal__legal > summary {
+  color: var(--kr-ink-faint);
+  font-size: var(--kr-fs-caption);
+  cursor: pointer;
+}
+.kr-markdown-modal__legal p {
+  margin: 4px 0 0;
+  color: var(--kr-ink-faint);
+  font-size: var(--kr-fs-caption);
+}
+.kr-markdown-modal__selected {
+  margin-left: auto;
+  color: var(--kr-ink-soft);
+  font-size: var(--kr-fs-caption);
+  white-space: nowrap;
+}
+.kr-markdown-modal__selected strong {
+  color: var(--kr-celadon-deep);
+  font-size: var(--kr-fs-reading);
+}
+.kr-markdown-modal__import-button {
+  min-width: 168px;
+}
+.kr-markdown-progress__count {
+  margin: 0;
+  color: var(--kr-ink);
+  font-size: var(--kr-fs-ui);
+}
+.kr-markdown-progress__count strong {
+  color: var(--kr-celadon-deep);
+  font-size: var(--kr-fs-reading);
+}
+.kr-markdown-progress__bar {
+  width: 100%;
+  height: 14px;
+  accent-color: var(--kr-celadon-deep);
+}
+.kr-job-card.is-prominent {
+  border-color: var(--kr-celadon-deep);
+  border-left-width: 4px;
+  background: var(--kr-paper-raised);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+}
+.kr-job-card__count {
+  margin: 0;
+  color: var(--kr-ink);
+  font-size: var(--kr-fs-ui);
+}
+.kr-job-card__count strong {
+  color: var(--kr-celadon-deep);
+  font-size: var(--kr-fs-reading);
+}
+.kr-job-card__progress {
+  width: 100%;
+  height: 12px;
+  accent-color: var(--kr-celadon-deep);
+}
+.kr-job-card__path,
+.kr-job-card__vault {
+  overflow: hidden;
+  color: var(--kr-ink-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kr-job-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.kr-ghost.is-busy {
+  border-color: var(--kr-celadon);
+  color: var(--kr-celadon-deep);
 }

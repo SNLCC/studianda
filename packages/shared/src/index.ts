@@ -818,6 +818,13 @@ export interface RegionOcrResult {
   textReflowed: string;
   bbox: [number, number, number, number];
   engine: string;
+  /**
+   * 来源说明：这次区域识别实际用了哪种方式、是否发生回退、为什么。
+   * 例：识别方式是 MinerU 时会明确写「MinerU 不支持框选，本次改用视觉模型 xxx；MinerU 没有被调用」。
+   */
+  engine_note?: string;
+  /** 回退来源：识别方式是 mineru_* 等不支持裁图的方式时，记录原始识别方式。 */
+  fallback_from?: string;
 }
 
 /** 区域 OCR 后台任务：识别在 Core 内异步执行，前端轮询进度；取消只能在识别结束后丢弃结果。 */
@@ -1676,6 +1683,13 @@ export interface CoverageLedgerRowRecord {
 export interface ChatResponse {
   answer: string | null;
   sources: ChatSource[];
+  /**
+   * 全模态语音直问时，模型返回的逐字转写。
+   *
+   * 只有「录音直接交给全模态模型」的路径才会返回：客户端据此把会话里的用户消息从
+   * 「（语音提问）」占位更新为「（语音）转写」。模型没按约定返回 JSON 时为空。
+   */
+  audio_transcript?: string;
   /** 本轮模型 token 用量（估算/供应商返回）；没有模型调用时不返回。 */
   usage?: ChatUsage;
   /**
@@ -1945,6 +1959,12 @@ export interface BacklinkRecord {
 
 export type BacklinkTargetKind = 'note' | 'annotation' | 'document';
 
+/**
+ * 关系图全量模式一次可返回的节点硬上限。
+ * 超过该值时服务端退回分页（hasMore=true、truncated=true），避免超大库拖垮渲染。
+ */
+export const REFERENCE_GRAPH_ALL_NODE_LIMIT = 5000;
+
 /** 全库引用网络：节点 = 文献 / 笔记 / 批注，边 = 内部引用。 */
 export type ReferenceNodeKind = 'document' | 'note' | 'annotation';
 
@@ -1979,6 +1999,18 @@ export interface ReferenceGraph {
   offset: number;
   limit: number;
   hasMore: boolean;
+  /**
+   * 全库各类型节点总数（不受 kinds/search 过滤影响，便于 UI 提示「只看文献+笔记」）。
+   * 旧服务端可能不返回该字段。
+   */
+  kindCounts?: Record<ReferenceNodeKind, number>;
+  /**
+   * 是否因超过全量模式硬上限（allNodeLimit）被截断、退回分页。
+   * 只有请求带 all=1 且过滤后节点数超限时才会为 true。
+   */
+  truncated?: boolean;
+  /** 本次请求生效的全量模式节点硬上限（仅 all 模式返回，便于 UI 如实提示）。 */
+  allNodeLimit?: number;
 }
 
 /** 本地图片资源清理报告。 */
@@ -2161,6 +2193,34 @@ export interface MarkdownJobSnapshot {
   lite?: boolean;
   /** true 表示这是终态通知；客户端应调用 status 接口读取完整结果/input。 */
   terminal?: boolean;
+}
+
+/** 任务指纹输入：只取区分「某一次终态结果」所需的字段。 */
+export interface MarkdownJobFingerprintInput {
+  status: string;
+  resultCompletedAt?: string | null;
+  lastAttemptStatus?: string;
+  error?: string;
+}
+
+/**
+ * Markdown 扫描/导入任务指纹：UI 用它记住用户已关闭的终态任务，
+ * 避免页面轮询/SSE/重新进入页面时把已关闭的终态卡片自动弹回。
+ *
+ * 同一任务的多次状态读取得到相同指纹；重新完成的扫描/导入（新的完成时间）
+ * 或不同失败原因会得到不同指纹，因此新任务仍会正常显示。
+ *
+ * 注意：不包含 input/scan/report——lite 快照（SSE/摘要接口）为保证体积会裁掉这些字段，
+ * 引用它们会让同一任务在完整状态与 lite 状态之间得到不同指纹。新任务观测到 running
+ * 时 UI 会清除关闭标记，所以「发起新任务」不受影响。
+ */
+export function markdownJobFingerprint(job: MarkdownJobFingerprintInput): string {
+  return [
+    job.status,
+    job.resultCompletedAt ?? '',
+    job.lastAttemptStatus ?? '',
+    job.error ?? ''
+  ].join('|');
 }
 
 /** 扫描树懒加载节点（文件夹或文件）。 */

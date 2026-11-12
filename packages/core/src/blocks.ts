@@ -28,6 +28,8 @@ import type {
 } from '@studianda/shared';
 import type { LayoutLine, PdfLayout } from './pdf-layout.js';
 import {
+  documentBodySize,
+  endsSentenceLine,
   heading,
   readingOrderLines,
   repeatedMarginTexts,
@@ -46,15 +48,19 @@ const LIST_MARKER =
   /^(?:[•·▪◦‣※*+\-–—]\s+|(?:[\[(]?[0-9]{1,3}[.)\]]|[a-zA-Z][.)])\s+(?:[A-Z\u4e00-\u9fff]))/;
 
 /** 图表题注 / 数据来源行。 */
-const CAPTION_LINE =
-  /^(?:fig(?:ure)?\.?\s*[0-9IVXLC]|table\s*[0-9IVXLC]|图\s*[0-9一二三四五六七八九十]|表\s*[0-9一二三四五六七八九十]|source\s*[:：]|资料来源\s*[:：])/i;
+const CAPTION_LABEL =
+  /^(?:fig(?:ure)?\.?|table|图|表)\s*[0-9IVXLC一二三四五六七八九十]+(?=\s|[.:：、—–-]|$)/i;
+/** 题注标签后的分隔符：有分隔符基本可确认是题注（"Table I. 标题"）。 */
+const CAPTION_SEPARATOR = /^[\s:：.．、—–-]+/;
+/** 数据来源行（题注/表注的一部分）。 */
+const SOURCE_LINE = /^(?:source|资料来源|数据来源)\s*[:：]/i;
 
 /** 作者/单位/邮箱这类首页装饰行：即使居中、字号偏大也不该当成章节标题。 */
 const AUTHOR_OR_AFFILIATION =
   /(?:\bauthors?\b|\bcorresponding\s+author\b|作者|@|大学|学院|研究院|研究所|university|college|institute|department|laborator|school\s+of)/i;
 
-/** 明显的数学/公式符号。 */
-const FORMULA_SYMBOL = /[=∑∫√≈≤≥∞∂∇±×÷≠∈⊂⊆∪∩∀∃→←↔]/;
+/** 明显的数学/公式符号（带 g，用于数符号个数；非 g 的 match().length 恒为 1）。 */
+const FORMULA_SYMBOL = /[=∑∫√≈≤≥∞∂∇±×÷≠∈⊂⊆∪∩∀∃→←↔]/g;
 
 const REFERENCE_TITLE =
   /^(?:references?|bibliography|works\s+cited|literature\s+cited|参考文献|引用文献|参考资料)$/i;
@@ -70,23 +76,20 @@ function median(values: number[]): number {
 }
 
 /**
- * 标题层级：`2.1 Methods` → 2，`第三章`/`Chapter 3`/`I.` → 1，`A.`/`一、` → 2。
+ * 标题层级：`2.1 Methods` → 2，`第三章`/`Chapter 3`/`I.` → 1，`A.`/`一、` → 2，`（一）` → 3。
  *
  * 只按文字编号判断，不看字号；字号只影响"是不是标题"（见 `heading` 与居中/放大规则）。
  */
 export function headingLevel(text: string): number {
   const line = text.trim();
-  const numbered = line.match(/^(\d+(?:\.\d+){0,3})[.)]?[\s、]+/);
-  if (numbered?.[1]) return Math.min(4, numbered[1].split('.').length);
-  if (
-    /^(?:第[一二三四五六七八九十百千\d]+[章节节]|chapter\s+\d+|section\s+\d+|part\s+[ivxlcdm\d]+)/i.test(
-      line
-    )
-  ) {
-    return 1;
-  }
+  const numbered = line.match(/^(\d+(?:[.．]\d+){0,3})[.)、．）]?[\s、]+/);
+  if (numbered?.[1]) return Math.min(4, numbered[1].split(/[.．]/).length);
+  const chapter = line.match(/^第[一二三四五六七八九十百千\d]+([章节节篇部])/);
+  if (chapter) return chapter[1] === '章' ? 1 : 2;
+  if (/^(?:chapter\s+[ivxlcdm\d]+|section\s+[ivxlcdm\d]+|part\s+[ivxlcdm\d]+)/i.test(line)) return 1;
   if (/^[IVXLC]{1,6}\.\s+\S/.test(line)) return 1;
   if (/^[A-Z]\.\s+[A-Z][a-z]/.test(line)) return 2;
+  if (/^[（(][一二三四五六七八九十百千]{1,4}[)）]/.test(line)) return 3;
   if (/^[一二三四五六七八九十]{1,4}[、.)）]\s*/.test(line)) return 2;
   return 1;
 }
@@ -123,7 +126,24 @@ function isListLine(text: string): boolean {
 }
 
 function isCaptionLine(text: string): boolean {
-  return CAPTION_LINE.test(text.trim());
+  const line = text.trim();
+  if (!line) return false;
+  if (SOURCE_LINE.test(line)) return true;
+  const label = line.match(CAPTION_LABEL);
+  if (!label) return false;
+  const rest = line.slice(label[0].length);
+  const separator = rest.match(CAPTION_SEPARATOR)?.[0] ?? '';
+  const body = rest.slice(separator.length).trim();
+  if (!body) return true; // 只有 "Table 1" / "图 2"
+  const hasDelimiter = /[:：.．、—–-]/.test(separator);
+  // 「Table I lists the approximate point sizes…」「Figure 3 shows that…」是正文句子（小写动词开头），
+  // 没有题注分隔符时不能当题注——实测里整段正文会被误标成 caption。
+  // 中文同理：「图1显示了…。」这类带句末标点的行是正文引用，不是题注。
+  if (!hasDelimiter && /^[a-z]/.test(body)) return false;
+  if (!hasDelimiter && /[。！？；]$/.test(line)) return false;
+  // 题注是短标签行（可跨 1–3 行），超过 240 字符的按正文处理。
+  if (line.length > 240) return false;
+  return true;
 }
 
 function isFormulaLine(text: string): boolean {
@@ -147,12 +167,18 @@ interface Geometry {
   gap: number;
 }
 
-/** 把一组行拆成多个块：列表项必须各自成块，不能把后面正文并进列表里。 */
-function splitGroup(group: ParagraphLine[]): ParagraphLine[][] {
+/**
+ * 把一组行拆成多个块：
+ * - 列表项必须各自成块，不能把后面正文并进列表里；
+ * - 标题行（文字规则命中）也要单独成块——中文「（一）」这类编号在段落几何规则里
+ *   可能被判成上一段的续行，不拆出来会被并进正文、StructurePanel 里看不到层级。
+ */
+function splitGroup(group: ParagraphLine[], bodySize: number): ParagraphLine[][] {
   const parts: ParagraphLine[][] = [];
   let current: ParagraphLine[] = [];
   for (const line of group) {
-    if (current.length > 0 && isListLine(line.text)) {
+    const startsHeading = heading(line.text, line.size, bodySize) !== null;
+    if (current.length > 0 && (isListLine(line.text) || startsHeading)) {
       parts.push(current);
       current = [];
     }
@@ -302,13 +328,17 @@ function outlineBoundaries(layout: PdfLayout, blocks: ContentBlock[]): Boundary[
 /** 没有目录时，用识别出的标题块当章节边界。 */
 function headingBoundaries(blocks: ContentBlock[]): Boundary[] {
   const boundaries: Boundary[] = [];
+  let inReferences = false;
   blocks.forEach((block, index) => {
     if (block.kind !== 'heading') return;
+    // 参考文献区里的"标题"多数是被误判的条目（"1. Smith, J. …"），不当章节边界。
+    if (inReferences) return;
     boundaries.push({
       block: index,
       title: block.text.trim(),
       level: Math.max(1, Math.trunc(block.level ?? 1))
     });
+    if (sectionKindOf(block.text) === 'references') inReferences = true;
   });
   return boundaries;
 }
@@ -364,6 +394,81 @@ function sectionsFromBoundaries(
 }
 
 /**
+ * 栏/页断点处的续段合并：上一块收在页面或栏底部、末尾没有句末标点，
+ * 下一块从顶部开始且首字符不是大写/数字（即上一句的继续），就把两块接回一段。
+ *
+ * 典型的错误切分：双栏论文左栏最后一句被栏沟硬切开，右栏顶部接着 "moderate gutter. …"，
+ * 段落识别会因为左右栏几何不同把后半句单独成块。
+ */
+function mergeColumnContinuations(blocks: ContentBlock[]): void {
+  const CJK = /[\u2e80-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]/;
+  const glue = (upper: string, lower: string): string => {
+    if (upper.endsWith('-')) return upper + lower;
+    if (CJK.test(upper.slice(-1)) || CJK.test(lower.charAt(0))) return upper + lower;
+    return `${upper} ${lower}`;
+  };
+  for (let index = 0; index + 1 < blocks.length; ) {
+    const upper = blocks[index]!;
+    const lower = blocks[index + 1]!;
+    const continues =
+      upper.kind === 'paragraph' &&
+      lower.kind === 'paragraph' &&
+      (lower.page === upper.page || lower.page === upper.page + 1) &&
+      // 上一块收在页/栏底部、下一块从页/栏顶部开始。
+      upper.bbox[3] >= 0.72 &&
+      lower.bbox[1] <= 0.35 &&
+      // 上一块没写完（末尾没有句末标点），下一块不是大写/数字开头（新句/编号）。
+      !endsSentenceLine(upper.text) &&
+      /^[a-z\u3400-\u9fff]/.test(lower.text.trim());
+    if (!continues) {
+      index += 1;
+      continue;
+    }
+    upper.text = glue(upper.text.trim(), lower.text.trim());
+    upper.bbox = [
+      Math.min(upper.bbox[0], lower.bbox[0]),
+      Math.min(upper.bbox[1], lower.bbox[1]),
+      Math.max(upper.bbox[2], lower.bbox[2]),
+      Math.max(upper.bbox[3], lower.bbox[3])
+    ];
+    upper.lines += lower.lines;
+    blocks.splice(index + 1, 1);
+  }
+}
+
+/**
+ * 表格行合并：段落识别按左边界/缩进把同一张表的每一行切成独立块，
+ * 这里把同页、垂直相邻、水平重叠的连续 table 块合回一张表。
+ */
+function mergeTableRows(blocks: ContentBlock[]): void {
+  const ROW_GAP = 0.03;
+  for (let index = 0; index + 1 < blocks.length; ) {
+    const upper = blocks[index]!;
+    const lower = blocks[index + 1]!;
+    const sameTable =
+      upper.kind === 'table' &&
+      lower.kind === 'table' &&
+      upper.page === lower.page &&
+      lower.bbox[1] - upper.bbox[3] <= ROW_GAP &&
+      upper.bbox[0] <= lower.bbox[2] &&
+      lower.bbox[0] <= upper.bbox[2];
+    if (!sameTable) {
+      index += 1;
+      continue;
+    }
+    upper.text = `${upper.text.trim()}\n${lower.text.trim()}`;
+    upper.bbox = [
+      Math.min(upper.bbox[0], lower.bbox[0]),
+      Math.min(upper.bbox[1], lower.bbox[1]),
+      Math.max(upper.bbox[2], lower.bbox[2]),
+      Math.max(upper.bbox[3], lower.bbox[3])
+    ];
+    upper.lines += lower.lines;
+    blocks.splice(index + 1, 1);
+  }
+}
+
+/**
  * 识别整篇文献的内容块与章节。
  *
  * 输入 `masks` 与 `getStructure` 同口径：遮罩掉的区域不参与识别，也不会出现在块文本里。
@@ -376,6 +481,9 @@ export function recognizeBlocks(
   options: RecognizeOptions = {}
 ): DocumentBlocks {
   const marginNoise = repeatedMarginTexts(layout);
+  // 全篇正文字号中位数（pt）：单页中位数在封面/整页标题页会偏大，
+  // 用它当分类基准才能把「正文字号」判准（字号以页面高度占比传给分类器）。
+  const layoutBodySizePt = documentBodySize(layout, masks, marginNoise);
   const blocks: ContentBlock[] = [];
 
   for (const page of layout.pages) {
@@ -408,12 +516,16 @@ export function recognizeBlocks(
         size
       });
     }
-    const bodySize =
+    const pageBodySize =
       median(
         [...geometries.values()]
           .filter((geometry) => geometry.right - geometry.left > 0.12 && geometry.size > 0)
           .map((geometry) => geometry.size)
-      ) || DEFAULT_BODY_SIZE;
+      ) || 0;
+    // 优先用全篇中位数（换算成当前页的高度占比）；全篇没有字号信息时退回本页中位数。
+    const documentBodySizeRatio =
+      layoutBodySizePt != null && layoutBodySizePt > 0 ? layoutBodySizePt / pageHeight : 0;
+    const bodySize = documentBodySizeRatio > 0 ? documentBodySizeRatio : pageBodySize || DEFAULT_BODY_SIZE;
     // 缺字号的行（OCR 页可能没有字号）用页面正文字号兜底，避免整页被判成"小字脚注"。
     for (const geometry of geometries.values()) {
       if (geometry.size <= 0) geometry.size = bodySize;
@@ -430,9 +542,15 @@ export function recognizeBlocks(
     const groups = paragraphGroups(paragraphLines, aspect);
     const lineIndex = new Map<ParagraphLine, number>();
     paragraphLines.forEach((line, index) => lineIndex.set(line, index));
+    // paragraphAt 可能从当前行向上走到已被上一组用掉的行（例如标题行紧贴上一段）：
+    // 这里按「行只归一个块」过滤，避免同一行被两块重复收进去（内容块/统计会重复）。
+    const usedLines = new Set<ParagraphLine>();
 
     for (const group of groups) {
-      for (const part of splitGroup(group.lines)) {
+      const fresh = group.lines.filter((line) => !usedLines.has(line));
+      if (fresh.length === 0) continue;
+      for (const line of fresh) usedLines.add(line);
+      for (const part of splitGroup(fresh, bodySize)) {
         const text = groupText(part);
         if (!text) continue;
         const gaps = part.map((line) => {
@@ -460,6 +578,14 @@ export function recognizeBlocks(
     }
   }
 
+  // 段落/表格的跨块修补：都必须发生在章节边界之前（边界用块下标）。
+  mergeColumnContinuations(blocks);
+  mergeTableRows(blocks);
+  // 修补后重排 id，保持「阅读顺序 b0..bn」的契约（同一版面重算结果一致）。
+  blocks.forEach((block, index) => {
+    block.id = `b${index}`;
+  });
+
   // 章节边界：优先 PDF 目录；目录为空/对不上时退回版面标题规则。
   const outline = outlineBoundaries(layout, blocks);
   const basis: 'outline' | 'heading' | 'none' =
@@ -482,7 +608,12 @@ export function recognizeBlocks(
       const block = blocks[index];
       if (!block) continue;
       block.section = section.index;
-      if (section.kind === 'references' && block.kind !== 'heading' && block.kind !== 'caption') {
+      if (
+        section.kind === 'references' &&
+        block.kind !== 'caption' &&
+        // 小节的第一个块是「参考文献」标题本身，保留 heading；其余块（含被误判成标题的条目）都算条目。
+        (block.kind !== 'heading' || index !== section.blockStart)
+      ) {
         block.kind = 'reference';
       }
     }

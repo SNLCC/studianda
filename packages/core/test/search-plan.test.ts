@@ -186,6 +186,53 @@ describe('createSearchPlan', () => {
     configureSearch();
   });
 
+  it('returns an empty plan instead of throwing when there is nothing to search', async () => {
+    // 用户报告（bug 10）：会话里发「你好」不应报「搜索计划生成失败」。
+    // 规划结果清洗后没有主体词时返回合法空计划，客户端据此直接不联网提问。
+    configureSearch({ planner: true, privacy_mode: 'question' });
+    configureChatModel();
+    mockWebFetch(['   ']);
+    const plan = await createSearchPlan(store, secrets, { question: '你好' });
+    expect(plan.queries).toEqual([]);
+    expect(plan.token).toBe('');
+    expect(plan.review).toBe(false);
+    expect(plan.method).toContain('模型规划');
+    expect(plan.warning).toContain('没有可公开搜索的主题词');
+    expect(plan.warning).toContain('不联网');
+    configureSearch();
+  });
+
+  it('treats an empty planner result as "nothing to search" (寒暄 like 你好)', async () => {
+    configureSearch({ planner: true, privacy_mode: 'question' });
+    configureChatModel();
+    const calls = mockWebFetch([]);
+    const plan = await createSearchPlan(store, secrets, { question: '你好' });
+    expect(plan.queries).toEqual([]);
+    expect(plan.token).toBe('');
+    expect(plan.review).toBe(false);
+    expect(plan.method).toContain('模型规划');
+    expect(plan.warning).toContain('不联网');
+    // 规划模型确实被问过（但不是把「你好」拿去联网搜索）。
+    expect(calls[0]?.url).toContain('model.test/v1/chat/completions');
+    configureSearch();
+  });
+
+  it('falls back to local keyword extraction when the planner format is invalid', async () => {
+    configureSearch({ planner: true, privacy_mode: 'question' });
+    configureChatModel();
+    vi.stubGlobal('fetch', async () =>
+      new Response(JSON.stringify({ choices: [{ message: { content: '这里不是 JSON' } }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    );
+    const plan = await createSearchPlan(store, secrets, { question: '量子纠缠的最新实验进展' });
+    expect(plan.method).toContain('本地关键词提取');
+    expect(plan.queries.length).toBeGreaterThan(0);
+    expect(plan.queries.join(' ')).toContain('量子纠缠');
+    configureSearch();
+  });
+
   it('rejects when online search is not allowed', async () => {
     configureSearch({ permission: 'off' });
     await expect(
@@ -304,6 +351,24 @@ describe('HTTP endpoints', () => {
     expect(body.token).toBeTruthy();
     expect(body.queries.length).toBeGreaterThan(0);
     expect(body.warning).toContain('不等于完全匿名');
+  });
+
+  it('returns an empty (no-search) plan instead of failing for greetings', async () => {
+    configureSearch({ planner: true, privacy_mode: 'question' });
+    configureChatModel();
+    mockWebFetch([]);
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/v1/search-plan',
+      headers: headers(),
+      payload: { question: '你好' }
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { token: string; queries: string[]; warning: string };
+    expect(body.queries).toEqual([]);
+    expect(body.token).toBe('');
+    expect(body.warning).toContain('不联网');
+    configureSearch();
   });
 
   it('returns 403 when online search is off', async () => {

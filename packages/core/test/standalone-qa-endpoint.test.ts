@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChatRequest, ChatResponse } from '@studianda/shared';
+import type { ChatRequest, ChatResponse, QaSessionDetail } from '@studianda/shared';
 import { clearRouteCache } from '../src/question-route.js';
 import { SecretStore } from '../src/secrets.js';
 import { buildServer } from '../src/server.js';
@@ -51,8 +51,8 @@ function modelResponse(content: string): Response {
   });
 }
 
-/** 模型桩：QUESTION_ROUTE 一次判断 + 之后所有调用都当最终回答。 */
-function mockModel(captured: Captured): void {
+/** 模型桩：QUESTION_ROUTE 一次判断 + 之后所有调用都当最终回答（可指定最终回答正文）。 */
+function mockModel(captured: Captured, finalContent?: string): void {
   vi.stubGlobal('fetch', async (_url: unknown, init?: RequestInit) => {
     const body = init?.body
       ? (JSON.parse(String(init.body)) as Record<string, unknown>)
@@ -75,7 +75,9 @@ function mockModel(captured: Captured): void {
       );
     }
     captured.answerBodies.push(body);
-    return modelResponse('库内检索回答：价值信念在甲文献中给出了定义。[1]');
+    return modelResponse(
+      finalContent ?? '库内检索回答：价值信念在甲文献中给出了定义。[1]'
+    );
   });
 }
 
@@ -275,5 +277,124 @@ describe('POST /api/v1/chat/ask：独立问答 + 笔记/批注', () => {
     // 全模态路径不经过问题路由：只有最终回答那一次模型调用。
     expect(captured.routeBodies).toHaveLength(0);
     expect(captured.answerBodies).toHaveLength(1);
+    // 请求体里的 input_audio 必须是裸 base64（不能带 data: 前缀），否则多数全模态接口 400。
+    const messages = (captured.answerBodies[0]?.messages ?? []) as Array<{
+      role: string;
+      content: unknown;
+    }>;
+    const parts = messages.find((message) => message.role === 'user')?.content as Array<{
+      type: string;
+      input_audio?: { data: string; format: string };
+      text?: string;
+    }>;
+    const audioPart = parts.find((part) => part.type === 'input_audio');
+    expect(audioPart?.input_audio?.data).toBe('ZmFrZS1hdWRpbw==');
+    expect(audioPart?.input_audio?.data.startsWith('data:')).toBe(false);
+    expect(audioPart?.input_audio?.format).toBe('webm');
+    // 不再要求客户端预转写：没有文字时只发音频，不伪造文字 part。
+    expect(parts.some((part) => part.type === 'text')).toBe(false);
+    // 模型只返回纯文字（非约定 JSON）时：整段文字当回答，不因解析失败报错，也没有转写。
+    expect(body.audio_transcript).toBeUndefined();
+    const sessionId = body.qa_session_id!;
+    const detail = await server.inject({
+      method: 'GET',
+      url: `/api/v1/qa/sessions/${encodeURIComponent(sessionId)}`,
+      headers: headers()
+    });
+    const session = detail.json() as QaSessionDetail;
+    expect(session.messages.find((message) => message.role === 'user')?.content).toBe(
+      '（语音提问）'
+    );
+  });
+
+  it('全模态模型返回 JSON 转写：audio_transcript 回传并补写会话用户消息', async () => {
+    const captured: Captured = { routeBodies: [], answerBodies: [] };
+    mockModel(
+      captured,
+      JSON.stringify({
+        transcript: '你好，请解释价值信念',
+        answer: '价值信念是……（模型回答）'
+      })
+    );
+    const { statusCode, body } = await ask({
+      question: '',
+      audio: {
+        // 客户端仍可能传 data URL：core 必须去掉前缀再发。
+        data: 'data:audio/wav;base64,UklGRg==',
+        mimeType: 'audio/wav',
+        filename: 'speech.wav'
+      }
+    });
+    expect(statusCode).toBe(200);
+    // 解析成功：answer 取 JSON 里的回答，逐字转写放在 audio_transcript。
+    expect(body.answer).toBe('价值信念是……（模型回答）');
+    expect(body.audio_transcript).toBe('你好，请解释价值信念');
+    expect(body.notice).toContain('全模态模型直接理解');
+    expect(body.notice).toContain('逐字转写');
+    const messages = (captured.answerBodies[0]?.messages ?? []) as Array<{
+      role: string;
+      content: unknown;
+    }>;
+    const parts = messages.find((message) => message.role === 'user')?.content as Array<{
+      type: string;
+      input_audio?: { data: string; format: string };
+      text?: string;
+    }>;
+    // 没有文字问题：不发送 text part；音频 data 去前缀、format 按 mimeType 推导。
+    expect(parts.some((part) => part.type === 'text')).toBe(false);
+    const audioPart = parts.find((part) => part.type === 'input_audio');
+    expect(audioPart?.input_audio?.data).toBe('UklGRg==');
+    expect(audioPart?.input_audio?.format).toBe('wav');
+    // 会话历史里能看到用户说了什么：服务端在回答返回后把占位补写成「（语音）转写」。
+    const sessionId = body.qa_session_id!;
+    const detail = await server.inject({
+      method: 'GET',
+      url: `/api/v1/qa/sessions/${encodeURIComponent(sessionId)}`,
+      headers: headers()
+    });
+    const session = detail.json() as QaSessionDetail;
+    const userMessages = session.messages.filter((message) => message.role === 'user');
+    expect(userMessages).toHaveLength(1);
+    expect(userMessages[0]?.content).toBe('（语音）你好，请解释价值信念');
+    const assistant = session.messages.find((message) => message.role === 'assistant');
+    expect(assistant?.content).toBe('价值信念是……（模型回答）');
+    expect(assistant?.response?.audio_transcript).toBe('你好，请解释价值信念');
+  });
+
+  it('语音请求同时带文字时仍把文字作为 text part 发送（兼容旧客户端）', async () => {
+    const captured: Captured = { routeBodies: [], answerBodies: [] };
+    mockModel(captured);
+    const { statusCode } = await ask({
+      question: '这是我的文字补充',
+      audio: { data: 'data:audio/webm;base64,UklGRg==', mimeType: 'audio/webm' }
+    });
+    expect(statusCode).toBe(200);
+    const messages = (captured.answerBodies[0]?.messages ?? []) as Array<{
+      role: string;
+      content: unknown;
+    }>;
+    const parts = messages.find((message) => message.role === 'user')?.content as Array<{
+      type: string;
+      input_audio?: { data: string; format: string };
+      text?: string;
+    }>;
+    expect(parts.find((part) => part.type === 'text')?.text).toBe('这是我的文字补充');
+    const audioPart = parts.find((part) => part.type === 'input_audio');
+    expect(audioPart?.input_audio?.data).toBe('UklGRg==');
+    expect(audioPart?.input_audio?.format).toBe('webm');
+  });
+
+  it('全模态模型返回的 JSON 格式无效时退回整段文字，不整轮报错', async () => {
+    const captured: Captured = { routeBodies: [], answerBodies: [] };
+    // 有 transcript 没有 answer：不符合约定 → 整段 JSON 当回答，转写留空。
+    mockModel(captured, '{"transcript":"只有转写没有回答"}');
+    const { statusCode, body } = await ask({
+      question: '',
+      audio: { data: 'ZmFrZS1hdWRpbw==', mimeType: 'audio/webm' }
+    });
+    expect(statusCode).toBe(200);
+    expect(body.answer).toBe('{"transcript":"只有转写没有回答"}');
+    expect(body.audio_transcript).toBeUndefined();
+    expect(body.notice).toContain('没有返回可用的逐字转写');
   });
 });

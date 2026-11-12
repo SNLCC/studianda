@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { gunzipSync } from 'node:zlib';
 import { PDFDocument } from 'pdf-lib';
 import { afterAll, describe, expect, it } from 'vitest';
 import { buildServer } from '../src/server.js';
@@ -290,6 +291,181 @@ describe('Store.getReferenceGraph', () => {
     }
   });
 
+  it('kinds 过滤：先过滤再分页，总数/边数按过滤后统计，kindCounts 始终是全库', async () => {
+    const store = storeAt('graph-kinds');
+    try {
+      const documentA = await importPdf(store, 'kinds-a');
+      const documentB = await importPdf(store, 'kinds-b');
+      const note = store.createNote({
+        documentId: documentA.id,
+        page: 0,
+        content: `[[doc:${documentB.id}]]`
+      });
+      store.createAnnotation({
+        documentId: documentA.id,
+        page: 1,
+        quote: '批注引用',
+        content: `[[doc:${documentB.id}]] [[note:${documentA.id}/${note.id}]]`,
+        style: 'page'
+      });
+
+      const full = store.getReferenceGraph({ limit: 500 });
+      expect(full.kindCounts).toEqual({ document: 2, note: 1, annotation: 1 });
+      expect(full.totalNodes).toBe(4);
+      expect(full.totalEdges).toBe(3);
+      // 空 kinds 数组等价于不过滤（旧客户端不传 kinds 时行为不变）。
+      const noFilter = store.getReferenceGraph({ kinds: [], limit: 500 });
+      expect(noFilter.totalNodes).toBe(full.totalNodes);
+      expect(noFilter.totalEdges).toBe(full.totalEdges);
+
+      // 只看文献：结果为两篇文献，totalEdges 只统计两端都在结果内的边（0）；
+      // 页外笔记/批注的引用变成方向为 in 的跨页边（仍能看出上下文）。
+      const docs = store.getReferenceGraph({ kinds: ['document'], limit: 500 });
+      expect(docs.nodes.map((node) => node.kind)).toEqual(['document', 'document']);
+      expect(docs.totalNodes).toBe(2);
+      expect(docs.totalEdges).toBe(0);
+      expect(docs.hasMore).toBe(false);
+      expect(docs.kindCounts).toEqual({ document: 2, note: 1, annotation: 1 });
+      expect(docs.crossEdges.map((edge) => edge.direction)).toEqual(['in', 'in']);
+      expect(docs.crossEdges.every((edge) => edge.externalId.length > 0)).toBe(true);
+
+      // 只看笔记+批注：annotation→note 是页内边（totalEdges=1），两条指向文献的边成为跨页出边。
+      const inner = store.getReferenceGraph({ kinds: ['note', 'annotation'], limit: 500 });
+      expect(inner.totalNodes).toBe(2);
+      expect(inner.totalEdges).toBe(1);
+      expect(inner.edges).toHaveLength(1);
+      expect(inner.crossEdgeTotal).toBe(2);
+
+      // 分页字段按过滤后的总数计算。
+      const first = store.getReferenceGraph({ kinds: ['note', 'annotation'], limit: 1, offset: 0 });
+      expect(first.nodes).toHaveLength(1);
+      expect(first.hasMore).toBe(true);
+      expect(first.totalNodes).toBe(2);
+
+      expect(() => store.getReferenceGraph({ kinds: ['unknown' as never] })).toThrow('kinds');
+    } finally {
+      store.close();
+    }
+  });
+
+  it('search 过滤：按节点显示名不区分大小写子串匹配，先过滤再分页', async () => {
+    const store = storeAt('graph-search');
+    try {
+      const alpha = await importPdf(store, 'Search-Alpha');
+      const beta = await importPdf(store, 'beta');
+      store.createNote({ documentId: alpha.id, page: 0, content: 'Alpha 笔记引用' });
+      store.createNote({ documentId: beta.id, page: 0, content: 'beta 笔记' });
+
+      const matched = store.getReferenceGraph({ search: 'alpha', limit: 500 });
+      expect(matched.totalNodes).toBe(2);
+      expect(matched.nodes.every((node) => node.label.toLowerCase().includes('alpha'))).toBe(true);
+      expect(matched.totalEdges).toBe(0);
+      expect(matched.hasMore).toBe(false);
+      // 过滤只影响分页结果，kindCounts 仍是全库统计。
+      expect(matched.kindCounts).toEqual({ document: 2, note: 2, annotation: 0 });
+
+      const combined = store.getReferenceGraph({ kinds: ['document'], search: 'beta', limit: 500 });
+      expect(combined.nodes.map((node) => node.label)).toEqual(['beta.pdf']);
+      expect(combined.totalNodes).toBe(1);
+
+      const none = store.getReferenceGraph({ search: '不存在的关键字', limit: 500 });
+      expect(none.totalNodes).toBe(0);
+      expect(none.nodes).toEqual([]);
+      expect(none.hasMore).toBe(false);
+      expect(none.kindCounts).toEqual({ document: 2, note: 2, annotation: 0 });
+    } finally {
+      store.close();
+    }
+  });
+
+  it('all 全量模式：一次返回全部节点/边、无跨页边、total 为全图口径；旧分页行为不变', async () => {
+    const store = storeAt('graph-all');
+    try {
+      const documentA = await importPdf(store, 'all-a');
+      const documentB = await importPdf(store, 'all-b');
+      // A（all-b）与 B/C/D 三篇笔记都有引用关系：全量模式三条边一次返回；
+      // 旧分页模式下同一条边会被拆到不同页，只剩部分页内边 + 跨页 stub。
+      store.createNote({ documentId: documentA.id, page: 0, content: `[[doc:${documentB.id}]]` });
+      store.createNote({ documentId: documentA.id, page: 0, content: `[[doc:${documentB.id}]]` });
+      store.createNote({ documentId: documentA.id, page: 0, content: `[[doc:${documentB.id}]]` });
+
+      const all = store.getReferenceGraph({ all: true, limit: 1 });
+      expect(all.nodes).toHaveLength(5);
+      expect(all.edges).toHaveLength(3);
+      expect(all.totalNodes).toBe(5);
+      expect(all.totalEdges).toBe(3);
+      expect(all.hasMore).toBe(false);
+      // A 与 B/C/D 的三条关系边都在同一份数据里，没有任何 A→D 缺失。
+      expect(all.edges.filter((edge) => edge.to === `document:${documentB.id}`)).toHaveLength(3);
+      // 全量模式所有端点都在同一份数据里：没有跨页 stub。
+      expect(all.crossEdges).toEqual([]);
+      expect(all.crossEdgeTotal).toBe(0);
+      expect(all.truncated).toBe(false);
+      expect(all.allNodeLimit).toBe(Store.MAX_ALL_NODES);
+      expect(all.kindCounts).toEqual({ document: 2, note: 3, annotation: 0 });
+
+      // 旧分页请求不受影响：limit=1 仍只返回一个节点且 hasMore=true，没有 all 模式字段；
+      // 同一份数据分页时页内边只剩 0 条、其余都成了跨页 stub。
+      const paged = store.getReferenceGraph({ limit: 1 });
+      expect(paged.nodes).toHaveLength(1);
+      expect(paged.hasMore).toBe(true);
+      expect(paged.truncated).toBeUndefined();
+      expect(paged.allNodeLimit).toBeUndefined();
+      expect(paged.edges).toEqual([]);
+      expect(paged.crossEdgeTotal).toBe(3);
+
+      // all + kinds：过滤后的完整子图，一次返回、无跨页边。
+      const docsOnly = store.getReferenceGraph({ all: true, kinds: ['document'] });
+      expect(docsOnly.totalNodes).toBe(2);
+      expect(docsOnly.nodes).toHaveLength(2);
+      expect(docsOnly.totalEdges).toBe(0);
+      expect(docsOnly.edges).toEqual([]);
+      expect(docsOnly.crossEdges).toEqual([]);
+      expect(docsOnly.hasMore).toBe(false);
+      expect(docsOnly.kindCounts).toEqual({ document: 2, note: 3, annotation: 0 });
+
+      // all + search：同样一次返回全部匹配节点。
+      const searched = store.getReferenceGraph({ all: true, search: 'all-a' });
+      expect(searched.nodes.map((node) => node.label)).toEqual(['all-a.pdf']);
+      expect(searched.totalNodes).toBe(1);
+      expect(searched.hasMore).toBe(false);
+      expect(searched.crossEdges).toEqual([]);
+    } finally {
+      store.close();
+    }
+  });
+
+  it('all 超硬上限：退回分页、标注 truncated/allNodeLimit，过滤到上限内恢复全量', async () => {
+    const store = storeAt('graph-all-limit');
+    const originalLimit = Store.MAX_ALL_NODES;
+    try {
+      Store.MAX_ALL_NODES = 2;
+      const document = await importPdf(store, 'limit-doc');
+      store.createNote({ documentId: document.id, page: 0, content: `[[doc:${document.id}]]` });
+      store.createNote({ documentId: document.id, page: 0, content: `[[doc:${document.id}]]` });
+
+      const truncated = store.getReferenceGraph({ all: true, limit: 2 });
+      expect(truncated.truncated).toBe(true);
+      expect(truncated.allNodeLimit).toBe(2);
+      expect(truncated.totalNodes).toBe(3);
+      expect(truncated.nodes).toHaveLength(2);
+      expect(truncated.hasMore).toBe(true);
+      // 兜底分页保留跨页边上下文（页外端点的 stub）。
+      expect(truncated.crossEdgeTotal).toBeGreaterThan(0);
+
+      // 用 kinds 过滤到硬上限以内 → 服务端恢复全量返回，跨页边消失。
+      const filtered = store.getReferenceGraph({ all: true, limit: 2, kinds: ['note'] });
+      expect(filtered.truncated).toBe(false);
+      expect(filtered.hasMore).toBe(false);
+      expect(filtered.totalNodes).toBe(2);
+      expect(filtered.nodes).toHaveLength(2);
+      expect(filtered.crossEdges).toEqual([]);
+    } finally {
+      Store.MAX_ALL_NODES = originalLimit;
+      store.close();
+    }
+  });
+
   it('crossEdges：恰好一端在当前页的边带页外端点与方向；同页边不进 crossEdges', async () => {
     const store = storeAt('graph-cross');
     try {
@@ -553,5 +729,123 @@ describe('GET /api/v1/reference-graph', () => {
     expect(graph.limit).toBe(1);
     expect(graph.offset).toBe(0);
     expect(graph.hasMore).toBe(true);
+  });
+
+  it('kinds/search 可选过滤：先过滤再分页，旧客户端不传时行为不变；非法值 400', async () => {
+    const docsOnly = await server.inject({
+      method: 'GET',
+      url: '/api/v1/reference-graph?kinds=document&limit=500',
+      headers: headers()
+    });
+    expect(docsOnly.statusCode).toBe(200);
+    const docsGraph = docsOnly.json() as {
+      nodes: Array<{ kind: string }>;
+      totalNodes: number;
+      hasMore: boolean;
+      kindCounts: Record<string, number>;
+    };
+    expect(docsGraph.nodes.every((node) => node.kind === 'document')).toBe(true);
+    expect(docsGraph.totalNodes).toBe(1);
+    expect(docsGraph.hasMore).toBe(false);
+    expect(docsGraph.kindCounts).toEqual({ document: 1, note: 2, annotation: 0 });
+
+    const filteredPage = await server.inject({
+      method: 'GET',
+      url: '/api/v1/reference-graph?kinds=note&limit=1&offset=0',
+      headers: headers()
+    });
+    expect(filteredPage.statusCode).toBe(200);
+    const notesGraph = filteredPage.json() as {
+      nodes: Array<{ kind: string }>;
+      totalNodes: number;
+      hasMore: boolean;
+    };
+    expect(notesGraph.nodes).toHaveLength(1);
+    expect(notesGraph.nodes[0]?.kind).toBe('note');
+    expect(notesGraph.totalNodes).toBe(2);
+    expect(notesGraph.hasMore).toBe(true);
+
+    const searched = await server.inject({
+      method: 'GET',
+      url: `/api/v1/reference-graph?search=${encodeURIComponent('GRAPH-DOC')}`,
+      headers: headers()
+    });
+    expect(searched.statusCode).toBe(200);
+    const searchGraph = searched.json() as {
+      nodes: Array<{ label: string }>;
+      totalNodes: number;
+      kindCounts: Record<string, number>;
+    };
+    expect(searchGraph.totalNodes).toBe(1);
+    expect(searchGraph.nodes[0]?.label).toBe('http-graph-doc.pdf');
+    expect(searchGraph.kindCounts).toEqual({ document: 1, note: 2, annotation: 0 });
+
+    for (const url of [
+      '/api/v1/reference-graph?kinds=',
+      '/api/v1/reference-graph?kinds=foo',
+      '/api/v1/reference-graph?kinds=document,foo',
+      `/api/v1/reference-graph?search=${'x'.repeat(101)}`
+    ]) {
+      const response = await server.inject({ method: 'GET', url, headers: headers() });
+      expect(response.statusCode, url).toBe(400);
+    }
+  });
+
+  it('all=1 全量模式：一次返回全部节点+边、无跨页边，并按 Accept-Encoding 返回 gzip', async () => {
+    // 不带 accept-encoding：普通 JSON。
+    const plain = await server.inject({
+      method: 'GET',
+      url: '/api/v1/reference-graph?all=1',
+      headers: headers()
+    });
+    expect(plain.statusCode).toBe(200);
+    const graph = plain.json() as {
+      nodes: unknown[];
+      edges: unknown[];
+      crossEdges: unknown[];
+      totalNodes: number;
+      totalEdges: number;
+      hasMore: boolean;
+      truncated: boolean;
+      allNodeLimit: number;
+    };
+    expect(graph.nodes).toHaveLength(3);
+    expect(graph.edges).toHaveLength(1);
+    expect(graph.totalNodes).toBe(3);
+    expect(graph.totalEdges).toBe(1);
+    expect(graph.hasMore).toBe(false);
+    expect(graph.crossEdges).toEqual([]);
+    expect(graph.truncated).toBe(false);
+    expect(graph.allNodeLimit).toBe(5000);
+    // 传 limit=1 也不影响全量模式（不按 offset/limit 截断）。
+    const withLimit = await server.inject({
+      method: 'GET',
+      url: '/api/v1/reference-graph?all=1&limit=1',
+      headers: headers()
+    });
+    expect((withLimit.json() as { nodes: unknown[] }).nodes).toHaveLength(3);
+
+    // 带 accept-encoding: gzip：响应被压缩，解压后是同一个 JSON。
+    const gzipped = await server.inject({
+      method: 'GET',
+      url: '/api/v1/reference-graph?all=1',
+      headers: { ...headers(), 'accept-encoding': 'gzip' }
+    });
+    expect(gzipped.statusCode).toBe(200);
+    expect(gzipped.headers['content-encoding']).toBe('gzip');
+    const unzipped = JSON.parse(gunzipSync(gzipped.rawPayload).toString('utf8')) as {
+      nodes: unknown[];
+      hasMore: boolean;
+    };
+    expect(unzipped.nodes).toHaveLength(3);
+    expect(unzipped.hasMore).toBe(false);
+
+    // all 非法值 400。
+    const invalid = await server.inject({
+      method: 'GET',
+      url: '/api/v1/reference-graph?all=maybe',
+      headers: headers()
+    });
+    expect(invalid.statusCode).toBe(400);
   });
 });

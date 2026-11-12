@@ -16,8 +16,10 @@ import {
 import {
   mimoVoiceList,
   minimaxVoiceList,
+  saveSpeechConfig,
   voicesForSpeechConnection
 } from '../src/speech.js';
+import { saveModelServices } from '../src/model-services.js';
 import {
   zoteroFailureMessage,
   zoteroNetworkMessage
@@ -96,6 +98,149 @@ describe('语音音色按连接获取', () => {
     const list = await voicesForSpeechConnection('https://api.example.com/v1', 'k', 'm');
     expect(list.voices).toHaveLength(0);
     expect(list.note).toContain('没有公开的音色列表');
+  });
+
+  it('模型模式只按选中的平台连接取音色，不回退到旧 MiMo 地址', async () => {
+    saveModelServices(store, {
+      connections: [
+        {
+          id: 'conn-mimo',
+          name: 'MiMo 平台',
+          platform: 'xiaomimimo',
+          baseUrl: 'https://api.xiaomimimo.com/v1',
+          models: [
+            {
+              id: 'mimo-tts',
+              name: 'mimo-v2.5-tts',
+              capabilities: ['tts'],
+              source: 'preset',
+              enabled: true
+            }
+          ]
+        }
+      ]
+    });
+    // 旧版本留下的自定义 MiMo 地址：model 模式没有 connection_id 时绝不能回退到它，
+    // 否则就会出现用户报告的「配置了模型，检测音色还是 MiMo」。
+    saveSpeechConfig(store, secrets, {
+      tts_mode: 'custom',
+      tts_url: 'https://api.xiaomimimo.com/v1',
+      tts_model: 'mimo-v2.5-tts',
+      voice: ''
+    });
+
+    const missing = await server.inject({
+      method: 'GET',
+      url: '/api/v1/speech/voices?mode=model',
+      headers: headers()
+    });
+    expect(missing.statusCode).toBe(200);
+    const missingBody = missing.json() as { voices: string[]; message: string };
+    expect(missingBody.voices).toEqual([]);
+    expect(missingBody.message).toContain('语音平台');
+
+    const byConnection = await server.inject({
+      method: 'GET',
+      url: '/api/v1/speech/voices?mode=model&connection_id=conn-mimo&model=mimo-v2.5-tts',
+      headers: headers()
+    });
+    expect(byConnection.statusCode).toBe(200);
+    const body = byConnection.json() as {
+      voices: string[];
+      source?: string;
+      model?: string;
+      connection_id?: string;
+      labels?: Record<string, string>;
+    };
+    expect(body.connection_id).toBe('conn-mimo');
+    expect(body.model).toBe('mimo-v2.5-tts');
+    expect(body.voices).toContain('mimo_default');
+    expect(body.source).toBe('官方文档');
+    expect(body.labels?.['mimo_default']).toContain('MiMo');
+
+    const unknown = await server.inject({
+      method: 'GET',
+      url: '/api/v1/speech/voices?mode=model&connection_id=gone&model=x',
+      headers: headers()
+    });
+    const unknownBody = unknown.json() as { voices: string[]; message: string };
+    expect(unknownBody.voices).toEqual([]);
+    expect(unknownBody.message).toContain('不存在');
+
+    // 音色设计/复刻模型没有预置清单：如实说明，而不是硬塞一份 MiMo 音色清单。
+    const design = await server.inject({
+      method: 'GET',
+      url: '/api/v1/speech/voices?mode=model&connection_id=conn-mimo&model=mimo-v2.5-tts-voicedesign',
+      headers: headers()
+    });
+    const designBody = design.json() as { voices: string[]; message: string };
+    expect(designBody.voices).toEqual([]);
+    expect(designBody.message).toContain('音色设计');
+  });
+
+  it('自定义服务用请求里的当前地址取音色，不依赖已保存的旧地址', async () => {
+    saveSpeechConfig(store, secrets, {
+      tts_mode: 'custom',
+      tts_url: 'https://old.example.com/v1',
+      tts_model: 'old-model',
+      voice: ''
+    });
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', async (url: string) => {
+      calls.push(String(url));
+      if (String(url).includes('/audio/voices')) {
+        return new Response(JSON.stringify({ voices: [{ id: 'new-voice' }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        });
+      }
+      return new Response('not found', { status: 404 });
+    });
+    const response = await server.inject({
+      method: 'GET',
+      url: `/api/v1/speech/voices?mode=custom&url=${encodeURIComponent(
+        'https://new.example.com/v1'
+      )}`,
+      headers: headers()
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { voices: string[]; source?: string };
+    expect(body.voices).toEqual(['new-voice']);
+    expect(body.source).toBe('服务接口');
+    expect(calls[0]).toContain('new.example.com');
+    expect(calls.some((url) => url.includes('old.example.com'))).toBe(false);
+  });
+
+  it('保存模型播报设置时同时持久化平台连接与音色，刷新后仍指向同一平台', async () => {
+    const response = await server.inject({
+      method: 'PUT',
+      url: '/api/v1/speech/config',
+      headers: headers(),
+      payload: {
+        tts_mode: 'model',
+        tts_connection_id: 'conn-mimo',
+        tts_model: 'mimo-v2.5-tts',
+        voice: '冰糖'
+      }
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      tts_mode: 'model',
+      tts_connection_id: 'conn-mimo',
+      tts_model: 'mimo-v2.5-tts',
+      voice: '冰糖'
+    });
+    const again = await server.inject({
+      method: 'GET',
+      url: '/api/v1/speech/config',
+      headers: headers()
+    });
+    expect(again.json()).toMatchObject({
+      tts_connection_id: 'conn-mimo',
+      voice: '冰糖'
+    });
+    // 旧音色只有在和当前平台匹配时才有意义：读回来的 voice 必须就是刚才保存的那个。
+    expect((again.json() as { voice: string }).voice).toBe('冰糖');
   });
 });
 

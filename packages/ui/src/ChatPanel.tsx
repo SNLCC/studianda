@@ -159,6 +159,19 @@ function formatAnswerDuration(durationMs: number): string | null {
   return `${(durationMs / 1000).toFixed(1)} 秒`;
 }
 
+/**
+ * 明显不需要联网的寒暄/确认：跳过搜索计划，直接按不联网提问。
+ *
+ * 只匹配「整句就是一个客套词」的极短输入（「你好」「谢谢」「好的」等），
+ * 避免把「你好，帮我查一下……」「好的，那这篇文献……」这类有内容的句子误判成寒暄。
+ */
+const SMALL_TALK_ONLY =
+  /^(?:你好|您好|嗨|哈喽|哈啰|在吗|早上好|上午好|中午好|下午好|晚上好|谢谢|多谢|感谢|好的|好|ok|okay|hi|hello|hey|再见|拜拜)[\s!！。,.，?？~～…]*$/i;
+
+function isSmallTalkOnly(value: string): boolean {
+  return SMALL_TALK_ONLY.test(value.trim());
+}
+
 /** 输入区 textarea 可拖拽高度：范围 96–360px，双击把手恢复默认。 */
 const COMPOSER_HEIGHT_STORAGE_KEY = 'studianda.chat.composerHeight';
 const COMPOSER_HEIGHT_MIN = 72;
@@ -297,7 +310,12 @@ export interface ChatPanelProps {
   onSpeakText?(text: string): void;
   speaking?: boolean;
   onTranscribe?(audio: Blob): Promise<string>;
-  onAskAudio?(audio: Blob): void;
+  /**
+   * 直接语音提问（全模态）：把录音直接交给模型，由模型自己转写（不在客户端先跑 ASR）。
+   *
+   * 转写随 ChatResponse.audio_transcript 返回，宿主据此更新会话里的用户消息正文。
+   */
+  onAskAudio?(audio: Blob): void | Promise<void>;
   directAudio?: boolean;
   /** 语音转写完成后直接提问（关闭时只填入输入框）。 */
   speechAutoSend?: boolean;
@@ -643,8 +661,14 @@ export function ChatPanel({
     return error instanceof Error ? error.message : '无法打开麦克风';
   };
 
+  /**
+   * 能否录音：普通语音输入需要 ASR；直接语音（全模态）只需要 onAskAudio，
+   * ASR 只是用来把转写显示到会话里的增强，不可用时仍可占位发送。
+   */
+  const canRecord = Boolean(onTranscribe) || Boolean(directAudio && onAskAudio);
+
   const startRecording = async (): Promise<void> => {
-    if (!onTranscribe || recording || transcribing || speechDisabledReason) return;
+    if (!canRecord || recording || transcribing || speechDisabledReason) return;
     setSpeechError('');
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -685,12 +709,32 @@ export function ChatPanel({
         }
         setTranscribing(true);
         if (directAudio && onAskAudio) {
-          onAskAudio(blob);
+          // 直接语音（全模态）：录音直接发给模型，由全模态模型自己完成转写——不再先跑
+          // 一次 ASR（那会多一次模型往返，且 ASR 不可用时语音提问就发不出去）。
+          void (async () => {
+            try {
+              await onAskAudio(blob);
+            } catch (error) {
+              // 发送失败（例如本地转码/编码失败）时给出可读错误，不静默丢录音。
+              if (mountedRef.current) {
+                setSpeechError(
+                  error instanceof Error ? error.message : '语音发送失败，请重试'
+                );
+              }
+            } finally {
+              if (mountedRef.current) setTranscribing(false);
+            }
+          })();
+          return;
+        }
+        const transcribe = onTranscribe;
+        if (!transcribe) {
           setTranscribing(false);
+          setSpeechError('语音识别不可用，无法转写这段录音');
           return;
         }
         // 转写 + 纠错后的文本默认只填进输入框，等用户核对；开启“自动发送”后直接提问。
-        void onTranscribe(blob)
+        void transcribe(blob)
           .then((text) => {
             if (!mountedRef.current) return;
             const cleaned = text.trim();
@@ -937,12 +981,26 @@ export function ChatPanel({
       setQuestion('');
       return;
     }
+    // 明显寒暄/确认（「你好」等）：不生成搜索计划、也不联网，直接按普通提问回答。
+    // 否则「你好」会走一次规划模型（返回空列表）甚至被拿去联网搜索，体验很怪。
+    if (isSmallTalkOnly(value)) {
+      onAsk(value, { confirmSearch: false, ...readingOptions });
+      setQuestion('');
+      return;
+    }
     setPlanning(true);
     try {
       const plan = await onCreateSearchPlan({
         question: value,
         ...(selectionQuote ? { selection: selectionQuote } : {})
       });
+      if (plan.queries.length === 0) {
+        // 本轮没有可公开搜索的主体词（寒暄/无需检索/规划模型判断无需联网）：
+        // 这不是错误——直接按不联网提问，不显示 planError。
+        onAsk(value, { confirmSearch: false, ...readingOptions });
+        setQuestion('');
+        return;
+      }
       if (plan.review) {
         setPendingPlan(plan);
         return;
@@ -2115,35 +2173,38 @@ export function ChatPanel({
             onBlur={() => onComposerFocusChange?.(false)}
           />
           <div className="kr-chat__reading-options">
-            <select
-              value={readingScope}
-              onChange={(event) => {
-                const value = event.target.value as typeof readingScope;
-                setReadingScope(value);
-                if (value === 'corpus') setScopeDialogOpen(true);
-              }}
-              aria-label="阅读范围"
-              title="阅读范围"
-            >
-              <option value="auto">{standalone ? '范围：库内检索' : '范围：自动'}</option>
-              {standalone ? null : <option value="local">范围：本页附近</option>}
-              {standalone ? null : <option value="document">范围：整篇</option>}
-              <option value="corpus">
-                {standalone ? '范围：跨文献精读' : '范围：跨文献'}
-              </option>
-            </select>
-            {readingScope === 'corpus' ? (
-              <button
-                type="button"
-                className="kr-chat__scope-button"
-                onClick={() => setScopeDialogOpen(true)}
+            {/* 范围和「已选 N 篇」是一个不可拆分的组：窄侧栏下整组换行，不能拆成两行。 */}
+            <div className="kr-chat__reading-group">
+              <select
+                value={readingScope}
+                onChange={(event) => {
+                  const value = event.target.value as typeof readingScope;
+                  setReadingScope(value);
+                  if (value === 'corpus') setScopeDialogOpen(true);
+                }}
+                aria-label="阅读范围"
+                title="阅读范围"
               >
-                已选{' '}
-                {scopeMode === 'tags'
-                  ? `${scopeTags.length || '全部'} 个标签`
-                  : `${scopeDocuments.length || '全部'} 篇`}
-              </button>
-            ) : null}
+                <option value="auto">{standalone ? '范围：库内检索' : '范围：自动'}</option>
+                {standalone ? null : <option value="local">范围：本页附近</option>}
+                {standalone ? null : <option value="document">范围：整篇</option>}
+                <option value="corpus">
+                  {standalone ? '范围：跨文献精读' : '范围：跨文献'}
+                </option>
+              </select>
+              {readingScope === 'corpus' ? (
+                <button
+                  type="button"
+                  className="kr-chat__scope-button"
+                  onClick={() => setScopeDialogOpen(true)}
+                >
+                  已选{' '}
+                  {scopeMode === 'tags'
+                    ? `${scopeTags.length || '全部'} 个标签`
+                    : `${scopeDocuments.length || '全部'} 篇`}
+                </button>
+              ) : null}
+            </div>
             {!standalone && chapters && chapters.length >= 2 ? (
               <select
                 value={readingChapter}
@@ -2221,7 +2282,7 @@ export function ChatPanel({
             </label>
           </div>
           <div className="kr-chat__compose-actions">
-            {onTranscribe || speechDisabledReason ? (
+            {canRecord || speechDisabledReason ? (
               <button
                 type="button"
                 className={`kr-chat__tool${recording ? ' is-recording' : ''}`}
@@ -2247,7 +2308,7 @@ export function ChatPanel({
                   else void startRecording();
                 }}
                 disabled={
-                  asking || transcribing || Boolean(speechDisabledReason) || !onTranscribe
+                  asking || transcribing || Boolean(speechDisabledReason) || !canRecord
                 }
                 title={
                   speechDisabledReason ??
@@ -2268,6 +2329,9 @@ export function ChatPanel({
                       : `停止 ${recordingSeconds}s`
                     : '语音输入'}
               </button>
+            ) : null}
+            {transcribing ? (
+              <span className="kr-chat__shortcut">识别中…</span>
             ) : null}
             {speechDisabledReason ? (
               <span className="kr-chat__shortcut" title={speechDisabledReason}>

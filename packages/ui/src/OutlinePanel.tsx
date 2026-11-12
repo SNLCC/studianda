@@ -48,8 +48,8 @@ export interface OutlinePanelProps {
   previewPending?: boolean;
   previewError?: string;
   onPreview(): void;
-  onGenerateFromToc(): void;
-  onGenerateFromTitles(): void;
+  onGenerateFromToc(): void | Promise<NavigationStatus | void>;
+  onGenerateFromTitles(): void | Promise<NavigationStatus | void>;
   onClearTocPages(): void;
   generating?: boolean;
   buildError?: string;
@@ -148,6 +148,13 @@ export function OutlinePanel({
   footer
 }: OutlinePanelProps): JSX.Element {
   const [generatorOpen, setGeneratorOpen] = useState(false);
+  // 生成请求自身在途（区别于 app 层的后台生成状态）：用于「不白关弹窗」。
+  const [generatePending, setGeneratePending] = useState<'toc' | 'titles' | null>(null);
+  /** 后台生成中：mutation 立即返回 state=building，需按状态轮询收尾。 */
+  const [awaitingBackground, setAwaitingBackground] = useState(false);
+  const [generateError, setGenerateError] = useState('');
+  const [generateNotice, setGenerateNotice] = useState('');
+  const busy = Boolean(generating) || generatePending !== null;
   useEffect(() => {
     if (!generatorOpen) return;
     const onKey = (event: KeyboardEvent): void => {
@@ -156,6 +163,59 @@ export function OutlinePanel({
     window.document.addEventListener('keydown', onKey);
     return () => window.document.removeEventListener('keydown', onKey);
   }, [generatorOpen]);
+  // 后台生成（超过同步页数上限）收尾：有结果才关弹窗；失败/空结果在弹窗内明说。
+  useEffect(() => {
+    if (!generatorOpen || !awaitingBackground) return;
+    if (status?.state === 'failed') {
+      setAwaitingBackground(false);
+      setGenerateError(status.error || '目录生成失败，请重试或改用目录页生成。');
+      return;
+    }
+    if (generated.length > 0) {
+      setAwaitingBackground(false);
+      setGenerateError('');
+      setGeneratorOpen(false);
+    }
+  }, [generatorOpen, awaitingBackground, status, generated.length]);
+  /**
+   * 生成目录：保持弹窗打开并显示进度；成功且有结果才关闭，失败/0 条在弹窗内显示明确错误。
+   */
+  const runGenerate = async (kind: 'toc' | 'titles'): Promise<void> => {
+    if (busy) return;
+    setGenerateError('');
+    setGenerateNotice('');
+    setAwaitingBackground(false);
+    setGeneratePending(kind);
+    try {
+      const result = await (kind === 'toc' ? onGenerateFromToc() : onGenerateFromTitles());
+      const statusResult = result && typeof result === 'object' ? (result as NavigationStatus) : null;
+      const count = statusResult?.nodeCount;
+      if (statusResult?.state === 'building') {
+        // 大文档走后台生成：弹窗保持打开，按 status 轮询收尾（见上面的 effect）。
+        setAwaitingBackground(true);
+        return;
+      }
+      if (typeof count === 'number' && count === 0) {
+        // 兜底：0 条不能静默关窗（core 现在会直接报错，这里防御旧/自定义调用方）。
+        setGenerateError(
+          '没有生成任何目录条目：这篇 PDF 没有识别到可用的章节标题。请改用「按目录页生成」，或手动添加目录。'
+        );
+        return;
+      }
+      if (typeof count === 'number' && count > 0) {
+        setGenerateNotice(`已生成 ${count} 条本地目录。`);
+      }
+      setGeneratorOpen(false);
+    } catch (error) {
+      setGenerateError(
+        error instanceof Error && error.message
+          ? error.message
+          : '目录生成失败：请重试，或改用「按目录页生成」。'
+      );
+    } finally {
+      setGeneratePending(null);
+    }
+  };
   const tocPages = status?.toc_pages ?? [];
   const hasEmbedded = embedded.length > 0;
   const hasLocal = generated.length > 0;
@@ -200,6 +260,7 @@ export function OutlinePanel({
 
       {displayedGateReason ? <p className="kr-outline2__hint">{displayedGateReason}</p> : null}
       {buildError ? <p className="kr-page-error">{buildError}</p> : null}
+      {generateNotice ? <p className="kr-outline2__hint">{generateNotice}</p> : null}
       {status?.state === 'failed' ? (
         <p className="kr-page-error">{status.error || '目录生成失败'}</p>
       ) : null}
@@ -256,7 +317,13 @@ export function OutlinePanel({
               <button type="button" onClick={onStartManual}>
                 ＋ 手动
               </button>
-              <button type="button" onClick={() => setGeneratorOpen(true)}>
+              <button
+                type="button"
+                onClick={() => {
+                  setGenerateError('');
+                  setGeneratorOpen(true);
+                }}
+              >
                 目录生成…
               </button>
             </div>
@@ -381,6 +448,19 @@ export function OutlinePanel({
                   <span className="kr-outline2__badge is-ready">目录页 {tocPages.join('、')}</span>
                 ) : null}
               </div>
+              {generatePending || awaitingBackground ? (
+                <p className="kr-outline2__hint">
+                  {generatePending === 'titles'
+                    ? '正在按标题规则识别全文章节标题…（大文档会在后台继续生成，进度显示在目录面板）'
+                    : generatePending === 'toc'
+                      ? '正在按目录页生成本地目录…'
+                      : `正在生成目录 ${status?.done ?? 0} / ${status?.total ?? totalPages} 页…`}
+                </p>
+              ) : null}
+              {generateError ? <p className="kr-page-error">{generateError}</p> : null}
+              {buildError && buildError !== generateError ? (
+                <p className="kr-page-error">{buildError}</p>
+              ) : null}
 
           <div className="kr-outline2__method">
             <strong>方式一 · 按目录页生成</strong>
@@ -398,13 +478,13 @@ export function OutlinePanel({
               <button
                 type="button"
                 className="kr-outline2__primary"
-                disabled={!tocPagesValid || previewPending}
+                disabled={!tocPagesValid || previewPending || busy}
                 onClick={onPreview}
               >
                 {previewPending ? '识别中…' : '识别目录页'}
               </button>
               {tocPages.length > 0 ? (
-                <button type="button" disabled={generating} onClick={onClearTocPages}>
+                <button type="button" disabled={busy} onClick={onClearTocPages}>
                   清除目录页
                 </button>
               ) : null}
@@ -466,13 +546,10 @@ export function OutlinePanel({
                 <button
                   type="button"
                   className="kr-outline2__primary"
-                  disabled={generating || preview.stats.nodes === 0}
-                  onClick={() => {
-                    onGenerateFromToc();
-                    setGeneratorOpen(false);
-                  }}
+                  disabled={busy || preview.stats.nodes === 0}
+                  onClick={() => void runGenerate('toc')}
                 >
-                  {generating ? '生成中…' : '用这些条目生成本地目录'}
+                  {generatePending === 'toc' ? '生成中…' : '用这些条目生成本地目录'}
                 </button>
               </div>
             ) : null}
@@ -485,13 +562,10 @@ export function OutlinePanel({
             </p>
             <button
               type="button"
-              disabled={generating}
-              onClick={() => {
-                onGenerateFromTitles();
-                setGeneratorOpen(false);
-              }}
+              disabled={busy}
+              onClick={() => void runGenerate('titles')}
             >
-              {generating ? '生成中…' : '按标题规则生成本地目录'}
+              {generatePending === 'titles' ? '识别中…' : '按标题规则生成本地目录'}
             </button>
           </div>
             </section>

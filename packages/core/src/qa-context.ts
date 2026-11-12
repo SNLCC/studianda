@@ -181,7 +181,12 @@ function withoutCurrentTurn(messages: QaMessageRecord[], question: string): QaMe
   if (!content) return messages;
   if (content === '（语音提问）') return messages.slice(0, -1);
   if (!asked) return messages;
-  if (content === asked) return messages.slice(0, -1);
+  // 语音直问：服务端会把转写正文写成「（语音）…」标明是口头提问；比对本轮问题时去掉前缀，
+  // 否则本轮刚落库的用户消息会被当成历史再发一遍。
+  const spoken = content.startsWith('（语音）')
+    ? content.slice('（语音）'.length).trim()
+    : content;
+  if (content === asked || spoken === asked) return messages.slice(0, -1);
   return messages;
 }
 

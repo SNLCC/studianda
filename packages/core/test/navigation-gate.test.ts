@@ -218,4 +218,33 @@ describe('navigation failure state', () => {
     expect(status.enabled).toBe(true);
     expect(status.error).not.toBe('');
   });
+
+  it('按标题规则 0 条时明确报错，不落库、也不覆盖已有目录', async () => {
+    const id = await importFreshDocument('nav-empty-title-rule.pdf');
+    const first = await store.buildNavigation(id, true);
+    expect(first.state).toBe('ready');
+    const before = store.listNavigation(id).map((node) => node.page);
+    expect(before.length).toBeGreaterThan(0);
+
+    // 「无关区域」规则遮住全篇：标题规则没有任何可用行 → 必须报明确错误，
+    // 而不是以 0 条目录"成功"落库（用户看到的会是弹窗关闭、没反应）。
+    await store.addPageMask(id, { page: 0, scope: 'all', x0: 0, y0: 0, x1: 1, y1: 1 });
+    await expect(store.buildNavigation(id, true)).rejects.toThrow(
+      '按标题规则没有识别到任何目录条目'
+    );
+    expect(store.listNavigation(id).map((node) => node.page)).toEqual(before);
+    expect(store.navigationStatus(id).state).toBe('failed');
+  });
+
+  it('没有文字层的 PDF 按标题规则生成时给出 OCR 指引', async () => {
+    const pdf = await PDFDocument.create();
+    pdf.addPage([400, 600]);
+    pdf.addPage([400, 600]);
+    const file = path.join(dataDir, 'nav-no-text-layer.pdf');
+    writeFileSync(file, await pdf.save());
+    const id = (await store.importDocument(file)).id;
+    await expect(store.buildNavigation(id, true)).rejects.toThrow('没有可解析的文字层');
+    expect(store.listNavigation(id)).toEqual([]);
+    expect(store.navigationStatus(id).state).toBe('failed');
+  });
 });

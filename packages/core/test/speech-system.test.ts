@@ -6,6 +6,7 @@ import { buildServer } from '../src/server.js';
 import { SecretStore } from '../src/secrets.js';
 import {
   parseSystemSpeechStatus,
+  saveSpeechConfig,
   systemSpeechStatus,
   transcribeAudio,
   validateWav
@@ -22,19 +23,31 @@ vi.mock('node:child_process', async (importOriginal) => {
     (stdout as unknown as { setEncoding: (value: string) => void }).setEncoding = () => {};
     (stderr as unknown as { setEncoding: (value: string) => void }).setEncoding = () => {};
     const child = new EventEmitter();
+    let payload = '';
     Object.assign(child, {
       stdout,
       stderr,
       kill: () => {},
       stdin: {
-        end: () => {
+        end: (value?: string) => {
+          payload = String(value ?? '');
           setTimeout(() => {
+            // 按 action 区分：voices 只返回音色数组（与真实 PowerShell 脚本一致），
+            // status 返回 {voices, recognizers} 对象。
+            let action = '';
+            try {
+              action = String((JSON.parse(payload) as { action?: unknown }).action ?? '');
+            } catch {
+              action = '';
+            }
             stdout.emit(
               'data',
-              JSON.stringify({
-                voices: ['Microsoft Huihui Desktop'],
-                recognizers: ['zh-CN']
-              })
+              action === 'voices'
+                ? JSON.stringify(['Microsoft Huihui Desktop'])
+                : JSON.stringify({
+                    voices: ['Microsoft Huihui Desktop'],
+                    recognizers: ['zh-CN']
+                  })
             );
             child.emit('close', 0);
           }, 0);
@@ -208,6 +221,46 @@ describe('GET /api/v1/speech/system', () => {
       expect(Array.isArray(body.asr_languages)).toBe(true);
       expect(typeof body.message).toBe('string');
       expect(Array.isArray(body.detail)).toBe(true);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('lists system voices for system mode instead of falling back to an old TTS URL', async () => {
+    const server = buildServer({
+      token: 'test-token',
+      version: 'test-version',
+      store,
+      secrets
+    });
+    try {
+      // 先保存一个「旧 MiMo 自定义服务」：系统模式的音色列表必须是本机音色，
+      // 不能因为 saved tts_mode/tts_url 指向 MiMo 就回退成 MiMo 预置清单。
+      saveSpeechConfig(store, secrets, {
+        tts_mode: 'custom',
+        tts_url: 'https://api.xiaomimimo.com/v1',
+        tts_model: 'mimo-v2.5-tts',
+        voice: 'mimo_default'
+      });
+      const response = await server.inject({
+        method: 'GET',
+        url: '/api/v1/speech/voices?mode=system',
+        headers: { 'x-studianda-token': 'test-token' }
+      });
+      expect(response.statusCode).toBe(200);
+      const body = response.json() as {
+        mode?: string;
+        voices: string[];
+        source?: string;
+        message: string;
+      };
+      expect(body.mode).toBe('system');
+      expect(body.source).toBe('系统语音');
+      expect(Array.isArray(body.voices)).toBe(true);
+      if (process.platform === 'win32') {
+        expect(body.voices).toContain('Microsoft Huihui Desktop');
+        expect(body.voices).not.toContain('mimo_default');
+      }
     } finally {
       await server.close();
     }

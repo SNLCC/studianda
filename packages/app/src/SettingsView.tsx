@@ -322,6 +322,14 @@ function SettingsViewContent({
   const [ttsModel, setTtsModel] = useState('');
   const [ttsVoice, setTtsVoice] = useState('');
   const [voiceOptions, setVoiceOptions] = useState<string[]>([]);
+  // 「获取音色」返回的展示名、来源说明，以及拿到列表时所针对的平台/模型/地址。
+  // 用 context 对比当前选择：用过期的列表选音色时如实提示「可能不适用」。
+  const [voiceLabels, setVoiceLabels] = useState<Record<string, string>>({});
+  const [voiceInfo, setVoiceInfo] = useState<{
+    context: string;
+    source: string;
+    message: string;
+  } | null>(null);
   const [ttsKey, setTtsKey] = useState('');
   const [asrMode, setAsrMode] = useState<'system' | 'model' | 'custom'>('system');
   const [asrUrl, setAsrUrl] = useState('');
@@ -633,6 +641,35 @@ function SettingsViewContent({
     setCorrectionContext(speechQuery.data.context);
   }, [speechQuery.data]);
 
+  // 旧版本在「模型服务」模式下只保存了语音模型名（没有 connection_id），或者连接后来
+  // 被删掉：界面看似「配置了模型」，获取音色却会回退到旧的 TTS 地址（常见是 MiMo）。
+  // 这里按「模型服务 → 语音播报」的分配补齐平台与模型，只补一次，不覆盖用户后续选择。
+  const adoptedRoutingTts = useRef(false);
+  useEffect(() => {
+    if (adoptedRoutingTts.current) return;
+    if (!speechQuery.data || !speechServicesQuery.data) return;
+    adoptedRoutingTts.current = true;
+    if (speechQuery.data.tts_mode !== 'model') return;
+    const savedConnection = speechConnections.find(
+      (connection) => connection.id === speechQuery.data.tts_connection_id
+    );
+    if (savedConnection?.models.some((model) => model.capabilities.includes('tts'))) return;
+    const assignment = speechServicesQuery.data.routing?.tts;
+    if (!assignment) return;
+    const connection = speechConnections.find(
+      (item) =>
+        item.id === assignment.connectionId &&
+        item.models.some((model) => model.capabilities.includes('tts'))
+    );
+    if (!connection) return;
+    const model =
+      connection.models.find((item) => item.name === assignment.model)?.name ||
+      connection.models.find((item) => item.capabilities.includes('tts'))?.name ||
+      '';
+    setTtsConnectionId(connection.id);
+    if (model) setTtsModel(model);
+  }, [speechQuery.data, speechServicesQuery.data, speechConnections]);
+
   const searchQueryConfig = useQuery({
     queryKey: ['search-config'],
     queryFn: () => api.getSearchConfig()
@@ -698,22 +735,70 @@ function SettingsViewContent({
     onError: (error: Error) => notify(`联网搜索失败：${error.message}`)
   });
 
+  // 当前「获取音色」的目标：模式 + 平台连接 + 模型 + 服务地址。列表与音色都绑定在这个
+  // 目标上；切换目标后旧的音色选项不能继续用（否则保存后播报会拿错平台的音色）。
+  const ttsVoiceContextKey =
+    ttsMode === 'model'
+      ? `model|${ttsConnectionId}|${ttsModel}`
+      : ttsMode === 'system'
+        ? 'system'
+        : `custom|${ttsUrl.trim()}|${ttsModel.trim()}`;
+  const voiceInfoStale = Boolean(voiceInfo && voiceInfo.context !== ttsVoiceContextKey);
+
+  const resetVoicesForTargetChange = (message: string): void => {
+    setVoiceOptions([]);
+    setVoiceLabels({});
+    setVoiceInfo(null);
+    if (ttsVoice.trim()) {
+      setTtsVoice('');
+      notify(`${message}，旧音色已清空，请重新「获取音色」后再选择。`);
+    }
+  };
+
   const loadVoices = useMutation({
-    mutationFn: () =>
-      api.getSpeechVoices(
+    mutationFn: async () => {
+      if (ttsMode === 'model' && !ttsConnectionId.trim()) {
+        throw new Error('请先在「语音平台」中选择平台，再获取音色。');
+      }
+      if (ttsMode === 'custom' && !ttsUrl.trim()) {
+        throw new Error('请先填写 TTS 服务地址，再获取音色。');
+      }
+      const context = ttsVoiceContextKey;
+      // 必须显式传 mode（和当前已保存配置无关），并给 model 传空串而不是省略：
+      // 否则服务端会把空的 connection/model 当“没传”，回退到旧配置（MiMo）。
+      const result = await api.getSpeechVoices(
         ttsMode === 'model'
-          ? { connectionId: ttsConnectionId, model: ttsModel }
-          : undefined
-      ),
-    onSuccess: (result) => {
+          ? { mode: 'model', connectionId: ttsConnectionId, model: ttsModel }
+          : ttsMode === 'system'
+            ? { mode: 'system' }
+            : { mode: 'custom', url: ttsUrl.trim(), model: ttsModel.trim() }
+      );
+      return { result, context };
+    },
+    onSuccess: ({ result, context }) => {
       setVoiceOptions(result.voices);
+      setVoiceLabels(result.labels ?? {});
+      setVoiceInfo({
+        context,
+        source: result.source ?? '',
+        message: result.message ?? ''
+      });
+      const keep = ttsVoice.trim();
+      const stale = keep && result.voices.length > 0 && !result.voices.includes(keep);
       notify(
         result.voices.length > 0
-          ? `已获取 ${result.voices.length} 个音色${result.source ? `（来源：${result.source}）` : ''}。`
+          ? `已获取 ${result.voices.length} 个音色${
+              result.source ? `（来源：${result.source}）` : ''
+            }${stale ? `；当前音色「${keep}」不在列表中，请重新选择` : ''}。`
           : result.message ?? '没有获取到音色，可手动填写。'
       );
     },
-    onError: (error: Error) => notify(`获取音色失败：${error.message}`)
+    onError: (error: Error) => {
+      setVoiceOptions([]);
+      setVoiceLabels({});
+      setVoiceInfo(null);
+      notify(`获取音色失败：${error.message}`, 'error');
+    }
   });
 
   const changeDataLocation = useMutation({    mutationFn: async () => {      if (!adapter.changeDataLocation) throw new Error('当前运行环境不支持更改资料位置');
@@ -746,11 +831,30 @@ function SettingsViewContent({
         ...(asrKey.trim() ? { asr_key: asrKey.trim() } : {}),
         ...(ttsKey.trim() ? { tts_key: ttsKey.trim() } : {})
       }),
-    onSuccess: () => {
+    onSuccess: (saved) => {
       setTtsKey('');
       setAsrKey('');
       void queryClient.invalidateQueries({ queryKey: ['speech-config'] });
-      notify('语音设置已保存。');
+      void queryClient.invalidateQueries({ queryKey: ['model-services'] });
+      // 保存回执写清「实际生效」的播报目标与音色：否则用户只看到“已保存”，
+      // 无法确认模型/音色是否真的换了（本次 bug 13 的反馈点）。
+      const modeLabel =
+        saved.tts_mode === 'system'
+          ? '系统语音'
+          : saved.tts_mode === 'model'
+            ? '模型服务'
+            : '自定义服务';
+      const target =
+        saved.tts_mode === 'system'
+          ? 'Windows 系统语音'
+          : saved.tts_mode === 'model'
+            ? `${ttsConnectionName || saved.tts_connection_id || '未选择平台'}${
+                saved.tts_model ? ` / ${saved.tts_model}` : ''
+              }`
+            : saved.tts_url || '未填写地址';
+      notify(
+        `语音设置已保存：播报方式 ${modeLabel}，目标 ${target}，音色 ${saved.voice || '默认音色'}。`
+      );
     },
     onError: (error: Error) => notify(`语音设置保存失败：${error.message}`)
   });
@@ -760,7 +864,20 @@ function SettingsViewContent({
   const checkSpeechSystem = useMutation({
     mutationFn: () => api.getSpeechSystemStatus(),
     onMutate: () => setSpeechSystem(null),
-    onSuccess: (result) => setSpeechSystem(result),
+    onSuccess: (result) => {
+      setSpeechSystem(result);
+      // 系统自检顺手把本机音色填进下拉（仅在系统播报模式下），用户不必再点一次
+      // 「获取音色」；不会改动用户已经选中的音色。
+      if (ttsMode === 'system') {
+        setVoiceOptions(result.tts_voices);
+        setVoiceLabels({});
+        setVoiceInfo({
+          context: 'system',
+          source: '系统语音',
+          message: result.message
+        });
+      }
+    },
     onError: (error: Error) =>
       setSpeechSystem({
         platform: '',
@@ -771,6 +888,85 @@ function SettingsViewContent({
         detail: []
       })
   });
+
+  // 「当前播报配置」摘要：模式/平台/模型/音色/可用性。播报按钮读的是**已保存**配置，
+  // 所以这里把表单值与已保存值对比，提示“未保存的修改”，避免用户以为改了没生效。
+  const ttsModeLabel =
+    ttsMode === 'system' ? '系统语音' : ttsMode === 'model' ? '模型服务' : '自定义服务';
+  const ttsPlatformLabel =
+    ttsMode === 'system'
+      ? 'Windows 系统语音'
+      : ttsMode === 'model'
+        ? ttsConnectionName ||
+          (ttsConnectionId ? '已保存的平台（不在模型服务列表中）' : '未选择平台')
+        : ttsUrl.trim() || '未填写地址';
+  const ttsModelLabel =
+    ttsMode === 'system'
+      ? '系统默认（TTS 引擎自动选择）'
+      : ttsMode === 'model' || ttsMode === 'custom'
+        ? ttsModel.trim() || '未填写模型'
+        : '';
+  const ttsReadiness = ((): { ok: boolean; reasons: string[] } => {
+    if (ttsMode === 'system') {
+      if (!speechSystem) {
+        return {
+          ok: false,
+          reasons: ['尚未做语音自检，无法确认本机 Windows 系统语音是否可用']
+        };
+      }
+      if (!speechSystem.ok) return { ok: false, reasons: [speechSystem.message] };
+      const systemVoice = ttsVoice.trim();
+      if (
+        systemVoice &&
+        speechSystem.tts_voices.length > 0 &&
+        !speechSystem.tts_voices.includes(systemVoice)
+      ) {
+        return {
+          ok: false,
+          reasons: [
+            `当前音色「${systemVoice}」不在本机系统音色列表中，系统播报会失败；请重新选择系统音色或留空使用默认`
+          ]
+        };
+      }
+      return { ok: true, reasons: [] };
+    }
+    if (ttsMode === 'model') {
+      const reasons: string[] = [];
+      const connection = speechConnections.find((item) => item.id === ttsConnectionId);
+      if (!ttsConnectionId.trim()) reasons.push('未选择语音平台');
+      else if (!connection) reasons.push('所选的语音平台连接不存在（可能已删除），请重新选择');
+      else {
+        if (!connection.models.some((model) => model.capabilities.includes('tts'))) {
+          reasons.push('所选平台没有标记「语音生成」能力的模型');
+        }
+        if (!ttsModel.trim()) reasons.push('未选择语音模型');
+        else if (
+          connection.models.length > 0 &&
+          !connection.models.some(
+            (model) =>
+              model.name === ttsModel.trim() || model.id === ttsModel.trim()
+          )
+        ) {
+          reasons.push('所选语音模型不属于当前平台，请重新选择');
+        }
+        if (connection.hasKey === false) reasons.push('该平台还没有保存 API Key');
+      }
+      return { ok: reasons.length === 0, reasons };
+    }
+    const reasons: string[] = [];
+    if (!ttsUrl.trim()) reasons.push('未填写服务地址');
+    if (!ttsModel.trim()) reasons.push('未填写模型');
+    if (!speechQuery.data?.has_tts_key && !ttsKey.trim()) {
+      reasons.push('未填写 API Key（部分自建服务可留空）');
+    }
+    return { ok: reasons.length === 0, reasons };
+  })();
+  const speechConfigDirty = Boolean(speechQuery.data) &&
+    (speechQuery.data!.tts_mode !== ttsMode ||
+      speechQuery.data!.tts_connection_id !== ttsConnectionId ||
+      speechQuery.data!.tts_model !== ttsModel.trim() ||
+      speechQuery.data!.tts_url !== ttsUrl.trim() ||
+      speechQuery.data!.voice !== ttsVoice.trim());
 
   const diagnosticsQuery = useQuery({
     queryKey: ['diagnostics'],
@@ -2572,9 +2768,12 @@ function SettingsViewContent({
           <span>播报方式</span>
           <select
             value={ttsMode}
-            onChange={(event) =>
-              setTtsMode(event.target.value as 'system' | 'model' | 'custom')
-            }
+            onChange={(event) => {
+              const next = event.target.value as 'system' | 'model' | 'custom';
+              if (next === ttsMode) return;
+              setTtsMode(next);
+              resetVoicesForTargetChange('已切换播报方式');
+            }}
           >
             <option value="system">系统语音（Windows）</option>
             <option value="model">模型服务中已配置的语音服务</option>
@@ -2583,21 +2782,28 @@ function SettingsViewContent({
         </label>
         {ttsMode === 'model' ? (
           <>
+            {ttsPlatforms.length === 0 ? (
+              <p className="kr-muted">
+                模型服务里还没有标记「语音生成」能力的平台。请先到「模型服务」添加带 TTS 能力的平台与模型，或改用「系统语音 / 自定义服务」。
+              </p>
+            ) : null}
             <label>
               <span>语音平台</span>
               <select
                 value={ttsConnectionId}
                 onChange={(event) => {
-                  setTtsConnectionId(event.target.value);
-                  const connection = ttsPlatforms.find(
-                    (item) => item.id === event.target.value
-                  );
+                  const next = event.target.value;
+                  setTtsConnectionId(next);
+                  const connection = ttsPlatforms.find((item) => item.id === next);
                   // 默认选该平台第一个「语音生成」模型：直接取 models[0] 可能是对话模型，
                   // 下拉框里没有这个值，看起来就像“没有选中模型”。
                   setTtsModel(
                     connection?.models.find((model) => model.capabilities.includes('tts'))
                       ?.name ?? ''
                   );
+                  // 音色是平台相关的：换平台后旧音色（常见是 MiMo）必须清掉，否则保存后
+                  // 实际播报仍会用错音色，看起来像“设置没生效”。
+                  resetVoicesForTargetChange('已切换语音平台');
                 }}
               >
                 <option value="">选择平台</option>
@@ -2616,7 +2822,14 @@ function SettingsViewContent({
             </label>
             <label>
               <span>语音模型</span>
-              <select value={ttsModel} onChange={(event) => setTtsModel(event.target.value)}>
+              <select
+                value={ttsModel}
+                onChange={(event) => {
+                  setTtsModel(event.target.value);
+                  // 不同模型可能支持不同音色清单（例如 MiMo 的音色设计/复刻模型没有预置音色）。
+                  resetVoicesForTargetChange('已切换语音模型');
+                }}
+              >
                 <option value="">选择模型</option>
                 {ttsModel && !ttsModelOptions.some((model) => model.name === ttsModel) ? (
                   <option value={ttsModel}>{ttsModel}（已保存）</option>
@@ -2628,6 +2841,11 @@ function SettingsViewContent({
                 ))}
               </select>
             </label>
+            {ttsConnectionId && !ttsModel.trim() ? (
+              <p className="kr-muted">
+                请选择该平台的语音生成模型：播报时会严格按「平台连接 + 模型」调用，模型不匹配会明确报错。
+              </p>
+            ) : null}
           </>
         ) : null}
         {ttsMode === 'custom' ? (
@@ -2648,48 +2866,81 @@ function SettingsViewContent({
                 placeholder="tts-1"
               />
             </label>
-            <label>
-              <span>声音（朗读音色）</span>
-              <div className="kr-inline-actions">
-                <select
-                  value={voiceOptions.includes(ttsVoice) ? ttsVoice : ''}
-                  onChange={(event) => setTtsVoice(event.target.value)}
-                >
-                  <option value="">使用服务默认 / 系统默认</option>
-                  {voiceOptions.map((voice) => (
-                    <option key={voice} value={voice}>
-                      {voice}
-                    </option>
-                  ))}
-                  {ttsVoice && !voiceOptions.includes(ttsVoice) ? (
-                    <option value={ttsVoice}>{ttsVoice}（手动）</option>
-                  ) : null}
-                </select>
-                <button
-                  type="button"
-                  className="kr-secondary"
-                  onClick={() => loadVoices.mutate()}
-                  disabled={loadVoices.isPending}
-                >
-                  {loadVoices.isPending ? '获取中…' : '获取音色'}
-                </button>
-              </div>
-              <input
-                value={ttsVoice}
-                onChange={(event) => setTtsVoice(event.target.value)}
-                placeholder="也可手动填写音色 ID"
-              />
-            </label>
-            <label>
-              <span>API Key</span>
-              <input
-                type="password"
-                value={ttsKey}
-                onChange={(event) => setTtsKey(event.target.value)}
-                placeholder={speechQuery.data?.has_tts_key ? '已保存，留空保留' : '可留空'}
-              />
-            </label>
           </>
+        ) : null}
+        {/* 三种播报方式都提供音色选择：下拉（获取到的列表）+「获取音色」+ 手动填写 ID。 */}
+        <label>
+          <span>声音（朗读音色）</span>
+          <div className="kr-inline-actions">
+            <select
+              value={voiceOptions.includes(ttsVoice) ? ttsVoice : ''}
+              onChange={(event) => setTtsVoice(event.target.value)}
+            >
+              <option value="">
+                {ttsMode === 'system' ? '系统默认音色' : '使用服务 / 平台默认音色'}
+              </option>
+              {voiceOptions.map((voice) => (
+                <option key={voice} value={voice}>
+                  {voiceLabels[voice] ?? voice}
+                </option>
+              ))}
+              {ttsVoice && !voiceOptions.includes(ttsVoice) ? (
+                <option value={ttsVoice}>{ttsVoice}（当前 / 手动）</option>
+              ) : null}
+            </select>
+            <button
+              type="button"
+              className="kr-secondary"
+              onClick={() => loadVoices.mutate()}
+              disabled={loadVoices.isPending}
+            >
+              {loadVoices.isPending ? '获取中…' : '获取音色'}
+            </button>
+          </div>
+          <input
+            value={ttsVoice}
+            onChange={(event) => setTtsVoice(event.target.value)}
+            placeholder={
+              ttsMode === 'system'
+                ? '也可手动填写系统音色名称（留空使用系统默认）'
+                : '也可手动填写音色 ID 或名称（留空使用服务默认）'
+            }
+          />
+          <p className="kr-muted">
+            音色来源：
+            {ttsMode === 'system'
+              ? 'Windows 系统语音'
+              : ttsMode === 'model'
+                ? `模型服务 ${
+                    ttsConnectionName ||
+                    (ttsConnectionId ? '（平台不在模型服务列表中）' : '（未选择平台）')
+                  }${ttsModel ? ` / ${ttsModel}` : ''}`
+                : `自定义服务 ${ttsUrl.trim() || '（未填写地址）'}`}
+            {voiceInfo && !voiceInfoStale
+              ? `；音色列表来源：${voiceInfo.source || '—'}${
+                  voiceInfo.message ? `（${voiceInfo.message}）` : ''
+                }`
+              : ''}
+          </p>
+          {voiceInfoStale ? (
+            <p className="kr-muted" role="alert">
+              当前音色列表是在其它平台/服务地址下获取的，可能不适用；请重新点「获取音色」再选择。
+            </p>
+          ) : null}
+          {ttsMode === 'model' && !ttsConnectionId ? (
+            <p className="kr-muted">模型服务模式需要先选择「语音平台」，才能获取并选择音色。</p>
+          ) : null}
+        </label>
+        {ttsMode === 'custom' ? (
+          <label>
+            <span>API Key</span>
+            <input
+              type="password"
+              value={ttsKey}
+              onChange={(event) => setTtsKey(event.target.value)}
+              placeholder={speechQuery.data?.has_tts_key ? '已保存，留空保留' : '可留空'}
+            />
+          </label>
         ) : null}
         <div className="kr-settings__actions">
           <label className="kr-settings__check">
@@ -2713,6 +2964,23 @@ function SettingsViewContent({
             {checkSpeechSystem.isPending ? '检测中…' : '语音自检'}
           </button>
         </div>
+        {/* 当前播报配置（只读摘要）：播报按钮读的是已保存配置，这里把「界面上的设置」
+            和「实际会用的设置」放在一起，避免模型/音色没生效却看不出来。 */}
+        <div className="kr-settings__hint" role="status" aria-label="当前播报配置">
+          <p>
+            当前播报配置：模式 {ttsModeLabel}；平台 {ttsPlatformLabel}；模型 {ttsModelLabel}；音色{' '}
+            {ttsVoice.trim() || '默认音色'}。
+          </p>
+          <p>
+            可用性：{ttsReadiness.ok ? '配置完整，可用于播报' : ttsReadiness.reasons.join('；')}
+          </p>
+          {speechConfigDirty ? (
+            <p>有未保存的修改：点「保存语音设置」后才会生效。</p>
+          ) : (
+            <p>以上配置已保存，播报时按此配置调用。</p>
+          )}
+          {voiceInfoStale ? <p>音色列表与当前平台/模型不匹配，请重新获取音色。</p> : null}
+        </div>
         {speechSystem ? (
           <div className="kr-settings__hint" role="status">
             <p>{speechSystem.message}</p>
@@ -2721,6 +2989,11 @@ function SettingsViewContent({
               {speechSystem.ok ? '可用' : '不可用'}；TTS 音色：
               {speechSystem.tts_voices.length} 个；识别语言：
               {speechSystem.asr_languages.length} 个
+            </p>
+            <p>
+              本次自检只读取本机 Windows 语音组件，不检测外部模型服务；当前播报配置：
+              {ttsModeLabel} / {ttsPlatformLabel} / {ttsModelLabel} / 音色{' '}
+              {ttsVoice.trim() || '默认音色'}。
             </p>
             {speechSystem.detail.length > 0 ? (
               <details>

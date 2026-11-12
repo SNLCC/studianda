@@ -199,6 +199,11 @@ const PLAN_TTL_MS = 10 * 60 * 1000;
 const MAX_PLANS = 200;
 const MAX_QUERIES = 3;
 const MAX_QUERY_CHARS = 300;
+/** 搜索计划的匿名性说明：脱敏只减少可识别信息，不等于匿名。 */
+const SEARCH_ANON_WARNING =
+  '自动移除邮箱、长数字和网址不等于完全匿名。搜索服务可看到这些关键词及网络来源。';
+/** 本轮没有可公开搜索的主题词时追加的说明：不联网是正常结果，不是失败。 */
+const NO_QUERY_WARNING = '本轮没有可公开搜索的主题词，将不联网搜索。';
 
 interface StoredSearchPlan {
   expires: number;
@@ -224,6 +229,18 @@ export function redactSearchText(value: string): string {
   text = text.replace(/[\w.+-]+@[\w.-]+\.[A-Za-z]+/g, ' [邮箱] ');
   text = text.replace(/\d{6,}/g, ' [数字] ');
   return text.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * 本地关键词提取（不把问题/选文发给任何模型）。
+ *
+ * 模型规划不可用、返回格式无效或用户关闭模型规划时用它产出搜索词；
+ * 提取不到任何词（例如「你好」这类寒暄）时返回空数组，由调用方决定不联网。
+ */
+function localKeywordQueries(text: string): string[] {
+  const words = text.match(/[A-Za-z][A-Za-z0-9-]{2,}|[\u4e00-\u9fff]{2,12}/g) ?? [];
+  const joined = [...new Set(words)].join(' ').slice(0, MAX_QUERY_CHARS).trim();
+  return joined ? [joined] : [];
 }
 
 /** 稳定序列化（键排序），用于指纹：同一请求/同一配置必须得到同一指纹。 */
@@ -279,8 +296,9 @@ function parsePlanQueries(raw: string): unknown {
 /**
  * 生成搜索计划：把"要搜什么"先脱敏成最多 3 个公共搜索词，交给用户审批（review）或直接使用（auto）。
  *
- * - planner=true 且隐私模式不是 keywords-only：用会话模型规划待核验事实/缺口（模型不可用就明确报错，不静默降级）；
+ * - planner=true 且隐私模式不是 keywords-only：用会话模型规划待核验事实/缺口（模型调用失败就明确报错，不静默降级）；
  * - planner=false 或隐私模式为 keywords-only：本地关键词规则（不把问题/选文发给模型）；
+ * - 没有可公开搜索的主体词时返回 queries=[] 的合法计划（客户端据此不联网提问），不再抛错；
  * - 返回 token（10 分钟，绑定 fingerprint）与可展示的 queries/provider/warning。
  */
 export async function createSearchPlan(
@@ -354,6 +372,9 @@ export async function createSearchPlan(
       throw new Error('智能检索规划需要配置会话模型，或关闭模型规划以使用本地提取');
     }
     plannerDestination = routed.baseUrl;
+    // 只有「模型调用本身失败」才是规划失败；模型返回空/格式无效属于可回退情况，
+    // 不能把整轮问答打成错误（「你好」这类寒暄会让规划模型返回空列表）。
+    let raw = '';
     try {
       const response = await fetch(`${routed.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
         method: 'POST',
@@ -382,24 +403,29 @@ export async function createSearchPlan(
       const payload = (await response.json()) as {
         choices?: Array<{ message?: { content?: unknown } }>;
       };
-      const raw = payload.choices?.[0]?.message?.content;
-      if (typeof raw !== 'string' || !raw.trim()) throw new Error('规划模型没有返回内容');
-      const parsed = parsePlanQueries(raw);
-      const list =
-        parsed && typeof parsed === 'object' && Array.isArray((parsed as { queries?: unknown }).queries)
-          ? ((parsed as { queries: unknown[] }).queries as unknown[])
-          : null;
-      if (!list || list.some((item) => typeof item !== 'string')) {
-        throw new Error('搜索规划格式无效');
-      }
-      queries = list as string[];
-      method = '模型规划：待核验事实与知识缺口';
+      const content = payload.choices?.[0]?.message?.content;
+      if (typeof content !== 'string' || !content.trim()) throw new Error('规划模型没有返回内容');
+      raw = content;
     } catch {
       throw new Error('搜索规划失败，未向搜索引擎发送任何内容');
     }
+    const parsed = parsePlanQueries(raw);
+    const list =
+      parsed && typeof parsed === 'object' && Array.isArray((parsed as { queries?: unknown }).queries)
+        ? ((parsed as { queries: unknown[] }).queries as unknown[])
+        : null;
+    if (list && list.every((item) => typeof item === 'string')) {
+      // 空数组是模型的正常判断（本轮没有值得联网核验的公共主题词）：照实保留为空，
+      // 不强行回退成本地关键词，否则「你好」会被拿去做无意义的联网搜索。
+      queries = list as string[];
+      method = '模型规划：待核验事实与知识缺口';
+    } else {
+      // 格式无效才回退本地关键词提取：不因为规划输出坏了就让整轮问答失败。
+      queries = localKeywordQueries(text);
+      method = '本地关键词提取（模型规划格式无效）';
+    }
   } else {
-    const words = text.match(/[A-Za-z][A-Za-z0-9-]{2,}|[\u4e00-\u9fff]{2,12}/g) ?? [];
-    queries = [[...new Set(words)].join(' ').slice(0, 160)];
+    queries = localKeywordQueries(text);
   }
   const cleaned = [...new Set(
     queries
@@ -407,7 +433,20 @@ export async function createSearchPlan(
       .map((query) => redactSearchText(query).slice(0, MAX_QUERY_CHARS))
       .filter(Boolean)
   )].slice(0, MAX_QUERIES);
-  if (cleaned.length === 0) throw new Error('没有可公开搜索的主题词');
+  if (cleaned.length === 0) {
+    // 没有可公开搜索的主体词（寒暄、纯标点、只剩个人信息等）：返回合法的空计划，
+    // 由客户端直接按"不联网"提问。这里**不再抛错**——否则「你好」这种问题会整轮失败。
+    return {
+      token: '',
+      queries: [],
+      method,
+      provider: config.provider,
+      review: false,
+      inputs: Object.keys(allowed),
+      planner_destination: plannerDestination,
+      warning: `${NO_QUERY_WARNING}${SEARCH_ANON_WARNING}`
+    };
+  }
   const token = randomBytes(24).toString('base64url');
   const now = Date.now();
   for (const [key, plan] of SEARCH_PLANS) {
@@ -427,8 +466,7 @@ export async function createSearchPlan(
     review: config.permission === 'review',
     inputs: Object.keys(allowed),
     planner_destination: plannerDestination,
-    warning:
-      '自动移除邮箱、长数字和网址不等于完全匿名。搜索服务可看到这些关键词及网络来源。'
+    warning: SEARCH_ANON_WARNING
   };
 }
 

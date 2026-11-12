@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { SecretStore } from '../src/secrets.js';
+import { saveModelServices } from '../src/model-services.js';
 import {
   getSpeechConfig,
   saveSpeechConfig,
@@ -173,5 +174,78 @@ describe('speech', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it('模型模式按选中的平台连接与模型播报，并拒绝来自其它平台的旧模型名', async () => {
+    const requests: Array<{ url: string; body: string }> = [];
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      requests.push({ url: String(url), body: String(init?.body ?? '') });
+      return new Response(Buffer.from('RIFF'), {
+        status: 200,
+        headers: { 'content-type': 'audio/wav' }
+      });
+    });
+    try {
+      saveModelServices(store, {
+        connections: [
+          {
+            id: 'conn-openai-tts',
+            name: 'OpenAI 兼容平台',
+            platform: 'openai',
+            baseUrl: 'https://tts.example.com/v1',
+            models: [
+              {
+                id: 'chat-1',
+                name: 'chat-model',
+                capabilities: ['chat'],
+                source: 'preset',
+                enabled: true
+              },
+              {
+                id: 'tts-1',
+                name: 'tts-model',
+                capabilities: ['tts'],
+                source: 'preset',
+                enabled: true
+              }
+            ]
+          }
+        ]
+      });
+      saveSpeechConfig(store, secrets, {
+        tts_mode: 'model',
+        tts_connection_id: 'conn-openai-tts',
+        tts_model: 'tts-model',
+        voice: 'alloy'
+      });
+      const audio = await synthesizeSpeech(store, secrets, 'hello');
+      expect(Buffer.from(audio.bytes).toString('utf8')).toBe('RIFF');
+      expect(requests[0]?.url).toBe('https://tts.example.com/v1/audio/speech');
+      expect(requests[0]?.body).toContain('"model":"tts-model"');
+      expect(requests[0]?.body).toContain('"voice":"alloy"');
+
+      // 没有保存模型时优先选该平台「有 TTS 能力」的模型，而不是模型列表第一行的对话模型。
+      saveSpeechConfig(store, secrets, { tts_model: '' });
+      await synthesizeSpeech(store, secrets, 'hello');
+      expect(requests[1]?.body).toContain('"model":"tts-model"');
+
+      // 换了平台却还留着旧平台的模型名：必须明确报错，不能悄悄用到别的地址/模型上。
+      saveSpeechConfig(store, secrets, { tts_model: 'mimo-v2.5-tts' });
+      await expect(synthesizeSpeech(store, secrets, 'hello')).rejects.toThrow(
+        '不属于当前平台'
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('MiniMax 播报缺音色时明确要求先选音色，而不是静默用默认值', async () => {
+    saveSpeechConfig(store, secrets, {
+      tts_mode: 'custom',
+      tts_url: 'https://api.minimax.io/v1',
+      tts_model: 'speech-02',
+      voice: ''
+    });
+    await expect(synthesizeSpeech(store, secrets, 'hello')).rejects.toThrow('必须指定音色 ID');
   });
 });

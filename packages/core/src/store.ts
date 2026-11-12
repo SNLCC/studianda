@@ -63,6 +63,7 @@ import type {
   ReferenceGraphCrossEdge,
   ReferenceGraphEdge,
   ReferenceGraphNode,
+  ReferenceNodeKind,
   RelinkResult,
   SearchHit,
   SettingsMap,
@@ -73,6 +74,7 @@ import type {
   UpdateNoteInput
 } from '@studianda/shared';
 import {
+  REFERENCE_GRAPH_ALL_NODE_LIMIT,
   documentCategoryOf,
   extractNoteAssetFilenames,
   markdownPlainText,
@@ -1053,6 +1055,11 @@ export class Store {
    */
   private referenceGraphCache: CachedReferenceGraph | null = null;
   private static readonly REFERENCE_GRAPH_CACHE_TTL_MS = 2000;
+  /**
+   * 关系图全量模式一次返回的节点硬上限（默认 5000，超过则退回分页并标注 truncated）。
+   * 用 static 字段而非 const，便于测试按需调小后覆盖超限分支。
+   */
+  static MAX_ALL_NODES = REFERENCE_GRAPH_ALL_NODE_LIMIT;
   /** 后台资源索引重建任务（单并发；仅内存态，重启丢失 running 状态）。 */
   private noteAssetReindexJob: NoteAssetReindexJob = {
     status: 'idle',
@@ -5096,16 +5103,6 @@ export class Store {
     };
   }
 
-  /**
-   * 全库引用关系图：文献/笔记/批注三类节点 + 笔记/批注里 `[[…]]` 引用形成的边。
-   *
-   * 节点包含所有未删除对象（含无连边的孤立节点、独立笔记 documentId=''）；
-   * 只有目标仍存在时才建边；引用已删除/不存在目标计入 unresolved（按 `来源→目标原文`
-   * 去重，同一来源重复引用同一缺失目标只算 1）。同一对 from→to 只保留一条边。
-   *
-   * 返回按引用度数（入边+出边，自环计 2）降序、同度数按 kind/id 升序排序后的当前页；
-   * edges 只含两端都在当前页的边；offset 默认 0，limit 默认 200（1..500）。
-   */
   /** 写操作后立即失效关系图缓存（下次请求重建）。 */
   private invalidateReferenceGraphCache(): void {
     this.referenceGraphCache = null;
@@ -5310,7 +5307,32 @@ export class Store {
     }));
   }
 
-  getReferenceGraph(options?: { limit?: number; offset?: number }): ReferenceGraph {
+  /**
+   * 全库引用关系图：文献/笔记/批注三类节点 + 笔记/批注里 `[[…]]` 引用形成的边。
+   *
+   * 节点包含所有未删除对象（含无连边的孤立节点、独立笔记 documentId=''）；
+   * 只有目标仍存在时才建边；引用已删除/不存在目标计入 unresolved（按 `来源→目标原文`
+   * 去重，同一来源重复引用同一缺失目标只算 1）。同一对 from→to 只保留一条边。
+   *
+   * 返回按引用度数（入边+出边，自环计 2）降序、同度数按 kind/id 升序排序后的当前页；
+   * edges 只含两端都在当前页的边；offset 默认 0，limit 默认 200（1..500）。
+   *
+   * 可选 kinds（document/note/annotation）与 search（节点显示名不区分大小写子串）在分页之前
+   * 过滤，totalNodes/totalEdges/hasMore 均按过滤后的结果计算，便于「只看文献+笔记」一屏装下。
+   * kindCounts 始终返回全库各类型总数（不受过滤影响），UI 可据此提示如何缩小范围。
+   *
+   * `all: true` 为全量模式：一次返回全部匹配节点与全部页内边（不再按 offset/limit 截断），
+   * totalNodes/totalEdges 为全图口径、hasMore=false、crossEdges 为空（所有端点在同一份数据里，
+   * 不会出现「A 与 BCD 都有关系却只显示 BC」的跨页缺失）。超过硬上限 MAX_ALL_NODES 时退回
+   * 分页并返回 truncated=true / allNodeLimit，如实标注截断。
+   */
+  getReferenceGraph(options?: {
+    limit?: number;
+    offset?: number;
+    kinds?: ReferenceNodeKind[];
+    search?: string;
+    all?: boolean;
+  }): ReferenceGraph {
     const limit = options?.limit ?? 200;
     const offset = options?.offset ?? 0;
     if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
@@ -5319,12 +5341,46 @@ export class Store {
     if (!Number.isInteger(offset) || offset < 0) {
       throw new Error('offset 必须是非负整数');
     }
+    const rawKinds = options?.kinds;
+    if (rawKinds !== undefined && !Array.isArray(rawKinds)) {
+      throw new Error('kinds 必须是 document/note/annotation 的数组');
+    }
+    const kindFilter = rawKinds && rawKinds.length > 0 ? new Set<ReferenceNodeKind>(rawKinds) : null;
+    if (kindFilter) {
+      for (const kind of kindFilter) {
+        if (kind !== 'document' && kind !== 'note' && kind !== 'annotation') {
+          throw new Error('kinds 必须是 document/note/annotation 的数组');
+        }
+      }
+    }
+    const search = (options?.search ?? '').trim().toLowerCase();
     let full = this.referenceGraphCache;
     if (!full || Date.now() - full.builtAt > Store.REFERENCE_GRAPH_CACHE_TTL_MS) {
       full = this.buildReferenceGraph();
       this.referenceGraphCache = full;
     }
-    const pageNodes = full.nodes.slice(offset, offset + limit);
+    const kindCounts: Record<ReferenceNodeKind, number> = {
+      document: 0,
+      note: 0,
+      annotation: 0
+    };
+    for (const node of full.nodes) kindCounts[node.kind] += 1;
+    const matchedNodes =
+      kindFilter || search
+        ? full.nodes.filter(
+            (node) =>
+              (!kindFilter || kindFilter.has(node.kind)) &&
+              (!search || node.label.toLowerCase().includes(search))
+          )
+        : full.nodes;
+    const matchedIds =
+      matchedNodes === full.nodes ? null : new Set(matchedNodes.map((node) => node.id));
+    // 全量模式：匹配结果不超过硬上限时一次返回全部节点/边；超限则退回分页并标注截断。
+    const allMode = options?.all === true;
+    const allNodeLimit = Store.MAX_ALL_NODES;
+    const truncated = allMode && matchedNodes.length > allNodeLimit;
+    const fullAll = allMode && !truncated;
+    const pageNodes = fullAll ? matchedNodes : matchedNodes.slice(offset, offset + limit);
     const pageIds = new Set(pageNodes.map((node) => node.id));
     const pageEdges: ReferenceGraphEdge[] = [];
     const crossEdges: ReferenceGraphCrossEdge[] = [];
@@ -5336,6 +5392,8 @@ export class Store {
         pageEdges.push(edge);
         continue;
       }
+      // 全量模式不画跨页 stub：不在结果集里的端点是被 kinds/search 主动过滤掉的。
+      if (fullAll) continue;
       // 两端都在页外：与当前页无关；恰好一端在页内：跨页边。
       if (!fromInPage && !toInPage) continue;
       const key = `${edge.from}\u0000${edge.to}`;
@@ -5350,6 +5408,14 @@ export class Store {
         direction: fromInPage ? 'out' : 'in'
       });
     }
+    let totalEdges = full.edges.length;
+    if (matchedIds) {
+      // 过滤后 totalEdges 只统计两端都在结果集中的边，和 totalNodes 口径一致。
+      totalEdges = 0;
+      for (const edge of full.edges) {
+        if (matchedIds.has(edge.from) && matchedIds.has(edge.to)) totalEdges += 1;
+      }
+    }
     // 跨页边稳定排序（from、to 字典序）后截断到 200 条，total 记录全部数量。
     crossEdges.sort((left, right) =>
       left.from === right.from
@@ -5363,11 +5429,13 @@ export class Store {
       crossEdges: crossEdges.slice(0, 200),
       crossEdgeTotal,
       unresolved: full.unresolved,
-      totalNodes: full.nodes.length,
-      totalEdges: full.edges.length,
+      totalNodes: matchedNodes.length,
+      totalEdges,
       offset,
       limit,
-      hasMore: offset + pageNodes.length < full.nodes.length
+      hasMore: fullAll ? false : offset + pageNodes.length < matchedNodes.length,
+      kindCounts,
+      ...(allMode ? { truncated, allNodeLimit } : {})
     };
   }
 
@@ -6986,6 +7054,26 @@ export class Store {
       return;
     }
     const nodes = navigationNodes(layout, masks);
+    if (nodes.length === 0) {
+      // 0 条目录不能当"生成成功"落库：否则界面只会关掉弹窗、什么都不显示，
+      // 看起来像点击没反应（用户报告 5）。这里抛明确错误，让 buildError 能显示，
+      // 也避免用空目录覆盖用户已有的本地目录。
+      const rawText = layout.pages.some((page) =>
+        page.lines.some((line) => line.text.trim().length > 0)
+      );
+      const visibleText =
+        rawText &&
+        layout.pages.some((page) =>
+          visibleLines(page, masks).some((line) => line.text.trim().length > 0)
+        );
+      throw new Error(
+        !rawText
+          ? '按标题规则没有识别到任何目录条目：这篇 PDF 没有可解析的文字层（可能是扫描件）。请先在页面识别里 OCR 出文字，或改用「按目录页生成」，或手动添加目录。'
+          : !visibleText
+            ? '按标题规则没有识别到任何目录条目：当前「无关区域」规则遮住了全篇文字。请先检查或清除无关区域规则，再重新生成目录。'
+            : '按标题规则没有识别到任何目录条目：这篇 PDF 没有明显的章节标题字号/编号规律。请改用「按目录页生成」，或手动添加目录。'
+      );
+    }
     this.storeNavigation(documentId, nodes, stamp, sourceHash);
   }
 
