@@ -188,4 +188,23 @@ jobs:
             (Join-Path $releaseDir 'build-manifest.json')
           )
           gh release create $tag --draft --verify-tag --title "勘读 Studianda $version" --notes-file $notes @files
+          $createExit = $LASTEXITCODE
+          if ($createExit -ne 0) {
+            Write-Host "gh release create 返回 $createExit；Draft 可能已创建，改为补传资产后再校验。"
+            gh release upload $tag @files --clobber
+            if ($LASTEXITCODE -ne 0) {
+              throw "Draft Release 已创建，但资产上传失败（gh exit $LASTEXITCODE）。请到 GitHub Release 页面检查缺失资产后重跑。"
+            }
+          }
+          $releaseJson = gh release view $tag --json assets
+          if ($LASTEXITCODE -ne 0) {
+            throw "Draft Release 已创建，但读取资产列表失败（gh exit $LASTEXITCODE）。"
+          }
+          $assets = ($releaseJson | ConvertFrom-Json).assets
+          $expected = @($files | ForEach-Object { Split-Path $_ -Leaf })
+          $actual = @($assets | ForEach-Object { $_.name })
+          $missing = @($expected | Where-Object { $_ -notin $actual })
+          if ($missing.Count -gt 0) {
+            throw "Draft Release 缺少资产：$($missing -join ', ')。请补传后重跑。"
+          }
           Write-Host "Draft Release 已创建：$tag。检查资产与安装测试后，在 GitHub 页面手动发布。"
