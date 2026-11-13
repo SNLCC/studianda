@@ -5,6 +5,7 @@
     "baseUrl": ".",
     "paths": {
       "@studianda/app": ["../../packages/app/src/index.ts"],
+      "@studianda/host": ["../../packages/host/src/index.ts"],
       "@studianda/ui": ["../../packages/ui/src/index.ts"],
       "@studianda/api-client": ["../../packages/api-client/src/index.ts"],
       "@studianda/shared": ["../../packages/shared/src/index.ts"]
