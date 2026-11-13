@@ -35,9 +35,6 @@ import {
   type MarkdownJobSnapshot,
   type OutlineResult,
   type PageData,
-  type QaImportMessage,
-  type QaMessageRecord,
-  type QaSessionRecord,
   type ReadingPlanRecord,
   type ReferenceNodeKind,
   type SearchRequest,
@@ -3045,12 +3042,6 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     }
   });
 
-  // ---------------------------------------------------------------------------
-  // 独立问答会话（多会话）：会话与消息存本机数据库，不依附任何文献；
-  // 与阅读内 `documents/:id/messages` 完全分开，阅读页行为不受影响。
-  // 会话表随数据目录一起备份/恢复（见 docs/QA-STANDALONE.md）。
-  // ---------------------------------------------------------------------------
-
   app.get(`${API_PREFIX}/documents/:id/notes`, async (request) => {
     const { id } = request.params as { id: string };
     const query = request.query as { trash?: string };
@@ -4270,119 +4261,8 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     }
   };
 
-  /**
-   * 独立问答会话：没有 documentId 的问答按会话持久化完整历史（agent-harness 式的做法）。
-   *
-   * - 带 `qa_session_id`：用该会话；
-   * - 没带：新建一个会话（第一条问题会自动补标题），首问不必先建会话；
-   * - 带了但不存在的 id：返回 null，调用方回 400（不静默改成新会话，避免历史错位）。
-   */
-  const qaSessionForRequest = (body: Partial<ChatRequest>): QaSessionRecord | null => {
-    if (typeof body.documentId === 'string' && body.documentId) return null;
-    const id = typeof body.qa_session_id === 'string' ? body.qa_session_id.trim() : '';
-    return id ? options.store.getQaSession(id) : options.store.createQaSession('');
-  };
-
-  /**
-   * 记本轮用户消息；「继续阅读」重发不重复记（同一问题不能出现两条用户消息）。
-   *
-   * 返回落库的消息记录（语音轮成功后用它补写转写正文）；没有落库时返回 null。
-   */
-  const persistQaUserTurn = (
-    session: QaSessionRecord | null,
-    body: Partial<ChatRequest>,
-    question: string
-  ): QaMessageRecord | null => {
-    if (!session) return null;
-    if (typeof body.taskId === 'string' && body.taskId) return null;
-    try {
-      const text = question.trim();
-      // 语音直问不再由客户端预先 ASR：先如实落一条「（语音提问）」占位，等全模态模型
-      // 返回 audio_transcript 后再补写正文（见 updateVoiceUserTurn）。文字提问照常立即落库。
-      const content = text
-        ? body.audio && typeof body.audio === 'object'
-          ? `（语音）${text}`
-          : text
-        : '（语音提问）';
-      const message = options.store.appendQaMessage({
-        sessionId: session.id,
-        role: 'user',
-        content
-      });
-      if (text) options.store.autoTitleQaSession(session.id, text);
-      return message;
-    } catch {
-      // 会话落库失败不阻断回答；下一轮仍按客户端带回的会话 id 继续。
-      return null;
-    }
-  };
-
-  /**
-   * 语音直问成功后补写用户消息正文：全模态模型返回逐字转写时，把先前的「（语音提问）」
-   * 占位改成「（语音）转写」，让会话历史里能看到用户说了什么。
-   *
-   * 时机在助手消息落库之前，用 editQaUserMessage 不会删掉任何有效回答（此后没有消息）；
-   * 补写失败只影响会话里显示的正文，不影响本轮回答。
-   */
-  const updateVoiceUserTurn = (
-    session: QaSessionRecord | null,
-    userTurn: QaMessageRecord | null,
-    result: ChatResponse
-  ): void => {
-    if (!session || !userTurn) return;
-    const transcript =
-      typeof result.audio_transcript === 'string' ? result.audio_transcript.trim() : '';
-    if (!transcript) return;
-    try {
-      options.store.editQaUserMessage(session.id, userTurn.id, `（语音）${transcript}`);
-      // 首条就是语音时，标题也用转写全文（autoTitleQaSession 只在标题为空时写入）。
-      options.store.autoTitleQaSession(session.id, transcript);
-    } catch {
-      // 补写失败不影响回答；用户消息保留「（语音提问）」占位。
-    }
-  };
-
-  /** 记本轮助手消息（保存整轮 ChatResponse，恢复历史会话时能还原来源/说明）。 */
-  const persistQaAssistantTurn = (
-    session: QaSessionRecord | null,
-    result: ChatResponse
-  ): void => {
-    if (!session) return;
-    const answer = typeof result.answer === 'string' ? result.answer.trim() : '';
-    try {
-      options.store.appendQaMessage({
-        sessionId: session.id,
-        role: 'assistant',
-        content: answer || '这一轮没有产生文字回答。',
-        response: result,
-        answered: Boolean(answer)
-      });
-    } catch {
-      // 同上：保存失败不影响本轮已经拿到的回答。
-    }
-  };
-
-  /** 失败轮次也留在会话里（界面能看到哪一轮失败），但不进入后续上下文。 */
-  const persistQaAssistantFailure = (
-    session: QaSessionRecord | null,
-    message: string
-  ): void => {
-    if (!session) return;
-    try {
-      options.store.appendQaMessage({
-        sessionId: session.id,
-        role: 'assistant',
-        content: `回答未完成：${message}`,
-        response: null,
-        answered: false
-      });
-    } catch {
-      // 失败记录写不进去时只丢这一条记录，不改变向用户报告的失败原因。
-    }
-  };
-
-  // 同一会话/同一文献同一时刻只处理一轮问答：两个窗口同时提问会让 user/assistant 交错落库，
-  // 历史拼接按「user 后紧邻的 assistant」配对会配错。进程内集合足够（单机 Core）。
+  // 同一文献同一时刻只处理一轮问答：两个窗口同时提问会让 user/assistant 交错落库。
+  // 进程内集合足够（单机 Core）。
   const activeChatTurns = new Set<string>();
   const beginChatTurn = (key: string | null): boolean => {
     if (!key) return true;
@@ -4393,12 +4273,9 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   const endChatTurn = (key: string | null): void => {
     if (key) activeChatTurns.delete(key);
   };
-  /** 并发锁的键：独立问答按会话 id，阅读页按文献 id；其它请求不锁。 */
-  const chatTurnKeyOf = (
-    session: QaSessionRecord | null,
-    documentId?: string
-  ): string | null =>
-    session ? `qa:${session.id}` : documentId ? `doc:${documentId}` : null;
+  /** 并发锁的键：按文献 id；其它请求不锁。 */
+  const chatTurnKeyOf = (_session: unknown, documentId?: string): string | null =>
+    documentId ? `doc:${documentId}` : null;
 
   /** 危险写操作（重新生成/编辑/分支删除/导入/删会话）也要占用同一把锁。 */
   const tryBeginChatWrite = (key: string, reply: FastifyReply): boolean => {
@@ -4432,43 +4309,13 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         metadata: {}
       });
     }
-    // 独立问答会话：预算确认通过后才建/取会话，避免用户取消确认时留下空会话。
-    const regenerate = body.qa_regenerate === true && !hasAudio;
-    if (
-      regenerate &&
-      !(typeof body.qa_session_id === 'string' && body.qa_session_id.trim())
-    ) {
-      return badRequest(reply, '重新生成需要问答会话 id');
-    }
-    const qaSession = qaSessionForRequest(body);
-    if (
-      typeof body.qa_session_id === 'string' &&
-      body.qa_session_id.trim() &&
-      !qaSession &&
-      !body.documentId
-    ) {
-      return badRequest(reply, '问答会话不存在');
-    }
-    let questionForTurn = questionText;
-    // 语音轮先落占位；模型返回 audio_transcript 后补写用户消息正文（见 updateVoiceUserTurn）。
-    let userTurn: QaMessageRecord | null = null;
-    // 同一会话/文献只允许一轮在飞：并发请求直接 409（比让 user/assistant 交错落库安全）。
-    const turnKey = chatTurnKeyOf(
-      qaSession,
-      typeof body.documentId === 'string' && body.documentId ? body.documentId : undefined
-    );
+    const questionForTurn = questionText;
+    // 同一文献只允许一轮在飞：并发请求直接 409。
+    const turnKey = chatTurnKeyOf(null, body.documentId);
     if (!beginChatTurn(turnKey)) {
-      return reply.code(409).send({ error: API_ERROR_CODES.busy, message: '该会话/文献正在回答中，请等这一轮结束后再试' });
+      return reply.code(409).send({ error: API_ERROR_CODES.busy, message: '该文献正在回答中，请等这一轮结束后再试' });
     }
     try {
-    if (qaSession && regenerate) {
-      // 重新生成：丢掉最后一轮助手消息（含失败占位），保留最后的用户问题，不重复记用户消息。
-      const previous = options.store.rewindQaSessionTail(qaSession.id);
-      if (previous === null) return badRequest(reply, '没有可重新生成的回答');
-      questionForTurn = previous;
-    } else {
-      userTurn = persistQaUserTurn(qaSession, body, questionText);
-    }
     reply.hijack();
     const raw = reply.raw;
     raw.writeHead(200, {
@@ -4520,8 +4367,6 @@ export function buildServer(options: ServerOptions): FastifyInstance {
             body.audio && typeof body.audio === 'object'
               ? (body.audio as never)
               : undefined,
-          // 独立问答：服务端按会话拼完整历史并持久化本轮（阅读页不传/不用该字段）。
-          qa_session_id: qaSession?.id
         },
         controller.signal,
         (done, total) => send('progress', { done, total }),
@@ -4530,12 +4375,8 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         (text) => send('stage', { text }),
         (claims) => send('audit', { claims })
       );
-      const response: ChatResponse = qaSession
-        ? { ...result, qa_session_id: qaSession.id }
-        : result;
+      const response: ChatResponse = result;
       // 语音轮：模型返回逐字转写后补写用户消息正文（占位 → 「（语音）转写」）。
-      updateVoiceUserTurn(qaSession, userTurn, response);
-      persistQaAssistantTurn(qaSession, response);
       send('result', response);
     } catch (error) {
       const message =
@@ -4544,7 +4385,6 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           : error instanceof Error
             ? error.message
             : '回答失败';
-      persistQaAssistantFailure(qaSession, message);
       if (error instanceof Error && error.name === 'AbortError') {
         send('error', { message, status: 499 });
       } else {
@@ -4583,42 +4423,10 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         metadata: {}
       });
     }
-    // 独立问答会话：预算确认通过后才建/取会话（用户取消确认时不留空会话）。
-    const regenerate = body.qa_regenerate === true && !hasAudio;
-    if (
-      regenerate &&
-      !(typeof body.qa_session_id === 'string' && body.qa_session_id.trim())
-    ) {
-      return badRequest(reply, '重新生成需要问答会话 id');
-    }
-    const qaSession = qaSessionForRequest(body);
-    if (
-      typeof body.qa_session_id === 'string' &&
-      body.qa_session_id.trim() &&
-      !qaSession &&
-      !body.documentId
-    ) {
-      return badRequest(reply, '问答会话不存在');
-    }
-    let questionForTurn = questionText;
-    // 语音轮先落占位；模型返回 audio_transcript 后补写用户消息正文（见 updateVoiceUserTurn）。
-    let userTurn: QaMessageRecord | null = null;
-    // 同一会话/文献只允许一轮在飞：并发请求直接 409（比让 user/assistant 交错落库安全）。
-    const turnKey = chatTurnKeyOf(
-      qaSession,
-      typeof body.documentId === 'string' && body.documentId ? body.documentId : undefined
-    );
+    const questionForTurn = questionText;
+    const turnKey = chatTurnKeyOf(null, body.documentId);
     if (!beginChatTurn(turnKey)) {
-      return reply.code(409).send({ error: API_ERROR_CODES.busy, message: '该会话/文献正在回答中，请等这一轮结束后再试' });
-    }
-    try {
-    if (qaSession && regenerate) {
-      // 重新生成：丢掉最后一轮助手消息（含失败占位），保留最后的用户问题，不重复记用户消息。
-      const previous = options.store.rewindQaSessionTail(qaSession.id);
-      if (previous === null) return badRequest(reply, '没有可重新生成的回答');
-      questionForTurn = previous;
-    } else {
-      userTurn = persistQaUserTurn(qaSession, body, questionText);
+      return reply.code(409).send({ error: API_ERROR_CODES.busy, message: '该文献正在回答中，请等这一轮结束后再试' });
     }
     try {
       const controller = new AbortController();
@@ -4662,17 +4470,11 @@ export function buildServer(options: ServerOptions): FastifyInstance {
               body.audio && typeof body.audio === 'object'
                 ? (body.audio as never)
                 : undefined,
-            // 独立问答：服务端按会话拼完整历史并持久化本轮（阅读页不传/不用该字段）。
-            qa_session_id: qaSession?.id
-          },
+            },
           controller.signal
         );
-        const response: ChatResponse = qaSession
-          ? { ...result, qa_session_id: qaSession.id }
-          : result;
+        const response: ChatResponse = result;
         // 语音轮：模型返回逐字转写后补写用户消息正文（占位 → 「（语音）转写」）。
-        updateVoiceUserTurn(qaSession, userTurn, response);
-        persistQaAssistantTurn(qaSession, response);
         return response;
       } finally {
         untrackDocument();
@@ -4686,12 +4488,10 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           : error instanceof Error
             ? error.message
             : '回答失败';
-      persistQaAssistantFailure(qaSession, message);
       if (error instanceof Error && error.name === 'AbortError') {
         return reply.code(499).send({ error: API_ERROR_CODES.cancelled, message: '请求已取消' });
       }
       return badRequest(reply, message);
-    }
     } finally {
       endChatTurn(turnKey);
     }

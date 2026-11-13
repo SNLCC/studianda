@@ -57,22 +57,6 @@ const ANSWER_MODE_LABELS: Record<string, string> = {
   direct: '直接回复'
 };
 
-/**
- * 独立会话本轮上下文统计（`ChatResponse.qa_context`）拼成一行说明。
- *
- * 只按实际字段拼接，不显示 0 项；阅读页不返回 qa_context，调用处以「有值才渲染」保证不出现。
- * 基础口径是「完整会话历史」；有早期摘要/新压缩/容量丢弃时依次补充，让用户知道模型实际看到了什么。
- */
-function formatQaContext(context: NonNullable<ChatResponse['qa_context']>): string {
-  const parts = ['完整会话历史'];
-  if (context.summary_used) parts.push('使用早期摘要');
-  if (context.compacted > 0) parts.push(`本轮新压缩 ${context.compacted} 轮`);
-  if (context.dropped > 0) parts.push(`容量丢弃 ${context.dropped} 轮`);
-  // 消息条数口径是「本轮开始时的快照」，一轮会话里会变动（先记 user）、容易引起误解，界面不展示；
-  // API 仍保留 messages 字段供调用方统计。
-  return parts.join(' · ');
-}
-
 /** 本轮 token 用量：有输入/输出就分别列，否则列总数；供应商没返回 usage 时明确标“估算”。 */
 function formatUsage(usage: NonNullable<ChatResponse['usage']>): string | null {
   const count = (value?: number): string =>
@@ -1376,14 +1360,6 @@ export function ChatPanel({
                     <p className="kr-chat__meta kr-chat__answer-mode">
                       本轮回答方式：
                       {ANSWER_MODE_LABELS[response.answer_mode] ?? response.answer_mode}
-                    </p>
-                  ) : null}
-                  {response?.qa_context ? (
-                    <p
-                      className="kr-chat__meta kr-chat__qa-context"
-                      title="本轮送入模型的独立会话上下文统计（服务端按会话历史构建；阅读页不返回）"
-                    >
-                      上下文：{formatQaContext(response.qa_context)}
                     </p>
                   ) : null}
                   {response?.usage && formatUsage(response.usage) ? (

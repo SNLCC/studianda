@@ -1418,51 +1418,6 @@ export interface ChatMessageRecord {
   created: string;
 }
 
-/**
- * 独立问答的一条消息（与阅读内 `messages` 表分开存，不依附任何文献）。
- *
- * 与 `ChatMessageRecord` 的区别：这里保存**整轮 ChatResponse**（来源、审计、说明等），
- * 打开历史会话时能原样还原助手回答下面的来源/说明，而不是只剩一段正文。
- */
-export interface QaMessageRecord {
-  id: number;
-  sessionId: string;
-  role: 'user' | 'assistant';
-  content: string;
-  /** 助手消息保存的完整回答；用户消息与迁移导入的旧消息为 null。 */
-  response: ChatResponse | null;
-  /**
-   * 该条助手消息是否**真的产生了回答文字**。
-   *
-   * 失败/未配置模型/占位消息为 false：界面照样显示（用户能看到哪一轮失败），
-   * 但后续轮次的上下文不把它们当成有效回答。
-   */
-  answered: boolean;
-  created: string;
-}
-
-/** 独立问答会话摘要（会话列表项）。 */
-export interface QaSessionSummary {
-  id: string;
-  title: string;
-  createdAt: string;
-  updatedAt: string;
-  /** 会话里的消息条数（user + assistant）。 */
-  messageCount: number;
-  /** 是否已把更早轮次压缩成摘要（界面如实标注"已压缩历史"）。 */
-  compacted: boolean;
-  /** 是否置顶（置顶会话排在列表最前）。 */
-  pinned: boolean;
-}
-
-/** 独立问答会话完整记录（含压缩状态）。 */
-export interface QaSessionRecord extends QaSessionSummary {
-  /** 更早轮次的压缩摘要正文（系统生成）；空串表示还没有压缩过。 */
-  contextSummary: string;
-  /** 摘要覆盖到的最后一条消息 id；该 id 及之前的消息不再以原文送进模型。 */
-  summaryUpto: number;
-}
-
 /** 阅读伙伴（按文献）的会话清单记录；消息归属靠消息 metadata 里的 sessionId。 */
 export interface DocumentChatSessionRecord {
   id: string;
@@ -1486,24 +1441,6 @@ export interface ChatUsage {
   calls?: number;
   /** true = 至少有一次调用没有拿到供应商 usage，按字符估算。 */
   estimated?: boolean;
-}
-
-/** 打开某个会话时返回的会话 + 消息（可带分页信息）。 */
-export interface QaSessionDetail {
-  session: QaSessionRecord;
-  /** 按 id 升序返回的消息；带 limit 分页时是「最新一页」或「更早一页」。 */
-  messages: QaMessageRecord[];
-  /** 分页请求时：当前页之前是否还有更早的消息（没有 limit 时不返回）。 */
-  hasMore?: boolean;
-}
-
-/** 迁移旧版 localStorage 问答历史时导入的一条消息。 */
-export interface QaImportMessage {
-  role: 'user' | 'assistant';
-  content: string;
-  response?: ChatResponse | null;
-  answered?: boolean;
-  created?: string;
 }
 
 export interface ReadingTaskSummary {
@@ -1570,22 +1507,6 @@ export interface ChatRequest {
    * 仅 review 权限需要；为 true 时本轮允许按缺口自动补查（仍只发脱敏查询词）。
    */
   confirm_gap_search?: boolean;
-  /**
-   * 独立问答的会话 id（没有 documentId 时生效）。
-   *
-   * 有值时服务端从该会话的**完整历史**拼上下文（超出模型输入预算时把更早轮次压缩成
-   * 摘要，见 `packages/core/src/qa-context.ts`），不再由客户端只传「最近 N 轮」。
-   * 缺省时服务端新建一个会话并返回 `qa_session_id`；阅读页问答不传这个字段。
-   */
-  qa_session_id?: string;
-  /**
-   * 重新生成上一轮回答（独立问答会话）。
-   *
-   * 为 true 时服务端会丢弃该会话最后一条助手消息（含失败占位），保留最后的用户问题，
-   * 用同一问题重新回答并落库；不会重复追加一条用户消息。没有可重生成的轮次时返回 400。
-   * 仅对没有 `documentId` 的独立问答有效。
-   */
-  qa_regenerate?: boolean;
 }
 
 export interface CoverageSummary {
@@ -1712,26 +1633,7 @@ export interface ChatResponse {
    * direct=直接回复（问候/界面问题）；web=仅联网结果；reading=文献精读；
    * library=库内检索问答（不读全文）。
    */
-  answer_mode?: 'direct' | 'web' | 'reading' | 'library';
-  /**
-   * 独立问答本轮使用的会话 id（请求没带 `qa_session_id` 时服务端新建并在这里返回）。
-   * 阅读页问答不返回这个字段。
-   */
-  qa_session_id?: string;
-  /**
-   * 独立问答本轮上下文统计（供界面如实说明"完整历史/已压缩/为容量丢弃"）。
-   * 阅读页问答不返回。
-   */
-  qa_context?: {
-    /** 本轮开始时会话里的消息条数（含本轮刚记录的用户消息，不含本轮助手回答）。 */
-    messages: number;
-    /** 本轮是否用到了更早轮次的压缩摘要。 */
-    summary_used: boolean;
-    /** 本轮新压缩掉的轮数（>0 表示刚刚生成/更新了摘要）。 */
-    compacted: number;
-    /** 为容量丢弃的轮数（摘要不可用时的兜底；0 表示没有丢）。 */
-    dropped: number;
-  };
+  answer_mode?: 'direct' | 'web' | 'reading';
   /**
    * 本轮没有重新调用模型，回答/来源复用上一轮已保存结果（例如「继续阅读」时已无未读页）。
    * 界面与调用方据此不要声称本轮读过文献或纳入过笔记/批注。

@@ -166,29 +166,6 @@ export const SCHEMA_SQL = `      CREATE TABLE IF NOT EXISTS schema_meta(
       -- schema_version 13：独立问答的会话与消息（不依附文献，阅读内 messages 表不变）。
       -- 会话保存完整历史；context_summary/summary_upto 记录「更早轮次压缩摘要」：
       -- summary_upto 及之前的消息不再以原文送进模型，只以摘要形式参与上下文。
-      CREATE TABLE IF NOT EXISTS qa_sessions(
-        id TEXT PRIMARY KEY,
-        title TEXT DEFAULT '',
-        created TEXT DEFAULT CURRENT_TIMESTAMP,
-        updated TEXT DEFAULT CURRENT_TIMESTAMP,
-        context_summary TEXT DEFAULT '',
-        summary_upto INTEGER DEFAULT 0,
-        pinned INTEGER NOT NULL DEFAULT 0,
-        deleted INTEGER DEFAULT 0
-      );
-
-      CREATE TABLE IF NOT EXISTS qa_messages(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT NOT NULL,
-        role TEXT NOT NULL,
-        content TEXT DEFAULT '',
-        response TEXT,
-        answered INTEGER DEFAULT 1,
-        created TEXT DEFAULT CURRENT_TIMESTAMP
-      );
-
-      CREATE INDEX IF NOT EXISTS qa_messages_session ON qa_messages(session_id, id);
-      CREATE INDEX IF NOT EXISTS qa_sessions_updated ON qa_sessions(updated);
 
       CREATE TABLE IF NOT EXISTS translation_pages(
         document_id TEXT,

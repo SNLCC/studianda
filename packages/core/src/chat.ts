@@ -4,7 +4,6 @@ import type {
   ChatSource,
   DocumentBlocks,
   DocumentSectionIndex,
-  QaSessionRecord,
   SearchHit,
   SearchResult
 } from '@studianda/shared';
@@ -51,12 +50,6 @@ import {
 } from './memory-sources.js';
 import { citationSupport, invalidCitations } from './citations.js';
 import { locateSectionContext } from './section-context.js';
-import {
-  prepareQaConversation,
-  qaHistoryPairsFromSession,
-  retrievalQueryForConversation,
-  staleCitationBlock
-} from './qa-context.js';
 import { inputCost, messages as budgetMessages } from './request-budget.js';
 
 interface ChatConfig {
@@ -250,33 +243,12 @@ async function answerQuestionInner(
       '不要假装听到了不存在的内容。' +
       '只返回一个 JSON 对象 {"transcript":"逐字转写","answer":"回答"}，' +
       '不要输出其它文字、解释或 Markdown 代码块。';
-    // 独立问答的多会话：语音提问也要能看到本会话更早的文字轮次，否则口头追问同样会丢指代。
-    const audioSession =
-      !input.documentId && typeof input.qa_session_id === 'string' && input.qa_session_id.trim()
-        ? store.getQaSession(input.qa_session_id)
-        : null;
-    let audioPrior: HistoryMessage[] = [];
-    let audioDropped = 0;
-    if (audioSession) {
-      const prepared = prepareHistory(
-        // 本轮转写（audioTranscript）要一起传进来：服务端已把带「（语音）」前缀的本轮消息落库，
-        // 不排除掉它会把同一句口头提问在历史里再发一遍。
-        qaHistoryPairsFromSession(store, audioSession, audioTranscript),
-        Math.max(
-          0,
-          chatInputLimit(store) -
-            inputCost(budgetMessages(audioSystem, '语音输入')) -
-            // 音频/source 与协议开销留足余量，避免把文字历史挤到超过输入预算。
-            8192
-        )
-      );
-      audioPrior = prepared.prior;
-      audioDropped = prepared.dropped;
-    }
+    const audioPrior: HistoryMessage[] = [];
+    const audioDropped = 0;
     const requestMessages: Array<{ role: string; content: unknown }> = [
       {
         role: 'system',
-        content: audioSystem + (audioPrior.length > 0 ? staleCitationBlock(true, false) : '')
+        content: audioSystem
       },
       ...audioPrior,
       {
@@ -350,16 +322,7 @@ async function answerQuestionInner(
       sources: [],
       ...(modelTranscript ? { audio_transcript: modelTranscript } : {}),
       ...memoryUnused('为语音直接回答'),
-      ...(audioSession
-        ? {
-            qa_context: {
-              messages: audioSession.messageCount,
-              summary_used: false,
-              compacted: 0,
-              dropped: audioDropped
-            }
-          }
-        : {}),
+
       notice: audioNoticeParts.join('；')
     };
   }
@@ -392,23 +355,10 @@ async function answerQuestionInner(
   const question = (corpusResume?.question ?? input.question)?.trim();
   if (!question) throw new Error('问题不能为空');
   const selection = input.selection?.trim() || (corpusResume?.selection ?? '');
-  // 独立问答的多会话：历史由服务端按会话保存，这里不再只取客户端传来的「最近 N 轮」。
-  // 库内检索路径随后会按输入预算把早期轮次压缩成摘要（见 qa-context.ts）；其它回答方式
-  // （联网/跨文献精读/直接回复）沿用各自的既有容量规则使用这份完整历史。
-  const qaSession: QaSessionRecord | null =
-    !input.documentId && typeof input.qa_session_id === 'string' && input.qa_session_id.trim()
-      ? store.getQaSession(input.qa_session_id)
-      : null;
-  if (qaSession) {
-    input.history = qaHistoryPairsFromSession(store, qaSession, question);
-  }
   // 追问检索：短问题/含指代的问题把最近两轮问答拼进**检索查询**（只用于定位命中位置，
-  // 不当作证据）。独立问答与会话历史都走这里；阅读页仍按原来的「最近 N 轮」历史，只是
+  // 不当作证据）。阅读页按原来的「最近 N 轮」历史，只是
   // 检索/规划阶段也能看到指代对象。
-  const retrievalQuestion = retrievalQueryForConversation(
-    question,
-    Array.isArray(input.history) ? input.history : []
-  );
+  const retrievalQuestion = question;
   // 续读不再重跑问题路由：范围与问题都在任务里，再问一次模型只会多一次调用，还可能改范围。
   const route: QuestionRoute = corpusResume
     ? {
@@ -564,20 +514,16 @@ async function answerQuestionInner(
           '你是联网搜索助手。只根据给出的搜索结果回答；引用网页时用 [W1] 这样的编号标注'
           + '（编号对应给出的搜索结果），并保留 URL；不确定时明确说明。';
         const webUser = `问题：${question}\n\n搜索结果：\n${context}`;
-        // 独立问答（服务端会话）：追问也要能看到更早轮次，否则「那它呢」这类问题会丢失指代对象。
-        // 阅读页（有 documentId）保持原样：仅联网结果这条路不带历史。
-        const webPrior = qaSession
-          ? prepareHistory(
-              input.history,
-              Math.max(
-                0,
-                // 200 安全余量：下面可能会追加「历史旧引用编号不属于本轮」的规则。
-                chatInputLimit(store) - inputCost(budgetMessages(webSystemBase, webUser)) - 200
-              )
-            )
-          : { prior: [], dropped: 0 };
+        // 仅联网结果这条路不带历史。
+        const webPrior = prepareHistory(
+          input.history,
+          Math.max(
+            0,
+            chatInputLimit(store) - inputCost(budgetMessages(webSystemBase, webUser)) - 200
+          )
+        );
         const webSystem =
-          webSystemBase + (webPrior.prior.length > 0 ? staleCitationBlock(true, false) : '');
+          webSystemBase;
         const answer = await callChatModel(
           readingConfig,
           webSystem,
@@ -615,16 +561,6 @@ async function answerQuestionInner(
           // 本轮回答只基于这些网页结果：附上按域名归属的分层清单（只用于显示，不代表质量）。
           source_tiers: listing(results),
           ...(searchWarning ? { search_warning: searchWarning } : {}),
-          ...(qaSession
-            ? {
-                qa_context: {
-                  messages: qaSession.messageCount,
-                  summary_used: Boolean(qaSession.contextSummary),
-                  compacted: 0,
-                  dropped: webPrior.dropped
-                }
-              }
-            : {}),
           notice: noticeParts.join('；')
         };
       }
@@ -634,17 +570,15 @@ async function answerQuestionInner(
       // 无计划时保持旧行为：搜索失败继续走本地检索，不伪造联网结果。
     }
   }
-  // 跨文献精读（corpus）与独立问答的库内检索共用同一套范围解析：
-  // 显式 scope_documents 优先；否则按 scope_tags 圈；都没有 = 全部文献。
-  // 没有 documentId 时默认走「库内检索问答」，不能落到"读当前文献"（根本没有当前文献）。
+  // 跨文献精读（corpus）的范围解析：显式 scope_documents 优先；否则按 scope_tags 圈；
+  // 都没有 = 全部文献。
   const corpusScope = input.reading_scope === 'corpus' || Boolean(corpusResume);
-  const libraryScope = !input.documentId && !corpusScope;
   const allDocumentsScope =
     !corpusResume &&
     !(input.scope_documents && input.scope_documents.length > 0) &&
     !(input.scope_tags && input.scope_tags.length > 0);
   const scopeDocumentIds: string[] | undefined =
-    corpusScope || libraryScope
+    corpusScope
       ? corpusResume
         ? corpusResume.documentIds!
         : !allDocumentsScope
@@ -665,7 +599,7 @@ async function answerQuestionInner(
   let memoryReadFailure = '';
   let memoryHits: MemoryHit[] = [];
   if (includeMemory) {
-    // 阅读内只看当前文献；跨文献/独立问答按范围取；范围是「全部文献」时也纳入独立笔记。
+    // 阅读内只看当前文献；跨文献按范围取；范围是「全部文献」时也纳入独立笔记。
     const memoryDocumentIds = input.documentId
       ? corpusScope
         ? allDocumentsScope
@@ -1194,364 +1128,21 @@ async function answerQuestionInner(
     }
   }
 
-  // 没有 documentId（独立问答）时，这里是默认回答路径：库内检索原文页 + 笔记/批注后回答。
-  // 有 documentId 时这里是「完整阅读失败后的退回路径」，保持原有整页检索行为。
-  // 显式范围一个文献都没圈中：如实报告，不静默改成全库检索。
-  if (!allDocumentsScope && scopeDocumentIds && scopeDocumentIds.length === 0) {
-    return {
-      answer: null,
-      sources: [],
-      ...chapterFields,
-      routing,
-      route_note: routeNote,
-      reading_scope: scope,
-      reading_rigor: input.reading_rigor ?? 'auto',
-      model_knowledge: input.source_policy !== 'document_only',
-      web_search: Boolean(shouldSearch),
-      answer_mode: 'library',
-      ...memoryFields,
-      notice:
-        '所选范围没有匹配到任何文献（可能是标签没有对应文献），本轮没有读取任何内容；请重新选择范围。' +
-        (readingFailure ? ` 完整阅读未完成：${trimText(readingFailure, 200)}` : '')
-    };
-  }
-
-  // 追问检索：短问题/含指代的问题会把最近两轮上文拼进检索查询，
-  // 否则「那它的测量口径呢？」这类问题在检索阶段就丢了指代对象。拼进去的上文只用于
-  // 检索定位，不进 sources、也不是本轮证据（详见 qa-context.ts）。
-  const baseRetrievalQuery = retrievalQuestion;
-  const retrievalAugmented = baseRetrievalQuery !== question;
-  const hits = await retrieve(
-    store,
-    secrets,
-    selection ? `${baseRetrievalQuery}\n${selection}` : baseRetrievalQuery,
-    input.documentId,
-    input.page ?? 1,
-    'close',
-    8,
-    scopeDocumentIds ? { scopeDocumentIds } : {}
-  );
-
-  // 库内检索问答：检索排序不变，只把"命中页 → 整页原文"改成"命中页 → 命中位置所在段落/章节片段"。
-  // 识别不出块（扫描页/校订页/无文本）时退回整页，保持旧行为；片段仍是原文文字，不是新证据。
-  const sectionCache = new Map<
-    string,
-    { blocks: DocumentBlocks; index: DocumentSectionIndex } | null
-  >();
-  const sectionContextFor = async (hit: SearchHit) => {
-    if (!libraryScope) return null;
-    // 用户校订过的页：块文字来自 PDF 文本层，可能与校订后的正文不一致，退回整页。
-    const edit = store.getPageEdit(hit.documentId, hit.page);
-    if (edit?.origin === 'user' && edit.text.trim()) return null;
-    if (!sectionCache.has(hit.documentId)) {
-      try {
-        const blocks = await store.getDocumentBlocks(hit.documentId);
-        const index = await store.getSectionIndex(hit.documentId);
-        sectionCache.set(hit.documentId, { blocks, index });
-      } catch {
-        sectionCache.set(hit.documentId, null);
-      }
-    }
-    const cached = sectionCache.get(hit.documentId);
-    if (!cached) return null;
-    return locateSectionContext(
-      {
-        documentId: hit.documentId,
-        page: hit.page,
-        match: hit.match,
-        snippet: hit.snippet
-      },
-      cached.blocks,
-      cached.index
-    );
-  };
-
-  const sources: ChatSource[] = [];
-  const seenPages = new Set<string>();
-  let sectionContextCount = 0;
-  for (const hit of hits) {
-    const context = await sectionContextFor(hit);
-    const key = context
-      ? `${hit.documentId}:sec:${context.sectionIndex}:${hit.page}`
-      : `${hit.documentId}:page:${hit.page}`;
-    if (seenPages.has(key)) continue;
-    seenPages.add(key);
-    if (context) sectionContextCount += 1;
-    const pageText = store.getPageText(hit.documentId, hit.page);
-    sources.push({
-      documentId: hit.documentId,
-      documentName: hit.documentName,
-      page: hit.page,
-      // 命中片段优先（命中段落/所在章节）；否则退回整页上下文，避免“行首/行尾碎片”。
-      snippet: context ? trimText(context.text, 5000) : trimText(pageText || hit.snippet, 6000),
-      quotes: [],
-      ...(context?.sectionTitle ? { sectionTitle: context.sectionTitle } : {}),
-      ...(context && context.pageEnd > hit.page ? { pageEnd: context.pageEnd } : {}),
-      // 跳转定位用命中行：点来源时能高亮到具体那一行（不是引用证据，不参与核验）。
-      ...(context && hit.match?.trim() ? { locate: trimText(hit.match.trim(), 400) } : {})
-    });
-  }
-
-  // 检索不到时，至少把当前页作为上下文，避免"问了同一页却没有依据"。
-  if (sources.length === 0 && input.documentId) {
-    const document = store.getDocument(input.documentId);
-    const page = input.page ?? document?.currentPage ?? 1;
-    const pageText = store.getPageText(input.documentId, page);
-    if (document && pageText) {
-      sources.push({
-        documentId: document.id,
-        documentName: document.name,
-        page,
-        snippet: trimText(pageText, 6000),
-        quotes: []
-      });
-    }
-  }
-
-  const memoryOnly = sources.length === 0 && memoryHits.length > 0;
-  const config = getConfig(store, secrets);
-  if (!config) {
-    return {
-      answer: null,
-      sources,
-      ...chapterFields,
-      routing,
-      route_note: routeNote,
-      reading_scope: scope,
-      reading_rigor: input.reading_rigor ?? 'auto',
-      model_knowledge: input.source_policy !== 'document_only',
-      web_search: Boolean(shouldSearch),
-      answer_mode: 'library',
-      ...memoryFields,
-      notice:
-        `尚未配置模型服务，因此只返回本地检索到的原文片段${
-          memoryHits.length > 0 ? '与本地笔记/批注' : ''
-        }。请到「设置 → 模型服务」添加平台，并在「会话模型」里选择模型。` +
-        (readingFailure ? ` 完整阅读未完成：${trimText(readingFailure, 200)}` : '')
-    };
-  }
-
-  if (sources.length === 0 && memoryHits.length === 0) {
-    // 无文献内容聊天：
-    // - document_only：用户明确要求只用文献，保持「无法回答」，不偷偷改用模型知识；
-    // - 其它来源策略：库内没有命中 ≠ 不能聊天。通用知识/纯聊天改为直接调用会话模型
-    //   凭自身知识回答（answer_mode='direct'），并如实说明没有使用库内原文、不编号引用。
-    if (input.source_policy === 'document_only') {
-      return {
-        answer: null,
-        sources,
-        ...chapterFields,
-        routing,
-        route_note: routeNote,
-        reading_scope: scope,
-        reading_rigor: input.reading_rigor ?? 'auto',
-        model_knowledge: false,
-        web_search: Boolean(shouldSearch),
-        answer_mode: 'library',
-        ...memoryFields,
-        notice:
-          '本地没有检索到相关原文，且本轮来源限定为「仅文献」，暂时无法回答。可以先确认 PDF 是否包含可提取文本（扫描件需要 OCR）；独立问答也可以勾选「笔记/批注」后再问。' +
-          (readingFailure ? ` 完整阅读未完成：${trimText(readingFailure, 200)}` : '')
-      };
-    }
-    const knowledgeSystem =
-      '你是文献阅读助手。本轮没有检索到任何库内原文页，也没有可用的笔记/批注。' +
-      '请直接回答用户的问题：通用知识、常识、日常对话可以凭你自己的知识回答；' +
-      '如果问题需要具体文献依据而当前没有，请明确说明「本次没有检索到库内原文」，' +
-      '不要编造页码、文献原句或 [1][2] 这类引用编号。';
-    const knowledgeUser = `问题：${question}${
-      selection ? `\n\n用户引用的原文：\n${trimText(selection, 2000)}` : ''
-    }`;
-    const knowledgeConversation = qaSession
-      ? await prepareQaConversation({
-          store,
-          session: qaSession,
-          config,
-          baseSystem: knowledgeSystem,
-          user: knowledgeUser,
-          question,
-          inputLimit: chatInputLimit(store),
-          signal,
-          onStage
-        })
-      : null;
-    let knowledgeSystemPrompt = knowledgeSystem;
-    if (knowledgeConversation?.summaryBlock) {
-      knowledgeSystemPrompt += knowledgeConversation.summaryBlock;
-    }
-    if (knowledgeConversation?.omittedBlock) {
-      knowledgeSystemPrompt += knowledgeConversation.omittedBlock;
-    }
-    if (qaSession) knowledgeSystemPrompt += staleCitationBlock(true, false);
-    const knowledgeAnswer = await callChatModel(
-      config,
-      knowledgeSystemPrompt,
-      knowledgeUser,
-      1600,
-      signal,
-      onDraft,
-      undefined,
-      qaSession ? chatInputLimit(store) : undefined,
-      '通用知识回答',
-      knowledgeConversation?.prior ?? []
-    );
-    const knowledgeNoticeParts = [
-      '本轮没有检索到库内原文；以下回答来自模型自身知识，未引用库内页。'
-    ];
-    if (readingFailure) {
-      knowledgeNoticeParts.push(
-        `完整阅读未完成，已退回模型知识回答：${trimText(readingFailure, 200)}`
-      );
-    }
-    if (knowledgeConversation) {
-      if (knowledgeConversation.stats.compacted > 0) {
-        knowledgeNoticeParts.push(
-          `已把本会话更早的 ${knowledgeConversation.stats.compacted} 轮对话压缩成摘要（完整历史仍在会话里）。`
-        );
-      }
-      if (knowledgeConversation.stats.dropped > 0) {
-        knowledgeNoticeParts.push(
-          `会话历史超出模型输入预算，为容量省略了 ${knowledgeConversation.stats.dropped} 轮（从最旧开始）。`
-        );
-      }
-    }
-    return {
-      answer: knowledgeAnswer,
-      sources: [],
-      ...chapterFields,
-      routing,
-      route_note: routeNote,
-      reading_scope: scope,
-      reading_rigor: input.reading_rigor ?? 'auto',
-      model_knowledge: true,
-      web_search: Boolean(shouldSearch),
-      answer_mode: 'direct',
-      ...memoryFields,
-      ...(knowledgeConversation ? { qa_context: knowledgeConversation.stats } : {}),
-      notice: knowledgeNoticeParts.join('；')
-    };
-  }
-
-  const context = sources
-    .map((source, index) => {
-      // 命中片段会标明所在章节与覆盖页；退回整页时仍标「整页原文」。
-      const label = source.sectionTitle
-        ? `命中片段 · ${trimText(source.sectionTitle, 80)}${
-            source.pageEnd && source.pageEnd > source.page ? `（第 ${source.page}–${source.pageEnd} 页）` : ''
-          }`
-        : '整页原文';
-      return `[${index + 1}] ${source.documentName} 第 ${source.page} 页（${label}）\n${trimText(source.snippet, 5000)}`;
-    })
-    .join('\n\n');
-
-  // 库内检索只给命中片段/命中页，不能声称"读到全文"；笔记/批注是用户记录，不能当文献证据。
-  // 没勾选/没命中时提示词里也不要提用户笔记，否则口径与材料不一致（模型可能凭空以"你的笔记"口吻回答）。
-  const libraryPrompt = memoryText
-    ? '你是本地文献库问答助手。只根据给出的检索原文片段与用户笔记/批注回答；文献原文用 [编号] 标注依据；'
-      + '笔记/批注是用户自己的记录，不是文献原文，不能编号引用，也不能当成文献主张。'
-      + '片段是命中位置所在的段落/章节（标「整页原文」的才是整页），不代表已读全文；原文不足时明确说明，不要编造。'
-    : '你是本地文献库问答助手。只根据给出的检索原文片段回答；文献原文用 [编号] 标注依据；'
-      + '片段是命中位置所在的段落/章节（标「整页原文」的才是整页），不代表已读全文；原文不足时明确说明，不要编造。';
-  let systemPrompt =
-    (libraryScope
-      ? libraryPrompt
-      : '你是本地文献阅读助手。只根据用户问题与给出的原文回答；这里给的是整页或连续页原文，不是检索片段。'
-          + '原文确实不足时再明确说明，不要编造。回答尽量简洁，并用 [编号] 标注依据。') +
-    (memoryText ? `\n\n${MEMORY_RULES}` : '') +
-    // 会话历史里的旧编号不属于本轮证据：先给模型立规矩，压缩摘要/历史里出现旧编号也不会被误用。
-    (qaSession ? staleCitationBlock(true, false) : '');
-  const userContent = `问题：${question}${
-    selection ? `\n\n用户引用的原文：\n${trimText(selection, 2000)}` : ''
-  }\n\n${
-    libraryScope
-      ? '库内检索原文片段（命中位置所在的段落/章节；标「整页原文」的是命中页全文）'
-      : '原文'
-  }：\n${context}${memoryText ? `\n\n${memoryText}` : ''}`;
-
-  // 独立问答（会话已由服务端持久化）：完整历史进上下文；超出模型输入预算时把更早轮次
-  // 压缩成摘要（摘要存回会话，后续轮次复用），而不是像阅读页那样只取「最近 N 轮」。
-  // 阅读内（有 documentId）不传 qa_session_id，仍走客户端传的最近 N 轮，行为不变。
-  const qaConversation = qaSession
-    ? await prepareQaConversation({
-        store,
-        session: qaSession,
-        config,
-        baseSystem: systemPrompt,
-        user: userContent,
-        question,
-        inputLimit: chatInputLimit(store),
-        signal,
-        onStage
-      })
-    : null;
-  if (qaConversation?.summaryBlock) systemPrompt += qaConversation.summaryBlock;
-  if (qaConversation?.omittedBlock) systemPrompt += qaConversation.omittedBlock;
-
-  // 统一走 callChatModel：带用户取消 signal（默认 120s 超时）、支持 SSE 流式草稿、
-  // 并在发送前按输入预算校验（独立问答会话才启用，阅读页退回路径保持原行为）。
-  const answer = await callChatModel(
-    config,
-    systemPrompt,
-    userContent,
-    2400,
-    signal,
-    onDraft,
-    undefined,
-    qaSession ? chatInputLimit(store) : undefined,
-    '库内检索回答',
-    qaConversation?.prior ?? []
-  );
-
-  const noticeParts: string[] = [];
-  if (memoryOnly) noticeParts.push('本轮没有检索到相关原文页，回答只参考了你的笔记与批注。');
-  if (retrievalAugmented) {
-    noticeParts.push('本轮检索结合了本会话上文的指代信息（只用于定位命中位置，不是本轮证据）。');
-  }
-  if (libraryScope && sectionContextCount > 0) {
-    noticeParts.push(
-      `本轮命中 ${sectionContextCount} 处段落/章节片段作为上下文（不是整页原文）；需要完整论证请选「跨文献精读」。`
-    );
-  }
-  if (readingFailure) {
-    noticeParts.push(`完整阅读未完成，已退回整页检索：${trimText(readingFailure, 200)}`);
-  }
-  if (qaConversation) {
-    if (qaConversation.stats.compacted > 0) {
-      noticeParts.push(
-        `已把本会话更早的 ${qaConversation.stats.compacted} 轮对话压缩成摘要（完整历史仍在会话里）；`
-          + '本轮不再逐字携带这些轮次。'
-      );
-    }
-    if (qaConversation.stats.dropped > 0) {
-      noticeParts.push(
-        `会话历史超出模型输入预算，为容量省略了 ${qaConversation.stats.dropped} 轮（从最旧开始）。`
-      );
-    }
-  }
   return {
-    answer,
-    sources,
+    answer: null,
+    sources: [],
     ...chapterFields,
     routing,
     route_note: routeNote,
     reading_scope: scope,
     reading_rigor: input.reading_rigor ?? 'auto',
-    model_knowledge: input.source_policy !== 'document_only',
-    web_search: Boolean(shouldSearch),
-    answer_mode: 'library',
-    citation_support: citationSupport(answer, sources),
-    invalid_citations: invalidCitations(answer, sources.length),
-    ...memoryFields,
-    ...(qaConversation ? { qa_context: qaConversation.stats } : {}),
-    ...(noticeParts.length > 0 ? { notice: noticeParts.join('；') } : {})
+    notice: readingFailure
+      ? `完整阅读未完成：${readingFailure}`
+      : '本轮没有可用的回答路径'
   };
 }
 
 
-/**
- * 对外入口：包一层 token 用量收集（供应商返回 usage 就如实累计，没返回则按字符估算并标记）。
- * 阅读链路内部所有 callChatModel（规划/批次/综合/审计/修订）都会通过 AsyncLocalStorage 计入本轮。
- */
 export async function answerQuestion(
   store: Store,
   secrets: SecretStore,

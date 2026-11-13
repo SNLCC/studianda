@@ -51,11 +51,6 @@ import type {
   NoteFolderRecord,
   NotePurgeResult,
   NoteRecord,
-  QaImportMessage,
-  QaMessageRecord,
-  QaSessionDetail,
-  QaSessionRecord,
-  QaSessionSummary,
   QuoteLocation,
   ReadingTaskSummary,
   ReferenceEntryInput,
@@ -1913,281 +1908,7 @@ export class Store {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // 独立问答会话：与阅读内 `messages`（按文献 id）完全分开，不依附任何文献。
-  // 会话历史随数据目录一起备份/恢复；压缩摘要也存在会话行上，重启后继续复用。
-  // ---------------------------------------------------------------------------
-
-  /** 毫秒精度的当前时间（SQLite 默认 CURRENT_TIMESTAMP 只有秒，多会话排序会并列）。 */
-  private qaNow(): string {
-    return new Date().toISOString();
-  }
-
-  private qaSessionSummaryOf(row: {
-    id: string;
-    title: string | null;
-    created: string | null;
-    updated: string | null;
-    context_summary?: string | null;
-    summary_upto?: number | null;
-    message_count?: number | null;
-    pinned?: number | bigint | null;
-  }): QaSessionSummary {
-    return {
-      id: row.id,
-      title: row.title ?? '',
-      createdAt: row.created ?? '',
-      updatedAt: row.updated ?? '',
-      messageCount: Number(row.message_count ?? 0),
-      compacted: Boolean((row.context_summary ?? '').trim()),
-      pinned: Number(row.pinned ?? 0) !== 0
-    };
-  }
-
-  /** 会话列表：置顶优先，再按最近使用排序（只列未删除的会话）。传 query 时按标题/消息内容做词面过滤。 */
-  listQaSessions(query = ''): QaSessionSummary[] {
-    const term = query.trim();
-    const like = `%${term.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
-    const rows = this.db
-      .prepare(
-        `SELECT s.id, s.title, s.created, s.updated, s.context_summary, s.summary_upto, s.pinned,
-                (SELECT COUNT(*) FROM qa_messages m WHERE m.session_id = s.id) AS message_count
-         FROM qa_sessions s
-         WHERE s.deleted = 0
-         ${
-           term
-             ? `AND (s.title LIKE ? ESCAPE '\\'
-                    OR EXISTS (SELECT 1 FROM qa_messages m
-                               WHERE m.session_id = s.id AND m.content LIKE ? ESCAPE '\\'))`
-             : ''
-         }
-         ORDER BY s.pinned DESC, s.updated DESC, s.created DESC`
-      )
-      .all(...(term ? [like, like] : [])) as unknown as Array<{
-      id: string;
-      title: string | null;
-      created: string | null;
-      updated: string | null;
-      context_summary: string | null;
-      summary_upto: number | null;
-      message_count: number | null;
-      pinned: number | bigint | null;
-    }>;
-    return rows.map((row) => this.qaSessionSummaryOf(row));
-  }
-
-  /** 读一个会话（含压缩摘要状态）；不存在返回 null。 */
-  getQaSession(id: string): QaSessionRecord | null {
-    const row = this.db
-      .prepare(
-        `SELECT s.id, s.title, s.created, s.updated, s.context_summary, s.summary_upto, s.pinned,
-                (SELECT COUNT(*) FROM qa_messages m WHERE m.session_id = s.id) AS message_count
-         FROM qa_sessions s WHERE s.id = ? AND s.deleted = 0`
-      )
-      .get(id) as
-      | {
-          id: string;
-          title: string | null;
-          created: string | null;
-          updated: string | null;
-          context_summary: string | null;
-          summary_upto: number | null;
-          message_count: number | null;
-          pinned: number | bigint | null;
-        }
-      | undefined;
-    if (!row) return null;
-    return {
-      ...this.qaSessionSummaryOf(row),
-      contextSummary: row.context_summary ?? '',
-      summaryUpto: Number(row.summary_upto ?? 0)
-    };
-  }
-
-  /** 新建会话（标题可空，第一条用户问题会补默认标题）。 */
-  createQaSession(title = ''): QaSessionRecord {
-    const id = randomUUID();
-    const now = this.qaNow();
-    this.db
-      .prepare(
-        'INSERT INTO qa_sessions(id, title, created, updated, context_summary, summary_upto, deleted) VALUES (?, ?, ?, ?, \'\', 0, 0)'
-      )
-      .run(id, title.trim(), now, now);
-    const created = this.getQaSession(id);
-    if (!created) throw new Error('创建问答会话失败');
-    return created;
-  }
-
-  /** 重命名会话；返回改名后的记录，会话不存在返回 null。 */
-  renameQaSession(id: string, title: string): QaSessionRecord | null {
-    const result = this.db
-      .prepare('UPDATE qa_sessions SET title = ?, updated = ? WHERE id = ? AND deleted = 0')
-      .run(title.trim(), this.qaNow(), id);
-    if (Number(result.changes) === 0) return null;
-    return this.getQaSession(id);
-  }
-
-  /** 置顶/取消置顶；返回更新后的会话，不存在返回 null。 */
-  setQaSessionPinned(id: string, pinned: boolean): QaSessionRecord | null {
-    const result = this.db
-      .prepare('UPDATE qa_sessions SET pinned = ? WHERE id = ? AND deleted = 0')
-      .run(pinned ? 1 : 0, id);
-    if (Number(result.changes) === 0) return null;
-    return this.getQaSession(id);
-  }
-
-  /** 会话还没有标题时，用第一条用户问题补一个可读标题（不覆盖用户改过的标题）。 */
-  autoTitleQaSession(id: string, question: string): void {
-    const title = question.replace(/\s+/g, ' ').trim().slice(0, 40);
-    if (!title) return;
-    this.db
-      .prepare(
-        "UPDATE qa_sessions SET title = ?, updated = ? WHERE id = ? AND deleted = 0 AND (title IS NULL OR title = '')"
-      )
-      .run(title, this.qaNow(), id);
-  }
-
-  /** 删除会话：消息一并删除（用户确认过，不做回收站）。 */
-  deleteQaSession(id: string): void {
-    this.db.prepare('DELETE FROM qa_messages WHERE session_id = ?').run(id);
-    this.db.prepare('DELETE FROM qa_sessions WHERE id = ?').run(id);
-  }
-
-  private qaMessageRecordOf(row: {
-    id: number | bigint;
-    session_id: string;
-    role: string;
-    content: string | null;
-    response: string | null;
-    answered: number | bigint | null;
-    created: string | null;
-  }): QaMessageRecord {
-    let response: QaMessageRecord['response'] = null;
-    if (row.response) {
-      try {
-        const parsed = JSON.parse(row.response) as unknown;
-        if (parsed && typeof parsed === 'object') {
-          response = parsed as QaMessageRecord['response'];
-        }
-      } catch {
-        response = null;
-      }
-    }
-    return {
-      id: Number(row.id),
-      sessionId: row.session_id,
-      role: row.role === 'user' ? 'user' : 'assistant',
-      content: row.content ?? '',
-      response,
-      answered: Number(row.answered ?? 1) !== 0,
-      created: row.created ?? ''
-    };
-  }
-
-  /**
-   * 读会话消息（按 id 升序）。
-   *
-   * - 不传 options：返回全部（兼容原有行为）；
-   * - `limit`：只取最新的一页（内部按 id DESC 取 N 条后反转，保持升序）；
-   * - `beforeId`：配合 limit，取该 id 之前的一页（用于「加载更早」）。
-   */
-  listQaMessages(
-    sessionId: string,
-    options: { limit?: number; beforeId?: number } = {}
-  ): QaMessageRecord[] {
-    const limit =
-      typeof options.limit === 'number' && Number.isInteger(options.limit) && options.limit > 0
-        ? Math.min(options.limit, 500)
-        : 0;
-    const beforeId =
-      typeof options.beforeId === 'number' && Number.isInteger(options.beforeId) && options.beforeId > 0
-        ? options.beforeId
-        : 0;
-    const where = `session_id = ?${beforeId ? ' AND id < ?' : ''}`;
-    const params: Array<string | number> = beforeId ? [sessionId, beforeId] : [sessionId];
-    if (!limit) {
-      const rows = this.db
-        .prepare(
-          `SELECT id, session_id, role, content, response, answered, created FROM qa_messages WHERE ${where} ORDER BY id`
-        )
-        .all(...params) as unknown as Array<{
-        id: number;
-        session_id: string;
-        role: string;
-        content: string | null;
-        response: string | null;
-        answered: number | null;
-        created: string | null;
-      }>;
-      return rows.map((row) => this.qaMessageRecordOf(row));
-    }
-    const rows = this.db
-      .prepare(
-        `SELECT id, session_id, role, content, response, answered, created FROM qa_messages WHERE ${where} ORDER BY id DESC LIMIT ?`
-      )
-      .all(...params, limit) as unknown as Array<{
-      id: number;
-      session_id: string;
-      role: string;
-      content: string | null;
-      response: string | null;
-      answered: number | null;
-      created: string | null;
-    }>;
-    return rows.reverse().map((row) => this.qaMessageRecordOf(row));
-  }
-
-  /** 该会话在 beforeId 之前是否还有更早的消息（分页用）。 */
-  hasOlderQaMessages(sessionId: string, beforeId: number): boolean {
-    const row = this.db
-      .prepare('SELECT 1 AS one FROM qa_messages WHERE session_id = ? AND id < ? LIMIT 1')
-      .get(sessionId, beforeId) as { one?: number } | undefined;
-    return Boolean(row?.one);
-  }
-
-  /**
-   * 编辑一条独立问答的用户消息并删除其后所有消息（「编辑并重问」/从这一轮重新开始）。
-   *
-   * 只允许改 user 消息；消息不存在/不属于该会话/不是 user 时 ok=false（调用方回 404/400）。
-   */
-  editQaUserMessage(
-    sessionId: string,
-    messageId: number,
-    content: string
-  ): { ok: boolean; removed: number } {
-    const row = this.db
-      .prepare('SELECT role FROM qa_messages WHERE id = ? AND session_id = ?')
-      .get(messageId, sessionId) as { role: string } | undefined;
-    if (!row || row.role !== 'user') return { ok: false, removed: 0 };
-    const result = this.db
-      .prepare('DELETE FROM qa_messages WHERE session_id = ? AND id > ?')
-      .run(sessionId, messageId);
-    this.db
-      .prepare('UPDATE qa_messages SET content = ? WHERE id = ?')
-      .run(content.trim(), messageId);
-    this.db
-      .prepare('UPDATE qa_sessions SET updated = ? WHERE id = ?')
-      .run(this.qaNow(), sessionId);
-    return { ok: true, removed: Number(result.changes ?? 0) };
-  }
-
-  /** 删除独立问答某条消息及其后的所有消息（从这一轮起分支删除）。 */
-  deleteQaMessagesFrom(sessionId: string, messageId: number): { ok: boolean; removed: number } {
-    const row = this.db
-      .prepare('SELECT id FROM qa_messages WHERE id = ? AND session_id = ?')
-      .get(messageId, sessionId) as { id: number } | undefined;
-    if (!row) return { ok: false, removed: 0 };
-    const result = this.db
-      .prepare('DELETE FROM qa_messages WHERE session_id = ? AND id >= ?')
-      .run(sessionId, messageId);
-    this.db
-      .prepare('UPDATE qa_sessions SET updated = ? WHERE id = ?')
-      .run(this.qaNow(), sessionId);
-    return { ok: true, removed: Number(result.changes ?? 0) };
-  }
-
-  /** 删除一组消息 id（事务内）；返回删除条数。 */
-  private deleteMessageIds(ids: readonly number[]): number {
+  deleteMessageIds(ids: readonly number[]): number {
     if (ids.length === 0) return 0;
     const remove = this.db.prepare('DELETE FROM messages WHERE id = ?');
     let removed = 0;
@@ -2210,7 +1931,7 @@ export class Store {
    *
    * 传 sessionId 时只在**该会话内**查找/删除，避免多会话下误删其它会话的消息。
    */
-  editDocumentUserMessage(
+    editDocumentUserMessage(
     documentId: string,
     messageId: number,
     content: string,
@@ -2283,114 +2004,7 @@ export class Store {
   /**
    * 重新生成：删除该会话「最后一条用户消息之后」的消息（助手回答/失败占位），
    * 返回最后一条用户消息的正文（没有可重生成的轮次时返回 null）。
-   */
-  rewindQaSessionTail(sessionId: string): string | null {
-    if (!this.getQaSession(sessionId)) return null;
-    const lastUser = this.db
-      .prepare(
-        "SELECT id, content FROM qa_messages WHERE session_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1"
-      )
-      .get(sessionId) as { id: number; content: string | null } | undefined;
-    if (!lastUser) return null;
-    this.db
-      .prepare('DELETE FROM qa_messages WHERE session_id = ? AND id > ?')
-      .run(sessionId, lastUser.id);
-    this.db
-      .prepare('UPDATE qa_sessions SET updated = ? WHERE id = ?')
-      .run(this.qaNow(), sessionId);
-    return lastUser.content ?? '';
-  }
-
-  /**
-   * 追加一条消息。
-   *
-   * `answered` 只对助手消息有意义：失败/占位消息写 false，界面照常显示，但后续上下文
-   * 不把它当成有效回答（历史拼接只取 answered=true 的助手内容）。
-   */
-  appendQaMessage(input: {
-    sessionId: string;
-    role: 'user' | 'assistant';
-    content: string;
-    response?: QaMessageRecord['response'];
-    answered?: boolean;
-    created?: string;
-  }): QaMessageRecord {
-    if (!this.getQaSession(input.sessionId)) throw new Error('问答会话不存在');
-    const now = input.created?.trim() || this.qaNow();
-    const answered = input.role === 'user' ? true : input.answered !== false;
-    const result = this.db
-      .prepare(
-        'INSERT INTO qa_messages(session_id, role, content, response, answered, created) VALUES (?, ?, ?, ?, ?, ?)'
-      )
-      .run(
-        input.sessionId,
-        input.role,
-        input.content,
-        input.response === undefined || input.response === null
-          ? null
-          : JSON.stringify(input.response),
-        answered ? 1 : 0,
-        now
-      );
-    this.db
-      .prepare('UPDATE qa_sessions SET updated = ? WHERE id = ?')
-      .run(now, input.sessionId);
-    return {
-      id: Number(result.lastInsertRowid),
-      sessionId: input.sessionId,
-      role: input.role,
-      content: input.content,
-      response: input.response ?? null,
-      answered,
-      created: now
-    };
-  }
-
-  /**
-   * 保存「更早轮次压缩摘要」：`upto` 及之前的消息不再以原文进模型。
-   *
-   * 只允许向前推进（新 upto 必须大于旧值），避免并发/重试把摘要覆盖回更早的位置。
-   */
-  saveQaCompaction(input: { sessionId: string; summary: string; upto: number }): void {
-    const session = this.getQaSession(input.sessionId);
-    if (!session) throw new Error('问答会话不存在');
-    const upto = Math.max(session.summaryUpto, Math.trunc(input.upto));
-    this.db
-      .prepare(
-        'UPDATE qa_sessions SET context_summary = ?, summary_upto = ?, updated = ? WHERE id = ?'
-      )
-      .run(input.summary.trim(), upto, this.qaNow(), input.sessionId);
-  }
-
-  /** 迁移旧版 localStorage 问答历史：按顺序导入消息，返回导入后的会话详情。 */
-  importQaMessages(sessionId: string, messages: QaImportMessage[]): QaSessionDetail {
-    const session = this.getQaSession(sessionId);
-    if (!session) throw new Error('问答会话不存在');
-    for (const message of messages) {
-      if (message.role !== 'user' && message.role !== 'assistant') continue;
-      const content = typeof message.content === 'string' ? message.content : '';
-      if (!content.trim()) continue;
-      const answered =
-        message.answered ??
-        (message.role === 'assistant' &&
-          !content.trim().startsWith('回答未完成') &&
-          !content.trim().startsWith('这一轮没有产生文字回答'));
-      this.appendQaMessage({
-        sessionId,
-        role: message.role,
-        content,
-        response: message.response ?? null,
-        answered,
-        created: typeof message.created === 'string' ? message.created : undefined
-      });
-    }
-    const imported = this.getQaSession(sessionId);
-    if (!imported) throw new Error('导入后读取会话失败');
-    return { session: imported, messages: this.listQaMessages(sessionId) };
-  }
-
-
-  saveTranslationJob(state: {
+   */  saveTranslationJob(state: {
     documentId: string;
     status: string;
     total: number;
@@ -2463,6 +2077,22 @@ export class Store {
     this.db.exec('BEGIN IMMEDIATE');
     try {
     this.db.exec(SCHEMA_SQL);
+
+    // 独立会话与 Agent 已移除：一次性删除旧会话表与历史备份（不可恢复）。
+    const qaRemoved = this.db
+      .prepare("SELECT value FROM schema_meta WHERE key = 'standalone_qa_removed'")
+      .get() as { value?: string } | undefined;
+    if (!qaRemoved) {
+      this.db.exec('DROP TABLE IF EXISTS qa_messages; DROP TABLE IF EXISTS qa_sessions;');
+      try {
+        rmSync(path.join(this.dataDir, 'backups'), { recursive: true, force: true });
+      } catch {
+        // 备份目录删除失败不影响启动；下次启动会重试（标记在清理后写入）。
+      }
+      this.db
+        .prepare("INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('standalone_qa_removed', '1')")
+        .run();
+    }
 
     const columns = new Set(
       (this.db.prepare('PRAGMA table_info(documents)').all() as Array<{ name: string }>).map(
@@ -2572,36 +2202,6 @@ export class Store {
     if (previousVersion < 17) {
       this.migrateDocumentRetrievalDocumentRevision();
     }
-    // 18：独立问答会话支持置顶（列表排序用）。
-    if (previousVersion < 18) {
-      const columns = new Set(
-        (
-          this.db.prepare('PRAGMA table_info(qa_sessions)').all() as unknown as Array<{
-            name: string;
-          }>
-        ).map((column) => column.name)
-      );
-      if (!columns.has('pinned')) {
-        this.db.exec('ALTER TABLE qa_sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0');
-      }
-    }
-
-    // 独立会话与 Agent 已移除：一次性删除旧会话表与历史备份（不可恢复）。
-    const qaRemoved = this.db
-      .prepare("SELECT value FROM schema_meta WHERE key = 'standalone_qa_removed'")
-      .get() as { value?: string } | undefined;
-    if (!qaRemoved) {
-      this.db.exec('DROP TABLE IF EXISTS qa_messages; DROP TABLE IF EXISTS qa_sessions;');
-      try {
-        rmSync(path.join(this.dataDir, 'backups'), { recursive: true, force: true });
-      } catch {
-        // 备份目录删除失败不影响启动；下次启动会重试（标记在清理后写入）。
-      }
-      this.db
-        .prepare("INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('standalone_qa_removed', '1')")
-        .run();
-    }
-
     this.db
       .prepare('INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)')
       .run('schema_version', '19');
