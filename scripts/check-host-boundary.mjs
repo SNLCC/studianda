@@ -24,8 +24,13 @@ const SOURCE_DIRS = readdirSync(path.join(root, 'packages'), { withFileTypes: tr
   .map((entry) => `packages/${entry.name}/src`)
   .filter((relative) => existsSync(path.join(root, relative)));
 
-/** 只检查样式里的视口单位；其它 CSS 规则不在这里管。 */
-const CSS_FILES = ['packages/ui/src/styles/styles.css', 'packages/ui/src/styles/qa.css'];
+/** 只检查样式里的视口单位；自动发现 styles 目录，避免新增 CSS 漏检。 */
+const CSS_DIR = path.join(root, 'packages/ui/src/styles');
+const CSS_FILES = existsSync(CSS_DIR)
+  ? readdirSync(CSS_DIR)
+      .filter((name) => name.endsWith('.css'))
+      .map((name) => `packages/ui/src/styles/${name}`)
+  : [];
 
 const allowlist = JSON.parse(readFileSync(allowlistFile, 'utf8'));
 const violations = [];

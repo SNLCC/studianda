@@ -495,4 +495,12 @@ describe('GET /api/v1/note-assets/:file', () => {
       expect(response.statusCode).toBe(404);
     }
   });
+
+  it('未带 token 时不返回图片内容', async () => {
+    const response = await server.inject({
+      method: 'GET',
+      url: '/api/v1/note-assets/missing.png'
+    });
+    expect(response.statusCode).toBe(401);
+  });
 });
