@@ -1,4 +1,4 @@
-import { setAppPortalRoot } from '@studianda/ui';
+import { setAppPortalRoot, setHostRoot } from '@studianda/ui';
 
 /**
  * Shadow DOM 宿主挂载器（方案 B：宿主 CSS 隔离）。
@@ -40,6 +40,11 @@ const DEFAULT_BASE_STYLES = `
 :host {
   display: block;
   height: 100%;
+  /* 面板内用容器高度替代视口高度；Electron 没有这个变量，回退到 100vh。 */
+  --kr-viewport-height: 100%;
+  --kr-viewport-width: 100%;
+  /* 成为 fixed 后代的包含块，弹层不再覆盖整个 DSH 窗口。 */
+  contain: layout;
   color: var(--kr-ink);
   background: var(--kr-paper);
   font-family: var(--kr-font-ui);
@@ -62,7 +67,8 @@ export function createShadowHost(options: ShadowHostOptions = {}): ShadowHostHan
   const container = options.container ?? document.body;
   const host = document.createElement('div');
   host.className = 'kr-shadow-host';
-  host.style.cssText = 'display:block;height:100%;min-height:240px;';
+  host.style.cssText =
+    'display:block;height:100%;min-height:240px;contain:layout;';
   const shadowRoot = host.attachShadow({ mode: 'open' });
 
   const baseStyle = document.createElement('style');
@@ -102,6 +108,7 @@ export function createShadowHost(options: ShadowHostOptions = {}): ShadowHostHan
   setAppPortalRoot(portalElement);
 
   container.append(host);
+  setHostRoot(host);
 
   return {
     host,
@@ -109,6 +116,7 @@ export function createShadowHost(options: ShadowHostOptions = {}): ShadowHostHan
     mountElement,
     portalElement,
     cleanup() {
+      setHostRoot(null);
       setAppPortalRoot(null);
       host.remove();
     }

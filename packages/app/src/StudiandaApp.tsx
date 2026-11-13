@@ -77,6 +77,7 @@ import {
   StandaloneNotesView,
   StructurePanel,
   TranslationPanel,
+  onHostKeyDown,
   type ChatMessageView,
   type DocumentReorderTarget,
   type HealthState,
@@ -737,14 +738,12 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     prevNavSignatureRef.current = navSignature;
     if (isNarrowSidebar) setSidebarPref(true);
   }, [navSignature, isNarrowSidebar]);
-  // 抽屉遮罩可用 Esc 收起（与弹窗的 Esc 关闭互不冲突）。
+  // 抽屉遮罩可用 Esc 收起（与弹窗的 Esc 关闭互不冲突）；只在应用宿主范围内生效。
   useEffect(() => {
     if (!isNarrowSidebar || sidebarCollapsed) return;
-    const onKeyDown = (event: KeyboardEvent): void => {
+    return onHostKeyDown((event) => {
       if (event.key === 'Escape') setSidebarPref(true);
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    });
   }, [isNarrowSidebar, sidebarCollapsed]);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     try {
@@ -1175,8 +1174,9 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
   const importActive =
     importJob != null && ['queued', 'running', 'cancelling'].includes(importJob.state);
   const importElapsed = useElapsedSeconds(importActive);
+  type ImportSource = { path: string } | { file: File };
   const importRetryRef = useRef<{
-    path: string;
+    source: ImportSource;
     confirmLarge: boolean;
     confirmDuplicate: boolean;
   } | null>(null);
@@ -1193,14 +1193,26 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
       cancelled: '已取消'
     })[stage] ?? stage;
 
-  const startImportPath = async (
-    path: string,
+  /**
+   * 导入来源统一入口：桌面壳给本机路径，DSH/Web 宿主给 File。
+   * 两条分支都走同一个后台导入任务与进度/取消界面。
+   */
+  const startImportSource = async (
+    source: ImportSource,
     confirmLarge: boolean,
     confirmDuplicate: boolean
   ): Promise<void> => {
-    importRetryRef.current = { path, confirmLarge, confirmDuplicate };
+    importRetryRef.current = { source, confirmLarge, confirmDuplicate };
     try {
-      const { jobId } = await api.startDocumentImport(path, confirmLarge, confirmDuplicate);
+      const { jobId } =
+        'file' in source
+          ? await api.startDocumentUpload(
+              source.file,
+              source.file.name || '未命名.pdf',
+              confirmLarge,
+              confirmDuplicate
+            )
+          : await api.startDocumentImport(source.path, confirmLarge, confirmDuplicate);
       setLibraryNotice('');
       setImportJob({
         id: jobId,
@@ -1213,7 +1225,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
       if (error instanceof ApiRequestError && error.status === 409) {
         if (error.code === API_ERROR_CODES.confirmationRequired) {
           if (appDialogs.confirm(error.message)) {
-            await startImportPath(path, true, confirmDuplicate);
+            await startImportSource(source, true, confirmDuplicate);
           }
           return;
         }
@@ -1225,6 +1237,18 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
       setLibraryNotice(`导入失败：${error instanceof Error ? error.message : String(error)}`);
     }
   };
+
+  const startImportPath = (
+    path: string,
+    confirmLarge: boolean,
+    confirmDuplicate: boolean
+  ): Promise<void> => startImportSource({ path }, confirmLarge, confirmDuplicate);
+
+  const startImportFile = (
+    file: File,
+    confirmLarge: boolean,
+    confirmDuplicate: boolean
+  ): Promise<void> => startImportSource({ file }, confirmLarge, confirmDuplicate);
 
   const handleImportFailure = (error: {
     code?: string;
@@ -1258,7 +1282,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
           )
         ) {
           const retry = importRetryRef.current;
-          if (retry) void startImportPath(retry.path, retry.confirmLarge, true);
+          if (retry) void startImportSource(retry.source, retry.confirmLarge, true);
         }
         return;
       }
@@ -1333,6 +1357,12 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
   }, [importJob, importActive]);
 
   const startImport = async (): Promise<void> => {
+    if (adapter.pickPdfFile) {
+      const file = await adapter.pickPdfFile();
+      if (!file) return;
+      await startImportFile(file, false, false);
+      return;
+    }
     const path = await adapter.pickPdf();
     if (!path) return;
     await startImportPath(path, false, false);
@@ -2233,6 +2263,21 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
   // 附件缺失时重新连接：选文件 → relink；大文件 409 让用户确认后再试。
   const relinkMutation = useMutation({
     mutationFn: async (document: DocumentSummary) => {
+      if (adapter.pickPdfFile) {
+        const file = await adapter.pickPdfFile();
+        if (!file) return null;
+        try {
+          return await api.relinkDocumentFile(document.id, file);
+        } catch (error) {
+          if ((error as { status?: number }).status === 409) {
+            const confirmed = appDialogs.confirm(
+              '这个 PDF 比较大，重新连接会增加解析时间，后续会话/翻译/OCR 可能更慢。仍要继续吗？'
+            );
+            if (confirmed) return await api.relinkDocumentFile(document.id, file, true);
+          }
+          throw error;
+        }
+      }
       const filePath = await adapter.pickPdf();
       if (!filePath) return null;
       try {
@@ -3963,10 +4008,10 @@ function ReaderPage({
       }
     };
     window.document.addEventListener('pointerdown', dismiss, true);
-    window.document.addEventListener('keydown', onKey);
+    const removeKeyDown = onHostKeyDown(onKey);
     return () => {
       window.document.removeEventListener('pointerdown', dismiss, true);
-      window.document.removeEventListener('keydown', onKey);
+      removeKeyDown();
     };
   }, []);
 
@@ -4432,10 +4477,10 @@ function ReaderPage({
       if (target?.closest('.kr-cite-pop')) return;
       setCitationPopup(null);
     };
-    window.document.addEventListener('keydown', onKey);
+    const removeKeyDown = onHostKeyDown(onKey);
     window.document.addEventListener('pointerdown', dismiss, true);
     return () => {
-      window.document.removeEventListener('keydown', onKey);
+      removeKeyDown();
       window.document.removeEventListener('pointerdown', dismiss, true);
     };
   }, [citationPopup]);
@@ -5895,9 +5940,7 @@ function ReaderView({
     }
   };
   useEffect(() => {
-    const listener = (event: KeyboardEvent): void => keyHandlerRef.current(event);
-    window.addEventListener('keydown', listener);
-    return () => window.removeEventListener('keydown', listener);
+    return onHostKeyDown((event) => keyHandlerRef.current(event));
   }, []);
   const [annotationScope, setAnnotationScope] = useState<'page' | 'document'>('page');
   const [panel, setPanel] = useState<
@@ -8532,7 +8575,7 @@ function ReaderView({
     speakMutation.mutate(answer);
   }, [chatData?.answer, speechConfigQuery.data?.auto_read, speakMutation]);
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent): void => {
+    return onHostKeyDown((event) => {
       const target = event.target as HTMLElement | null;
       const tag = target?.tagName?.toLowerCase();
       if (tag === 'input' || tag === 'textarea' || tag === 'select' || target?.isContentEditable) {
@@ -8543,9 +8586,7 @@ function ReaderView({
       if (!answer) return;
       event.preventDefault();
       speakMutation.mutate(answer);
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    });
   }, [chatData?.answer, shortcutSettings.data, speakMutation]);
   const generatedOutline: OutlineEntry[] = (
     navigationPreviewQuery.data?.nodes ??

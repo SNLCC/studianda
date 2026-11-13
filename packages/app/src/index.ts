@@ -11,6 +11,7 @@ export {
   type ShadowHostOptions
 } from './shadow-host.js';
 export { BrandMark } from '@studianda/ui';
+export { setAssetUrlResolver, setHostRoot } from '@studianda/ui';
 export type { DataSetupState, WindowControlsAdapter } from './runtime.js';
 export { useAppStore, type AppState } from './store.js';
 export { SettingsView } from './SettingsView.js';

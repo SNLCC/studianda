@@ -15,6 +15,7 @@ import {
   type NoteRecord
 } from '@studianda/shared';
 import { MarkdownContent } from './MarkdownContent.js';
+import { ASSET_SOURCE_ATTRIBUTE, resolveAssetUrl } from './asset-url.js';
 import {
   escapeHtmlAttribute,
   escapeHtmlText,
@@ -169,6 +170,17 @@ export async function resolveImageSource(
   }
 }
 
+/**
+ * 富文本编辑区专用渲染：图片 src 使用宿主解析后的地址，同时把原始资产地址
+ * 挂在 data 属性上；序列化时优先读它，避免把显示地址写回 Markdown。
+ */
+function renderEditableMarkdown(source: string): string {
+  return renderMarkdown(source, {
+    resolveAssetUrl,
+    assetSourceAttribute: ASSET_SOURCE_ATTRIBUTE
+  });
+}
+
 export interface MarkdownEditorProps {
   value: string;
   onChange(value: string): void;
@@ -306,7 +318,7 @@ export function MarkdownEditor({
     if (editorMode !== 'rich') return;
     const element = richRef.current;
     if (!element) return;
-    element.innerHTML = renderMarkdown(valueRef.current);
+    element.innerHTML = renderEditableMarkdown(valueRef.current);
     lastSerializedRef.current = valueRef.current;
     return () => {
       if (richTimerRef.current !== null) {
@@ -323,7 +335,7 @@ export function MarkdownEditor({
     if (value === lastSerializedRef.current) return;
     const element = richRef.current;
     if (!element) return;
-    element.innerHTML = renderMarkdown(value);
+    element.innerHTML = renderEditableMarkdown(value);
     lastSerializedRef.current = value;
   }, [editorMode, value]);
 
@@ -673,8 +685,13 @@ export function MarkdownEditor({
   const insertRichImage = (fileName: string, url: string, notice: string): void => {
     const alt =
       (fileName.replace(/\.[^.]+$/, '') || '图片').replace(/[[\]()]/g, ' ').trim() || '图片';
+    const displayUrl = resolveAssetUrl(url);
+    const sourceAttribute =
+      displayUrl !== url ? ` ${ASSET_SOURCE_ATTRIBUTE}="${escapeHtmlAttribute(url)}"` : '';
     insertRichHtml(
-      `<img src="${escapeHtmlAttribute(url)}" alt="${escapeHtmlAttribute(alt)}" />`
+      `<img src="${escapeHtmlAttribute(displayUrl)}"${sourceAttribute} alt="${escapeHtmlAttribute(
+        alt
+      )}" />`
     );
     setEditorNotice(notice);
   };

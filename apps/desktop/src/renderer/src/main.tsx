@@ -3,6 +3,7 @@ import {
   ShellTitleBar,
   StudiandaApp,
   TranslationWindow,
+  setAssetUrlResolver,
   type RuntimeAdapter
 } from '@studianda/app';
 import React from 'react';
@@ -120,6 +121,17 @@ const updateBridge = window.studianda.update;
  * 界面层只通过这个对象拿壳能力；将来 DSH 插件实现自己的 adapter 即可复用同一套界面。
  */
 const adapter: RuntimeAdapter = {
+  capabilities: {
+    kind: 'electron',
+    filePicker: 'path',
+    assetUrls: 'custom-protocol',
+    windowControls: true,
+    updates: Boolean(updateBridge),
+    translationWindow: Boolean(desktopBridge.openTranslationWindow),
+    dataSetup: true,
+    openNoteAsset: true,
+    saveBlob: true
+  },
   getRuntime: () => window.studianda.getRuntime(),
   pickPdf: () => window.studianda.pickPdf(),
   pickDirectory: () => window.studianda.pickDirectory(),
@@ -149,6 +161,7 @@ const adapter: RuntimeAdapter = {
   getDataSetup: () => window.studianda.getDataSetup(),
   setupDataLocation: () => window.studianda.setupDataLocation(),
   openExternal: (url) => window.studianda.openExternal(url),
+  resolveAssetUrl: (url) => url,
   saveBlob: (data, filename) => window.studianda.saveBlob(data, filename),
   clearUserDataLogs: () => window.studianda.clearUserDataLogs(),
   update: updateBridge
@@ -166,6 +179,10 @@ const adapter: RuntimeAdapter = {
 
 const container = document.getElementById('root');
 if (!container) throw new Error('root element missing');
+
+// 资产 URL 解析在首次渲染前装好：Electron 保持 studianda-asset://，
+// 将来的 DSH/Web 宿主在挂载前注入自己的 HTTP 映射。
+setAssetUrlResolver(adapter.resolveAssetUrl ?? null);
 
 // 独立译文窗口与主窗口共用同一份 renderer：只带 query，不渲染主界面/标题栏。
 const isTranslationWindow =

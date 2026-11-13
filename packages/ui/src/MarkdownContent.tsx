@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import type React from 'react';
 import { renderMarkdown, type MarkdownInternalTarget } from '@studianda/shared';
+import { resolveAssetUrl } from './asset-url.js';
 
 export interface MarkdownContentProps {
   /** Markdown 源文本（存储格式；旧纯文本也是合法 Markdown）。 */
@@ -36,7 +37,10 @@ export function MarkdownContent({
   onOpenAsset,
   className
 }: MarkdownContentProps): React.JSX.Element {
-  const html = useMemo(() => renderMarkdown(source ?? ''), [source]);
+  const html = useMemo(
+    () => renderMarkdown(source ?? '', { resolveAssetUrl }),
+    [source]
+  );
   const [assetError, setAssetError] = useState('');
 
   const handleClick = (event: React.MouseEvent<HTMLDivElement>): void => {

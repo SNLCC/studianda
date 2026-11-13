@@ -148,6 +148,13 @@ export interface ApiClient {
     confirmLarge?: boolean,
     confirmDuplicate?: boolean
   ): Promise<{ jobId: string }>;
+  /** 上传并启动后台导入任务（文件型宿主：DSH/Web）。 */
+  startDocumentUpload(
+    file: Blob,
+    filename: string,
+    confirmLarge?: boolean,
+    confirmDuplicate?: boolean
+  ): Promise<{ jobId: string }>;
   getDocumentImportJob(id: string): Promise<ImportJobRecord>;
   /** 请求取消导入：解析阶段结束后、写库前生效。 */
   cancelDocumentImport(id: string): Promise<ImportJobRecord>;
@@ -158,6 +165,12 @@ export interface ApiClient {
     confirmDuplicate?: boolean
   ): Promise<DocumentDetail & { chunks?: number }>;
   relinkDocument(id: string, path: string, confirmLarge?: boolean): Promise<RelinkResult>;
+  /** 上传新文件并重新连接（文件型宿主：DSH/Web）。 */
+  relinkDocumentFile(
+    id: string,
+    file: Blob,
+    confirmLarge?: boolean
+  ): Promise<RelinkResult>;
   getDocumentFile(id: string): Promise<ArrayBuffer>;
   getDocumentFileSource(id: string): {
     url: string;
@@ -186,6 +199,8 @@ export interface ApiClient {
   ): Promise<DocumentDetail>;
   /** 上传笔记/批注里粘贴或选择的本地图片，返回可写进 Markdown 的 studianda-asset 地址。 */
   uploadNoteAsset(input: { dataUrl: string; filename?: string }): Promise<NoteAssetRecord>;
+  /** 读取笔记/批注图片原始字节（非 Electron 宿主用 HTTP 地址显示时可走这里）。 */
+  getNoteAsset(file: string): Promise<Blob>;
   /** 反向链接：哪些笔记/批注引用了当前目标。 */
   listBacklinks(input: {
     kind: 'note' | 'annotation' | 'document';
@@ -861,6 +876,21 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         body: JSON.stringify({ path, confirmLarge, confirmDuplicate })
       }),
 
+    async startDocumentUpload(file, filename, confirmLarge = false, confirmDuplicate = false) {
+      const form = new FormData();
+      form.append('file', file, filename);
+      const response = await fetch(`${base}/documents/import/start`, {
+        method: 'POST',
+        headers: {
+          ...headers,
+          ...(confirmLarge ? { 'x-studianda-confirm-large': 'true' } : {}),
+          ...(confirmDuplicate ? { 'x-studianda-confirm-duplicate': 'true' } : {})
+        },
+        body: form
+      });
+      return readJson<{ jobId: string }>(response);
+    },
+
     getDocumentImportJob: (id) =>
       request<ImportJobRecord>(`/documents/import/jobs/${encodeURIComponent(id)}`),
 
@@ -889,6 +919,20 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         method: 'POST',
         body: JSON.stringify({ path, confirmLarge })
       }),
+
+    async relinkDocumentFile(id, file, confirmLarge = false) {
+      const form = new FormData();
+      form.append('file', file, 'replacement.pdf');
+      const response = await fetch(`${base}/documents/${encodeURIComponent(id)}/relink`, {
+        method: 'POST',
+        headers: {
+          ...headers,
+          ...(confirmLarge ? { 'x-studianda-confirm-large': 'true' } : {})
+        },
+        body: form
+      });
+      return readJson<RelinkResult>(response);
+    },
 
     getDocumentFileSource: (id) => ({
       url: `${base}/documents/${encodeURIComponent(id)}/file`,
@@ -949,6 +993,8 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         method: 'POST',
         body: JSON.stringify(input)
       }),
+
+    getNoteAsset: (file) => requestBlob(`/note-assets/${encodeURIComponent(file)}`),
 
     listBacklinks: (input) => {
       const query = new URLSearchParams({

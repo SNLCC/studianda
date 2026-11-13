@@ -451,3 +451,48 @@ describe('POST /api/v1/note-assets', () => {
     expect((response.json() as { sizeBytes: number }).sizeBytes).toBe(3 * 1024 * 1024);
   });
 });
+
+describe('GET /api/v1/note-assets/:file', () => {
+  const dataDir = path.join(root, 'asset-get');
+  mkdirSync(dataDir, { recursive: true });
+  const store = new Store(dataDir);
+  const server = buildServer({ token, version: 'test-version', store, secrets: new SecretStore() });
+
+  afterAll(async () => {
+    await server.close();
+    store.close();
+  });
+
+  const headers = (): Record<string, string> => ({ 'x-studianda-token': token });
+
+  it('按文件名返回图片字节与 content-type', async () => {
+    const created = await server.inject({
+      method: 'POST',
+      url: '/api/v1/note-assets',
+      headers: headers(),
+      payload: { dataUrl: dataUrl('image/png', PNG_BYTES) }
+    });
+    expect(created.statusCode).toBe(200);
+    const record = created.json() as { id: string };
+
+    const response = await server.inject({
+      method: 'GET',
+      url: `/api/v1/note-assets/${record.id}.png`,
+      headers: headers()
+    });
+    expect(response.statusCode).toBe(200);
+    expect(String(response.headers['content-type'])).toContain('image/png');
+    expect(response.rawPayload).toEqual(PNG_BYTES);
+  });
+
+  it('拒绝路径穿越、分隔符与不存在的文件', async () => {
+    for (const url of [
+      '/api/v1/note-assets/..%2F..%2Fsecret',
+      '/api/v1/note-assets/%2E%2E%5Csecret',
+      '/api/v1/note-assets/missing.png'
+    ]) {
+      const response = await server.inject({ method: 'GET', url, headers: headers() });
+      expect(response.statusCode).toBe(404);
+    }
+  });
+});

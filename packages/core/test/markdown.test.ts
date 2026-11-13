@@ -80,6 +80,32 @@ describe('renderMarkdown（安全渲染）', () => {
     expect(dataImage).toContain('<img class="kr-md-image" src="data:image/png;base64,AAAA"');
   });
 
+  it('图片支持宿主注入的资产 URL 解析，链接保持存储格式', () => {
+    const html = renderMarkdown(
+      '![图](studianda-asset://note-assets/a.png) [附件](studianda-asset://note-assets/a.pdf)',
+      {
+        resolveAssetUrl: (url) =>
+          url.replace(
+            'studianda-asset://note-assets/',
+            'http://127.0.0.1:4321/api/v1/note-assets/'
+          )
+      }
+    );
+    expect(html).toContain('src="http://127.0.0.1:4321/api/v1/note-assets/a.png"');
+    expect(html).toContain('href="studianda-asset://note-assets/a.pdf"');
+  });
+
+  it('编辑态保留原始资产地址，序列化不会把显示地址写回 Markdown', () => {
+    const html = renderMarkdown('![图](studianda-asset://note-assets/a.png)', {
+      resolveAssetUrl: (url) =>
+        url.replace('studianda-asset://note-assets/', '/api/v1/note-assets/'),
+      assetSourceAttribute: 'data-studianda-asset-src'
+    });
+    expect(html).toContain(
+      'src="/api/v1/note-assets/a.png" data-studianda-asset-src="studianda-asset://note-assets/a.png"'
+    );
+  });
+
   it('HTML 注入被转义，<script> 不会生效', () => {
     const html = renderMarkdown('<script>alert(1)</script>');
     expect(html).toBe('<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>');

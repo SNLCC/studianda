@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PDFDocument } from 'pdf-lib';
@@ -106,5 +106,70 @@ describe('POST /api/v1/documents/import/start', () => {
       headers: headers()
     });
     expect(response.statusCode).toBe(404);
+  });
+
+  it('accepts a multipart upload and runs the same background job', async () => {
+    const pdf = await PDFDocument.create();
+    pdf.setTitle('multipart-upload');
+    pdf.addPage();
+    const bytes = Buffer.from(await pdf.save());
+    const boundary = '----studianda-test-boundary';
+    const body = Buffer.concat([
+      Buffer.from(
+        `--${boundary}\r\n` +
+          'Content-Disposition: form-data; name="file"; filename="上传.pdf"\r\n' +
+          'Content-Type: application/pdf\r\n\r\n'
+      ),
+      bytes,
+      Buffer.from(`\r\n--${boundary}--\r\n`)
+    ]);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/v1/documents/import/start',
+      headers: {
+        ...headers(),
+        'content-type': `multipart/form-data; boundary=${boundary}`
+      },
+      payload: body
+    });
+    expect(response.statusCode).toBe(200);
+    const job = await pollJob((response.json() as { jobId: string }).jobId);
+    expect(job.state, JSON.stringify(job.error)).toBe('done');
+    expect(job.documentName).toBe('上传.pdf');
+    expect(job.documentId).toBeTruthy();
+
+    // 上传临时文件在任务结束后清理。
+    const importsDir = path.join(dataDir, 'imports');
+    if (existsSync(importsDir)) expect(readdirSync(importsDir)).toHaveLength(0);
+
+    // 重新连接同样支持 multipart 上传，并用新文件替换附件。
+    const replacement = await PDFDocument.create();
+    replacement.setTitle('replacement');
+    replacement.addPage();
+    replacement.addPage();
+    const replacementBytes = Buffer.from(await replacement.save());
+    const boundary2 = '----studianda-relink-boundary';
+    const relinkBody = Buffer.concat([
+      Buffer.from(
+        `--${boundary2}\r\n` +
+          'Content-Disposition: form-data; name="file"; filename="replacement.pdf"\r\n' +
+          'Content-Type: application/pdf\r\n\r\n'
+      ),
+      replacementBytes,
+      Buffer.from(`\r\n--${boundary2}--\r\n`)
+    ]);
+    const relink = await server.inject({
+      method: 'POST',
+      url: `/api/v1/documents/${job.documentId}/relink`,
+      headers: {
+        ...headers(),
+        'content-type': `multipart/form-data; boundary=${boundary2}`
+      },
+      payload: relinkBody
+    });
+    expect(relink.statusCode).toBe(200);
+    expect(store.getDocument(job.documentId!)?.pages).toBe(2);
+    if (existsSync(importsDir)) expect(readdirSync(importsDir)).toHaveLength(0);
   });
 });

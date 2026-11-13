@@ -11,6 +11,7 @@ import {
   type FolderSummary
 } from '@studianda/shared';
 import { useEffect, useState, type JSX } from 'react';
+import { onHostKeyDown } from '@studianda/ui';
 
 /** 弹窗提交的草稿：全部是清洗后的最终值，调用方不再二次加工。 */
 export interface DocumentInfoDraft {
@@ -53,11 +54,9 @@ export function DocumentInfoDialog({
   const [localError, setLocalError] = useState('');
 
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent): void => {
+    return onHostKeyDown((event) => {
       if (event.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    });
   }, [onClose]);
 
   /** 校验并追加输入框里的标签；返回是否已加进草稿。 */

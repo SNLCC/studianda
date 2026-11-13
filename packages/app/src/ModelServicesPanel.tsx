@@ -214,6 +214,11 @@ export function ModelServicesPanel({
   const save = useMutation({
     mutationFn: async (next: ModelServicesConfig) => {
       if (apiKey.trim() && draft) {
+        if (!adapter.setSecret) {
+          throw new Error(
+            '当前宿主不支持保存密钥；请先在宿主设置中配置模型服务凭据，或使用无需密钥的本机模型。'
+          );
+        }
         await adapter.setSecret(`platform.${draft.id}.api_key`, apiKey.trim());
       }
       return api.updateModelServices({
@@ -576,8 +581,13 @@ export function ModelServicesPanel({
                   onChange={(event) => setApiKey(event.target.value)}
                   placeholder={draft.hasKey ? '已保存，留空保留' : '填写平台 API Key'}
                   autoComplete="off"
+                  disabled={!adapter.setSecret}
                 />
-                {selectedPreset?.keyHint ? (
+                {!adapter.setSecret ? (
+                  <small className="kr-muted">
+                    当前宿主不支持保存密钥；请先在宿主设置中配置模型服务凭据，或使用无需密钥的本机模型。
+                  </small>
+                ) : selectedPreset?.keyHint ? (
                   <small className="kr-muted">{selectedPreset.keyHint}</small>
                 ) : null}
               </label>

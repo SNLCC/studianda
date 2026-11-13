@@ -9,6 +9,8 @@
  * shared 的 renderInline 已支持这些字面量转义（`\*` 等）。
  */
 
+import { ASSET_SOURCE_ATTRIBUTE } from './asset-url.js';
+
 const BLOCK_TAGS = new Set([
   'P',
   'DIV',
@@ -176,7 +178,8 @@ function serializeAnchor(node: Node): string {
 }
 
 function serializeImage(node: Node): string {
-  const src = getAttr(node, 'src') ?? '';
+  // 编辑态可能把显示地址（HTTP）放在 src，把原始 studianda-asset 地址放在 data 属性。
+  const src = getAttr(node, ASSET_SOURCE_ATTRIBUTE) ?? getAttr(node, 'src') ?? '';
   if (!src) return '';
   const alt = (getAttr(node, 'alt') ?? '').replace(/[[\]()]/g, ' ');
   return `![${alt}](${src})`;

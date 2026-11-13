@@ -87,6 +87,9 @@ importers:
       '@studianda/api-client':
         specifier: workspace:*
         version: link:../api-client
+      '@studianda/host':
+        specifier: workspace:*
+        version: link:../host
       '@studianda/shared':
         specifier: workspace:*
         version: link:../shared
@@ -152,6 +155,16 @@ importers:
       vitest:
         specifier: ^4.0.0
         version: 4.1.12(@types/node@24.19.2)(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))
+
+  packages/host:
+    dependencies:
+      '@studianda/shared':
+        specifier: workspace:*
+        version: link:../shared
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
 
   packages/shared:
     devDependencies:

@@ -1,4 +1,16 @@
 export { getAppPortalRoot, setAppPortalRoot } from './portal-root.js';
+export {
+  ASSET_SOURCE_ATTRIBUTE,
+  resolveAssetUrl,
+  setAssetUrlResolver,
+  type AssetUrlResolver
+} from './asset-url.js';
+export {
+  getHostRoot,
+  isEventInHostScope,
+  onHostKeyDown,
+  setHostRoot
+} from './host-scope.js';
 export { StructurePanel, type StructurePanelProps } from './StructurePanel.js';
 export { HealthCard, type HealthCardProps, type HealthState } from './HealthCard.js';
 export { BrandMark } from './BrandMark.js';

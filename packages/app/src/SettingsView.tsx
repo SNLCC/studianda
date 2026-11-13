@@ -10,6 +10,7 @@ import type {
 } from '@studianda/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useLayoutEffect, useRef, useState, type JSX } from 'react';
+import { onHostKeyDown } from '@studianda/ui';
 import { HintMark, SendingNotice } from './Hint.js';
 import { SettingsFeedbackProvider, useSettingsFeedback } from './SettingsFeedback.js';
 import type { RuntimeAdapter } from './runtime.js';
@@ -228,7 +229,7 @@ function SettingsViewContent({
         first.focus();
       }
     };
-    document.addEventListener('keydown', onKeyDown);
+    const removeKeyDown = onHostKeyDown(onKeyDown);
     // 背景 inert：设置打开期间，Tab/点击/读屏都不应到达背后的侧栏与阅读区；
     // 设置遮罩是 .kr-app-shell 的直接子元素，其余兄弟节点统一 inert，关闭时恢复。
     const shell = root?.closest('.kr-app-shell');
@@ -243,7 +244,7 @@ function SettingsViewContent({
       }
     }
     return () => {
-      document.removeEventListener('keydown', onKeyDown);
+      removeKeyDown();
       for (const element of inerted) element.removeAttribute('inert');
       previouslyFocused?.focus?.();
     };
@@ -436,6 +437,9 @@ function SettingsViewContent({
     queryFn: async () => (adapter.getDataLocation ? adapter.getDataLocation() : null),
     enabled: Boolean(adapter.getDataLocation)
   });
+  const canReadDataLocation = Boolean(adapter.getDataLocation);
+  const canChangeDataLocation = Boolean(adapter.changeDataLocation);
+  const canOpenDataLocation = Boolean(adapter.openDataLocation);
 
   const zoteroQuery = useQuery({
     queryKey: ['zotero-config'],
@@ -2057,30 +2061,46 @@ function SettingsViewContent({
       <section className="kr-settings__section">
         <SectionHeading
           title="资料位置"
-          hint="文献、批注、笔记和索引都保存在这里。更改位置采用「复制」方式：资料复制到新文件夹并重启应用。"
+          hint={
+            canChangeDataLocation
+              ? '文献、批注、笔记和索引都保存在这里。更改位置采用「复制」方式：资料复制到新文件夹并重启应用。'
+              : '资料目录由当前宿主管理；本项目不在此处提供迁移操作。'
+          }
         />
-        <p className="kr-muted">修改资料保存位置。</p>
-        <p className="kr-muted">原目录文件不会自动删除，确认新位置正常后可自行清理。</p>
-        <p className="kr-muted">
-          当前：<code>{dataLocationQuery.data ?? '读取中…'}</code>
-        </p>
-        <div className="kr-settings__actions">
-          <button
-            type="button"
-            onClick={() => {
-              if (
-                appDialogs.confirm(
-                  '更改资料位置会复制当前全部资料到新文件夹，然后重启应用。原目录文件会保留，作为迁移期间的安全备份；确认新位置正常后可自行删除。确定继续？'
-                )
-              ) {
-                changeDataLocation.mutate();
-              }
-            }}
-            disabled={changeDataLocation.isPending}
-          >
-            {changeDataLocation.isPending ? '准备中…' : '更改资料位置'}
-          </button>
-        </div>
+        {canReadDataLocation ? (
+          <p className="kr-muted">
+            当前：<code>{dataLocationQuery.data ?? '读取中…'}</code>
+          </p>
+        ) : (
+          <p className="kr-muted">当前运行环境不提供资料位置信息，资料目录由宿主管理。</p>
+        )}
+        {canChangeDataLocation ? (
+          <>
+            <p className="kr-muted">修改资料保存位置。</p>
+            <p className="kr-muted">原目录文件不会自动删除，确认新位置正常后可自行清理。</p>
+            <div className="kr-settings__actions">
+              <button
+                type="button"
+                onClick={() => {
+                  if (
+                    appDialogs.confirm(
+                      '更改资料位置会复制当前全部资料到新文件夹，然后重启应用。原目录文件会保留，作为迁移期间的安全备份；确认新位置正常后可自行删除。确定继续？'
+                    )
+                  ) {
+                    changeDataLocation.mutate();
+                  }
+                }}
+                disabled={changeDataLocation.isPending}
+              >
+                {changeDataLocation.isPending ? '准备中…' : '更改资料位置'}
+              </button>
+            </div>
+          </>
+        ) : (
+          <p className="kr-muted">
+            当前运行环境不支持更改资料位置；如需迁移，请使用宿主提供的资料管理功能。
+          </p>
+        )}
       </section>
 
       <section className="kr-settings__section">
@@ -3061,7 +3081,14 @@ function SettingsViewContent({
           <button type="button" onClick={() => void copyDataDir()}>
             复制数据目录
           </button>
-          <button type="button" onClick={openDataDir}>
+          <button
+            type="button"
+            onClick={openDataDir}
+            disabled={!canOpenDataLocation}
+            title={
+              canOpenDataLocation ? undefined : '当前运行环境不支持自动打开文件管理器'
+            }
+          >
             打开数据目录
           </button>
         </div>

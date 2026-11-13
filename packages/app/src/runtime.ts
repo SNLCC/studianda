@@ -1,85 +1,11 @@
-import type { RuntimeInfo, UpdateState } from '@studianda/shared';
-
-/** 无边框窗口控制：只有桌面壳实现；宿主没有原生窗口时可不实现。 */
-export interface WindowControlsAdapter {
-  minimize(): void;
-  toggleMaximize(): void;
-  close(): void;
-  isMaximized(): Promise<boolean>;
-  /** 订阅最大化状态；返回取消订阅函数。 */
-  onMaximized(callback: (maximized: boolean) => void): () => void;
-}
-
-/**
- * 应用内更新能力（可选壳能力）。
- *
- * 只有桌面壳实现；宿主（如将来的 DSH 插件）没有更新概念时不实现，
- * 设置页的「关于与更新」分区会降级显示"当前环境不支持应用内更新"。
- * 状态更新走 `onStatus` 推送，`getState` 用于界面挂载时补一次当前状态。
- */
-export interface UpdateAdapter {
-  getState(): Promise<UpdateState | null>;
-  /** 自动检查更新偏好（默认关；仅影响启动后的自动检查，手动检查仍可用）。 */
-  getAutoCheck?(): Promise<boolean | null>;
-  setAutoCheck?(enabled: boolean): Promise<boolean | null>;
-  /** manual=true 表示用户主动点「检查更新」，失败时界面要给出提示。 */
-  check(manual: boolean): Promise<UpdateState | null>;
-  /** 用户确认后开始下载（不自动下载）。 */
-  download(): Promise<UpdateState | null>;
-  /** 安装已下载的更新：主进程会先备份资料、停止 Core，再静默安装。 */
-  install(): Promise<{ ok: boolean; message?: string }>;
-  onStatus(callback: (state: UpdateState) => void): () => void;
-}
-
-/** 首次启动资料位置检查结果。 */
-export interface DataSetupState {
-  configured: boolean;
-  current: string;
-}
-
-/** 壳适配器：Electron 或将来的 DSH 插件各自实现；UI 不直接依赖壳 API。 */
-export interface RuntimeAdapter {
-  getRuntime(): Promise<RuntimeInfo | null>;
-  /** 让用户选择本地 PDF；返回 null 表示取消。DSH 插件以后用自己的文件选择器实现。 */
-  pickPdf(): Promise<string | null>;
-  pickDirectory(): Promise<string | null>;
-  /** 让用户选择 Markdown 库文件夹；返回 null 表示取消。 */
-  pickMarkdownVault?(): Promise<string | null>;
-  /** 用系统默认程序打开笔记附件（studianda-asset URL）。 */
-  openNoteAsset?(url: string): Promise<{ ok: boolean; message: string }>;
-  getSecretStatus(): Promise<{ encryptionAvailable: boolean; configured: string[] }>;
-  setSecret(
-    name: string,
-    value: string
-  ): Promise<{ encryptionAvailable: boolean; configured: string[] }>;
-  clearSecret(
-    name: string
-  ): Promise<{ encryptionAvailable: boolean; configured: string[] }>;
-  getDataLocation?(): Promise<string>;
-  openLegalNotice?(): Promise<{ ok: boolean }>;
-  /** 打开安装包内完整版《使用须知与隐私说明》；未实现时调用方回退到仓库文档链接。 */
-  openUsageNotice?(): Promise<{ ok: boolean; message?: string }>;
-  /** 在本机文件管理器打开数据目录；失败时 message 里带路径供用户手动打开。 */
-  openDataLocation?(): Promise<{ ok: boolean; message: string }>;
-  changeDataLocation?(): Promise<{ ok: boolean; message: string }>;
-
-  /* ---- 以下为可选壳能力：未实现时调用方必须降级，不能假定存在 ---- */
-
-  /** 无边框窗口按钮；未实现时由宿主提供自己的窗口装饰。 */
-  windowControls?: WindowControlsAdapter;
-  /** 首次启动资料位置检查；未实现时视为已配置（宿主自己管理数据目录）。 */
-  getDataSetup?(): Promise<DataSetupState>;
-  /** 选择并初始化资料位置（桌面壳首次启动页）。 */
-  setupDataLocation?(): Promise<{ ok: boolean; message: string }>;
-  /** 打开外部链接（仅 http/https/mailto）；未实现时调用方可用浏览器打开。 */
-  openExternal?(url: string): Promise<{ ok: boolean; message?: string }>;
-  /** 清空用户数据时顺带删除 userData 下的渲染/更新日志；宿主未实现时跳过。 */
-  clearUserDataLogs?(): Promise<{ ok: boolean; removed: string[] }>;
-  /** 保存字节到用户选择的文件（导出）；未实现时调用方可用浏览器下载。 */
-  saveBlob?(data: Uint8Array, filename: string): Promise<{ ok: boolean; message?: string }>;
-  /** 应用内更新；未实现时设置页不显示更新操作（只显示当前版本）。 */
-  update?: UpdateAdapter;
-}
+export type {
+  DataSetupState,
+  HostCapabilities,
+  HostKind,
+  RuntimeAdapter,
+  UpdateAdapter,
+  WindowControlsAdapter
+} from '@studianda/host';
 
 /* ------------------------------------------------------------------------- *
  * 语音输入：录音约束与浏览器能力探测（纯函数，界面与设置页共用）

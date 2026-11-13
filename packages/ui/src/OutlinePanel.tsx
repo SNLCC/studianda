@@ -2,6 +2,7 @@ import { useEffect, useState, type JSX, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { NavigationStatus, TocNavigationPreview } from '@studianda/shared';
 import { getAppPortalRoot } from './portal-root.js';
+import { onHostKeyDown } from './host-scope.js';
 
 /**
  * 阅读器「目录」面板。
@@ -157,11 +158,9 @@ export function OutlinePanel({
   const busy = Boolean(generating) || generatePending !== null;
   useEffect(() => {
     if (!generatorOpen) return;
-    const onKey = (event: KeyboardEvent): void => {
+    return onHostKeyDown((event) => {
       if (event.key === 'Escape') setGeneratorOpen(false);
-    };
-    window.document.addEventListener('keydown', onKey);
-    return () => window.document.removeEventListener('keydown', onKey);
+    });
   }, [generatorOpen]);
   // 后台生成（超过同步页数上限）收尾：有结果才关弹窗；失败/空结果在弹窗内明说。
   useEffect(() => {

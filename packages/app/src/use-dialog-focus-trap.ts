@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { onHostKeyDown } from '@studianda/ui';
 
 /**
  * 全局弹窗焦点陷阱（兜底）：所有 `aria-modal="true"` 的弹窗自动获得
@@ -107,11 +108,11 @@ export function useDialogFocusTrap(): void {
     });
     syncModal();
     document.addEventListener('focusin', onFocusIn, true);
-    document.addEventListener('keydown', onKeyDown, true);
+    const removeKeyDown = onHostKeyDown(onKeyDown, true);
     return () => {
       observer.disconnect();
       document.removeEventListener('focusin', onFocusIn, true);
-      document.removeEventListener('keydown', onKeyDown, true);
+      removeKeyDown();
     };
   }, []);
 }

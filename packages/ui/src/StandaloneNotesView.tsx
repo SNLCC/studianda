@@ -25,6 +25,7 @@ import { Backlinks, type BacklinkTarget } from './Backlinks.js';
 import { MarkdownEditor, type MarkdownImageUpload } from './MarkdownEditor.js';
 import { MarkdownImportDialog } from './MarkdownImportDialog.js';
 import { confirmPurgeNote } from './note-purge.js';
+import { onHostKeyDown } from './host-scope.js';
 import { resolveConfirm, type ConfirmAction } from './dialog-utils.js';
 import {
   buildStandaloneFolderTree,
@@ -569,13 +570,13 @@ export function StandaloneNotesView({
       close();
     };
     document.addEventListener('pointerdown', onPointerDown, true);
-    document.addEventListener('keydown', onKeyDown, true);
+    const removeKeyDown = onHostKeyDown(onKeyDown, true);
     document.addEventListener('scroll', close, true);
     window.addEventListener('resize', close);
     window.addEventListener('blur', close);
     return () => {
       document.removeEventListener('pointerdown', onPointerDown, true);
-      document.removeEventListener('keydown', onKeyDown, true);
+      removeKeyDown();
       document.removeEventListener('scroll', close, true);
       window.removeEventListener('resize', close);
       window.removeEventListener('blur', close);

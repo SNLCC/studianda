@@ -115,6 +115,22 @@ interface RenderState {
   /** 脚注定义：label → 内容，渲染时按引用顺序输出。 */
   footnotes: Map<string, string>;
   usedFootnotes: string[];
+  /** 宿主注入的资产 URL 解析：只作用于 studianda-asset:，不改变存储格式。 */
+  resolveAssetUrl?: (url: string) => string;
+  /** 编辑态用：把原始资产地址写进该属性，序列化时优先读它，避免把显示地址写回 Markdown。 */
+  assetSourceAttribute?: string;
+}
+
+/**
+ * Markdown 渲染选项。
+ *
+ * 默认不解析资产 URL，Electron 继续使用 studianda-asset:// 自定义协议；
+ * DSH/Web 宿主可注入解析函数，把同一份 Markdown 里的图片映射到 HTTP 地址，
+ * 不需要改写笔记/批注的存储内容。
+ */
+export interface MarkdownRenderOptions {
+  resolveAssetUrl?: (url: string) => string;
+  assetSourceAttribute?: string;
 }
 
 function footnoteId(label: string): string {
@@ -196,9 +212,16 @@ function renderInline(raw: string, state: RenderState): string {
     if (rest.startsWith('![')) {
       const match = /^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/.exec(rest);
       if (match) {
-        const url = normalizedUrl(match[2]!, 'image');
-        if (url) {
-          out += `<img class="kr-md-image" src="${escapeHtml(url)}" alt="${escapeHtml(
+        const rawUrl = normalizedUrl(match[2]!, 'image');
+        if (rawUrl) {
+          const url = /^studianda-asset:/i.test(rawUrl)
+            ? (state.resolveAssetUrl?.(rawUrl) ?? rawUrl)
+            : rawUrl;
+          const sourceAttribute =
+            state.assetSourceAttribute && url !== rawUrl
+              ? ` ${state.assetSourceAttribute}="${escapeHtml(rawUrl)}"`
+              : '';
+          out += `<img class="kr-md-image" src="${escapeHtml(url)}"${sourceAttribute} alt="${escapeHtml(
             match[1] ?? ''
           )}" loading="lazy" />`;
           index += match[0].length;
@@ -417,9 +440,20 @@ function renderTable(
  * 渲染 Markdown 为安全 HTML。
  * 所有用户文本都会转义；只生成固定白名单标签；危险 URL 协议直接按文本显示。
  */
-export function renderMarkdown(source: string): string {
+export function renderMarkdown(
+  source: string,
+  options: MarkdownRenderOptions = {}
+): string {
+  const attribute = options.assetSourceAttribute;
+  const assetSourceAttribute =
+    attribute && /^[a-z][a-z0-9-]*$/i.test(attribute) ? attribute : undefined;
   const lines = (source ?? '').replace(/\r\n?/g, '\n').split('\n');
-  const state: RenderState = { footnotes: new Map(), usedFootnotes: [] };
+  const state: RenderState = {
+    footnotes: new Map(),
+    usedFootnotes: [],
+    resolveAssetUrl: options.resolveAssetUrl,
+    assetSourceAttribute
+  };
   const body: string[] = [];
   for (const line of lines) {
     const footnote = /^\s*\[\^([^\]\s]+)\]:\s*(.*)$/.exec(line);

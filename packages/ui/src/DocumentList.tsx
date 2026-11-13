@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type React from 'react';
 import { documentTypeLabel, type DocumentSummary } from '@studianda/shared';
+import { onHostKeyDown } from './host-scope.js';
 
 export interface DocumentTranslationStatus {
   status: 'none' | 'running' | 'partial' | 'done' | 'error';
@@ -218,10 +219,10 @@ export function DocumentList({
       menuTriggerRef.current?.focus();
     };
     document.addEventListener('pointerdown', closeOnOutside);
-    document.addEventListener('keydown', closeOnEscape);
+    const removeKeyDown = onHostKeyDown(closeOnEscape);
     return () => {
       document.removeEventListener('pointerdown', closeOnOutside);
-      document.removeEventListener('keydown', closeOnEscape);
+      removeKeyDown();
     };
   }, [openMenuId]);
 

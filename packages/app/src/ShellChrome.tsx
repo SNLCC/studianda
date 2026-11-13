@@ -1,4 +1,4 @@
-import { BrandMark } from '@studianda/ui';
+import { BrandMark, onHostKeyDown } from '@studianda/ui';
 import React, { useEffect, useState } from 'react';
 import type { DataSetupState, RuntimeAdapter } from './runtime.js';
 import { SHORTCUT_FIELDS } from './shortcut-defaults.js';
@@ -30,11 +30,9 @@ export function ShellTitleBar({ adapter }: { adapter: RuntimeAdapter }): React.J
   // 帮助弹层：Esc 关闭（与阅读器/设置的 Esc 语义一致）。
   useEffect(() => {
     if (!showHelp) return undefined;
-    const onKeyDown = (event: KeyboardEvent): void => {
+    return onHostKeyDown((event) => {
       if (event.key === 'Escape') setShowHelp(false);
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    });
   }, [showHelp]);
 
   if (!controls) return null;

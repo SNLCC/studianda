@@ -1,0 +1,21 @@
+{
+  "global-keydown": [
+    {
+      "file": "packages/ui/src/host-scope.ts",
+      "reason": "唯一允许注册全局 keydown 的宿主作用域实现；共享组件必须经 onHostKeyDown。"
+    }
+  ],
+  "asset-url-literal": [
+    {
+      "file": "packages/app/src/StudiandaApp.tsx",
+      "value": "studianda-asset://app/",
+      "reason": "PDF.js 资源基址的桌面分支；待宿主提供 base URL 能力后移除。"
+    },
+    {
+      "file": "packages/ui/src/MarkdownContent.tsx",
+      "value": "studianda-asset:",
+      "reason": "笔记附件 URL 前缀，用于渲染与点击判定，不是宿主判断。"
+    }
+  ],
+  "required-capability": []
+}

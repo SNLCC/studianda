@@ -2,7 +2,13 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
 const root = path.resolve(import.meta.dirname, '..');
-const SOURCE_DIRS = ['packages/core/src', 'packages/app/src', 'packages/ui/src', 'apps/desktop/src'];
+const SOURCE_DIRS = [
+  'packages/core/src',
+  'packages/app/src',
+  'packages/ui/src',
+  'packages/host/src',
+  'apps/desktop/src'
+];
 const failures = [];
 
 function walk(dir, visit) {

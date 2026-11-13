@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@studianda/api-client": "workspace:*",
+    "@studianda/host": "workspace:*",
     "@studianda/shared": "workspace:*",
     "@studianda/ui": "workspace:*",
     "@tanstack/react-query": "^5.90.0",

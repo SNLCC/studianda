@@ -182,6 +182,15 @@ const TRANSLATION_TARGETS = [
   { id: 'ru', name: 'Русский' }
 ];
 
+/** note-assets 只存图片；读取路由按扩展名给出类型，未知类型按二进制下载。 */
+const NOTE_ASSET_CONTENT_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp'
+};
+
 function translationConfig(options: {
   store: Store;
 }): TranslationConfigRecord {
@@ -690,6 +699,40 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     options.store.getNoteAssetReindexStatus()
   );
 
+  /**
+   * 读取笔记/批注图片的原始字节。
+   *
+   * Electron 仍走 studianda-asset:// 自定义协议；DSH/Web 宿主可以把同一份
+   * `studianda-asset://note-assets/<file>` 映射到这里，从而不改写 Markdown 存储格式。
+   * 只允许 note-assets 目录下的纯文件名，拒绝分隔符与 ..，避免任意文件读取。
+   */
+  app.get(`${API_PREFIX}/note-assets/:file`, async (request, reply) => {
+    const { file } = request.params as { file?: string };
+    if (
+      !file ||
+      file.includes('\0') ||
+      file.includes('..') ||
+      file !== path.basename(file) ||
+      file.includes('/') ||
+      file.includes('\\')
+    ) {
+      return notFound(reply, '图片不存在');
+    }
+    const target = path.join(options.store.dataDir, 'note-assets', file);
+    let data: Buffer;
+    try {
+      data = readFileSync(target);
+    } catch {
+      return notFound(reply, '图片不存在');
+    }
+    const contentType =
+      NOTE_ASSET_CONTENT_TYPES[path.extname(file).toLowerCase()] ?? 'application/octet-stream';
+    return reply
+      .header('content-type', contentType)
+      .header('cache-control', 'private, max-age=86400')
+      .send(data);
+  });
+
   // Markdown 库扫描：只读目录，返回可导入的 Markdown 笔记与非 Markdown 附件清单。
   app.post(`${API_PREFIX}/markdown/scan`, async (request, reply) => {
     const body = (request.body ?? {}) as { vaultPath?: unknown };
@@ -1197,20 +1240,70 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   });
 
   // 导入任务：解析在后台跑，返回 jobId；前端轮询 /documents/import/jobs/:id 显示进度并可取消。
+  // 同时接受 JSON（本机路径，桌面壳）与 multipart（浏览器/DSH 上传）两种来源。
   app.post(`${API_PREFIX}/documents/import/start`, async (request, reply) => {
-    const body = request.body as {
-      path?: unknown;
-      confirmLarge?: unknown;
-      confirmDuplicate?: unknown;
-    } | null;
-    if (!body || typeof body.path !== 'string' || body.path.trim() === '') {
-      return badRequest(reply, '需要文件路径');
+    const contentType = String(request.headers['content-type'] ?? '').toLowerCase();
+    const isMultipart = contentType.includes('multipart/form-data');
+    let sourcePath: string | null = null;
+    let sourceName: string | undefined;
+    let temporaryPath: string | null = null;
+    let confirmLarge = false;
+    let confirmDuplicate = false;
+
+    const removeTemporary = (): void => {
+      if (!temporaryPath) return;
+      try {
+        unlinkSync(temporaryPath);
+      } catch {
+        // 临时文件已被清理
+      }
+      temporaryPath = null;
+    };
+
+    if (isMultipart) {
+      let upload;
+      try {
+        upload = await request.file();
+      } catch {
+        return badRequest(reply, '需要 multipart 文件上传');
+      }
+      if (!upload) return badRequest(reply, '缺少 PDF 文件');
+
+      const tempDir = path.join(options.store.dataDir, 'imports');
+      mkdirSync(tempDir, { recursive: true });
+      temporaryPath = path.join(tempDir, `${randomUUID()}.pdf`);
+      try {
+        await pipeline(upload.file, createWriteStream(temporaryPath));
+      } catch (error) {
+        removeTemporary();
+        return badRequest(reply, error instanceof Error ? error.message : '上传失败');
+      }
+      sourcePath = temporaryPath;
+      sourceName =
+        path.basename(upload.filename || '未命名.pdf').replace(/[\\/]/g, '') || '未命名.pdf';
+      confirmLarge = request.headers['x-studianda-confirm-large'] === 'true';
+      confirmDuplicate = request.headers['x-studianda-confirm-duplicate'] === 'true';
+    } else {
+      const body = request.body as {
+        path?: unknown;
+        confirmLarge?: unknown;
+        confirmDuplicate?: unknown;
+      } | null;
+      if (!body || typeof body.path !== 'string' || body.path.trim() === '') {
+        return badRequest(reply, '需要文件路径');
+      }
+      sourcePath = body.path;
+      confirmLarge = body.confirmLarge === true;
+      confirmDuplicate = body.confirmDuplicate === true;
     }
-    const sourcePath = body.path;
+
+    if (!sourcePath) return badRequest(reply, '需要文件路径');
+    const resolvedSourcePath = sourcePath;
     const warningThreshold = Number(process.env.STUDIANDA_LARGE_FILE_WARN_BYTES ?? 100 * 1024 * 1024);
     try {
-      const stats = statSync(sourcePath);
-      if (!body.confirmLarge && stats.size > warningThreshold) {
+      const stats = statSync(resolvedSourcePath);
+      if (!confirmLarge && stats.size > warningThreshold) {
+        removeTemporary();
         return reply.code(409).send({
           error: API_ERROR_CODES.confirmationRequired,
           message:
@@ -1223,6 +1316,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         });
       }
     } catch (error) {
+      removeTemporary();
       return badRequest(reply, error instanceof Error ? error.message : '文件不存在');
     }
 
@@ -1235,17 +1329,21 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       startedAt: new Date().toISOString()
     };
     importJobs.set(id, record);
-    const confirmDuplicate = body.confirmDuplicate === true;
     void (async () => {
       record.state = 'running';
       try {
-        const document = await options.store.importDocument(sourcePath, undefined, confirmDuplicate, {
-          onProgress: (progress) => {
-            record.progress = progress.percent;
-            record.stage = progress.stage;
-          },
-          isCancelled: () => record.state === 'cancelling' || record.state === 'cancelled'
-        });
+        const document = await options.store.importDocument(
+          resolvedSourcePath,
+          sourceName,
+          confirmDuplicate,
+          {
+            onProgress: (progress) => {
+              record.progress = progress.percent;
+              record.stage = progress.stage;
+            },
+            isCancelled: () => record.state === 'cancelling' || record.state === 'cancelled'
+          }
+        );
         record.state = 'done';
         record.progress = 100;
         record.stage = 'done';
@@ -1275,6 +1373,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           };
         }
       } finally {
+        removeTemporary();
         record.finishedAt = new Date().toISOString();
       }
     })();
@@ -2606,14 +2705,56 @@ export function buildServer(options: ServerOptions): FastifyInstance {
 
   app.post(`${API_PREFIX}/documents/:id/relink`, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const body = request.body as { path?: unknown; confirmLarge?: unknown } | null;
-    if (!body || typeof body.path !== 'string' || body.path.trim() === '') {
-      return badRequest(reply, '需要文件路径');
+    const contentType = String(request.headers['content-type'] ?? '').toLowerCase();
+    const isMultipart = contentType.includes('multipart/form-data');
+    let sourcePath: string | null = null;
+    let temporaryPath: string | null = null;
+    let confirmLarge = false;
+
+    const removeTemporary = (): void => {
+      if (!temporaryPath) return;
+      try {
+        unlinkSync(temporaryPath);
+      } catch {
+        // 临时文件已被清理
+      }
+      temporaryPath = null;
+    };
+
+    if (isMultipart) {
+      let upload;
+      try {
+        upload = await request.file();
+      } catch {
+        return badRequest(reply, '需要 multipart 文件上传');
+      }
+      if (!upload) return badRequest(reply, '缺少 PDF 文件');
+      const tempDir = path.join(options.store.dataDir, 'imports');
+      mkdirSync(tempDir, { recursive: true });
+      temporaryPath = path.join(tempDir, `${randomUUID()}.pdf`);
+      try {
+        await pipeline(upload.file, createWriteStream(temporaryPath));
+      } catch (error) {
+        removeTemporary();
+        return badRequest(reply, error instanceof Error ? error.message : '上传失败');
+      }
+      sourcePath = temporaryPath;
+      confirmLarge = request.headers['x-studianda-confirm-large'] === 'true';
+    } else {
+      const body = request.body as { path?: unknown; confirmLarge?: unknown } | null;
+      if (!body || typeof body.path !== 'string' || body.path.trim() === '') {
+        return badRequest(reply, '需要文件路径');
+      }
+      sourcePath = body.path;
+      confirmLarge = body.confirmLarge === true;
     }
+
+    if (!sourcePath) return badRequest(reply, '需要文件路径');
+    const resolvedSourcePath = sourcePath;
     const warningThreshold = Number(process.env.STUDIANDA_LARGE_FILE_WARN_BYTES ?? 100 * 1024 * 1024);
     try {
-      const stats = statSync(body.path);
-      if (!body.confirmLarge && stats.size > warningThreshold) {
+      const stats = statSync(resolvedSourcePath);
+      if (!confirmLarge && stats.size > warningThreshold) {
         return reply.code(409).send({
           error: API_ERROR_CODES.confirmationRequired,
           message:
@@ -2622,9 +2763,11 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           details: { sizeBytes: stats.size, thresholdBytes: warningThreshold }
         });
       }
-      return await options.store.relinkDocument(id, body.path);
+      return await options.store.relinkDocument(id, resolvedSourcePath);
     } catch (error) {
       return badRequest(reply, error instanceof Error ? error.message : '重新连接失败');
+    } finally {
+      removeTemporary();
     }
   });
 

@@ -8,6 +8,7 @@
     "rootDir": "src",
     "paths": {
       "@studianda/api-client": ["../api-client/dist/index.d.ts"],
+      "@studianda/host": ["../host/dist/index.d.ts"],
       "@studianda/shared": ["../shared/dist/index.d.ts"],
       "@studianda/ui": ["../ui/dist/index.d.ts"]
     }

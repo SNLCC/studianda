@@ -12,6 +12,7 @@ import type {
   SearchPlan
 } from '@studianda/shared';
 import { ChatMarkdown } from './ChatMarkdown.js';
+import { onHostKeyDown } from './host-scope.js';
 
 /** 预算确认提示里的范围标签（与 reading_scope 一一对应）。 */
 const BUDGET_SCOPE_LABEL: Record<string, string> = {
@@ -763,16 +764,14 @@ export function ChatPanel({
     }
   };
 
-  // Esc 停止录音（作废这次录音，不送识别）。
+  // Esc 停止录音（作废这次录音，不送识别）；只在应用宿主范围内生效。
   useEffect(() => {
     if (!recording) return;
-    const onKeyDown = (event: KeyboardEvent): void => {
+    return onHostKeyDown((event) => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
       finishRecording(true);
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    });
   }, [recording]);
 
   // 卸载/切换文档：标记未挂载、释放 MediaStream 并停止录音（不再送识别）。
