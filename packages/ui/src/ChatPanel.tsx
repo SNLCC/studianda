@@ -818,6 +818,24 @@ export function ChatPanel({
   const scopeTagOptions = Array.from(
     new Set(availableDocuments.flatMap((item) => item.tags ?? []))
   ).sort((left, right) => left.localeCompare(right, 'zh'));
+  const scopeTagKey = scopeTagOptions.join('\u0000');
+  const scopeDocumentKey = availableDocuments.map((item) => item.id).join('\u0000');
+  // 文献/笔记被删除后，它们最后占用的标签和文献 id 也应从已选范围里消失，
+  // 否则下一次提问会圈到一个空范围（看起来像「标签还在，但什么都没检索到」）。
+  useEffect(() => {
+    const knownTags = new Set(scopeTagOptions);
+    setScopeTags((current) => {
+      if (current.length === 0) return current;
+      const next = current.filter((tag) => knownTags.has(tag));
+      return next.length === current.length ? current : next;
+    });
+    const knownDocuments = new Set(availableDocuments.map((item) => item.id));
+    setScopeDocuments((current) => {
+      if (current.length === 0) return current;
+      const next = current.filter((id) => knownDocuments.has(id));
+      return next.length === current.length ? current : next;
+    });
+  }, [scopeTagKey, scopeDocumentKey]);
   const scopeFilter = scopeQuery.trim().toLowerCase();
   const readingOptions = {
     readingScope,
@@ -1094,7 +1112,6 @@ export function ChatPanel({
     readingScope === 'corpus'
       ? '跨文献精读会把更多原文放进上下文：会话历史按模型输入容量截断，更早轮次可能不进本轮。'
       : '独立会话按服务端保存的完整会话历史回答；超出模型输入预算时，更早轮次会自动压缩成摘要。';
-
   return (
     <div
       className="kr-chat"
@@ -2260,6 +2277,7 @@ export function ChatPanel({
                 {standalone ? (
                   <p>
                     范围：库内检索只检索库内原文页与笔记/批注，适合大多数问题；跨文献精读按所选文献读全文，成本较高。
+                    独立会话会自动按需多步检索（只读），不需要额外开关；阅读伙伴不启用这套检索。
                   </p>
                 ) : (
                   <p>范围：自动由问题判断；本页及相邻只读当前页附近；整篇读全文；跨文献按所选文献读。</p>

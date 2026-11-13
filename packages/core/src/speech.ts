@@ -6,6 +6,7 @@ import type { SpeechConfigRecord, SpeechTranscription } from '@studianda/shared'
 import type { SecretStore } from './secrets.js';
 import type { Store } from './store.js';
 import { readModelServices, resolveModelService } from './model-services.js';
+import { chatOutputOptions } from './model-protocol.js';
 import { requestMaxTokensFor, TASK_MAX_TOKENS } from './output-limit.js';
 
 const DEFAULTS = {
@@ -1092,7 +1093,7 @@ export async function correctTranscript(
       body: JSON.stringify({
         model: routed.model,
         temperature: 0,
-        max_tokens: maxTokens,
+        ...chatOutputOptions(routed.baseUrl, maxTokens),
         messages: [
           { role: 'system', content: CORRECTION_SYSTEM_PROMPT },
           {

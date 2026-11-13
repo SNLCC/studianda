@@ -2586,6 +2586,22 @@ export class Store {
       }
     }
 
+    // 独立会话与 Agent 已移除：一次性删除旧会话表与历史备份（不可恢复）。
+    const qaRemoved = this.db
+      .prepare("SELECT value FROM schema_meta WHERE key = 'standalone_qa_removed'")
+      .get() as { value?: string } | undefined;
+    if (!qaRemoved) {
+      this.db.exec('DROP TABLE IF EXISTS qa_messages; DROP TABLE IF EXISTS qa_sessions;');
+      try {
+        rmSync(path.join(this.dataDir, 'backups'), { recursive: true, force: true });
+      } catch {
+        // 备份目录删除失败不影响启动；下次启动会重试（标记在清理后写入）。
+      }
+      this.db
+        .prepare("INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('standalone_qa_removed', '1')")
+        .run();
+    }
+
     this.db
       .prepare('INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)')
       .run('schema_version', '19');
@@ -4341,8 +4357,8 @@ export class Store {
       documents: countOf('documents'),
       notes: countOf('notes'),
       annotations: countOf('annotations'),
-      messages: countOf('messages') + countOf('qa_messages'),
-      sessions: countOf('document_chat_sessions') + countOf('qa_sessions'),
+      messages: countOf('messages'),
+      sessions: countOf('document_chat_sessions'),
       translations: countOf('translation_segments'),
       note_assets: countOf('note_assets')
     };
@@ -4376,8 +4392,6 @@ export class Store {
       'folders',
       'messages',
       'document_chat_sessions',
-      'qa_messages',
-      'qa_sessions',
       'translation_pages',
       'translation_segments',
       'page_edits',
@@ -4570,6 +4584,20 @@ export class Store {
     return rows.map(toNote);
   }
 
+  /** 全库笔记（含文献笔记与独立笔记；不含回收站及已删除文献下的笔记）。资料库索引用，只取元数据。 */
+  listAllNotes(): NoteRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT n.id, n.document_id, n.page, n.quote, substr(n.content, 1, 400) AS content,
+                n.created, n.folder_path, n.tags
+         FROM notes n LEFT JOIN documents d ON d.id = n.document_id
+         WHERE n.deleted = 0 AND (n.document_id IS NULL OR n.document_id = '' OR d.deleted = 0)
+         ORDER BY n.created DESC LIMIT 2000`
+      )
+      .all() as unknown as NoteRow[];
+    return rows.map(toNote);
+  }
+
   /** 单条笔记（含独立笔记）；不存在或已删除返回 null。 */
   getNote(id: string): NoteRecord | null {
     const row = this.db
@@ -4743,10 +4771,14 @@ export class Store {
   // 笔记标签
   // -------------------------------------------------------------------------
 
-  /** 全库笔记标签（未删除笔记）去重排序。 */
+  /** 全库笔记标签（未删除笔记；已删除文献下的文献笔记不计入）。 */
   listNoteTags(): string[] {
     const rows = this.db
-      .prepare('SELECT tags FROM notes WHERE deleted = 0 AND tags IS NOT NULL')
+      .prepare(
+        `SELECT n.tags FROM notes n LEFT JOIN documents d ON d.id = n.document_id
+         WHERE n.deleted = 0 AND n.tags IS NOT NULL
+           AND (n.document_id IS NULL OR n.document_id = '' OR d.deleted = 0)`
+      )
       .all() as unknown as Array<{ tags?: string | null }>;
     const all = new Set<string>();
     for (const row of rows) {

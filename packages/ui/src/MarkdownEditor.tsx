@@ -927,10 +927,15 @@ export function MarkdownEditor({
     sessionEditorMode = 'source';
     const markdown = serializeRich();
     setEditorMode('source');
-    if (markdown !== null && markdown !== lastSerializedRef.current) {
+    if (markdown !== null) {
+      // 只比较去掉首尾空白后的正文：渲染/序列化本身可能规范化空行或行尾空格，
+      // 没有真实修改时不能把它误判成「未保存」。
+      const changed = markdown.trim() !== lastSerializedRef.current.trim();
       lastSerializedRef.current = markdown;
-      lastInputAtRef.current = 0;
-      commit(markdown, markdown.length, markdown.length, { focus: false });
+      if (changed) {
+        lastInputAtRef.current = 0;
+        commit(markdown, markdown.length, markdown.length, { focus: false });
+      }
     }
   };
 

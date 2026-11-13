@@ -4,6 +4,7 @@ import type { Store } from './store.js';
 import { modelPlanToReadingPlan } from './planning.js';
 import { getSearchConfig } from './web-search.js';
 import { resolveModelService } from './model-services.js';
+import { chatOutputOptions } from './model-protocol.js';
 
 const ROUTE_INSTRUCTION =
   'QUESTION_ROUTE：判断用户本轮需要什么。只返回 JSON {"document":true,"search":false,"reason":"简短理由","reply":""}。' +
@@ -310,7 +311,7 @@ export async function routeQuestion(
       body: JSON.stringify({
         model: config.model,
         temperature: 0,
-        max_tokens: 1024,
+        ...chatOutputOptions(config.baseUrl, 1024),
         messages: [
           { role: 'system', content: ROUTE_INSTRUCTION },
           {

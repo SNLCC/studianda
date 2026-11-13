@@ -551,6 +551,9 @@ export function StandaloneNotesView({
   const [tagError, setTagError] = useState('');
   const [tagSaving, setTagSaving] = useState(false);
   const [tagEditorOpen, setTagEditorOpen] = useState(false);
+  // 标签自动保存后的短暂提示：只说明「标签已保存」，与正文的未保存状态分开显示。
+  const [tagNotice, setTagNotice] = useState('');
+  const tagNoticeTimerRef = useRef<number | null>(null);
   // 右键菜单：点击外部 / Esc / 列表滚动 / 窗口缩放时关闭。
   useEffect(() => {
     if (!noteContextMenu) return;
@@ -682,14 +685,41 @@ export function StandaloneNotesView({
   };
   const selectedNote = notes.find((note) => note.id === selectedId) ?? null;
   const draft = selectedNote ? (drafts[selectedNote.id] ?? selectedNote.content) : '';
-  const dirty = selectedNote ? draft !== selectedNote.content : false;
+  // Core 保存笔记时会 trim 首尾空白（createNote/updateNote）：这里用同一口径比较，
+  // 否则保存后草稿仍带尾部空白，界面会永远显示「未保存」。
+  const dirty = selectedNote ? draft.trim() !== selectedNote.content.trim() : false;
 
   // 切换笔记时收起标签输入，避免把上一条的编辑状态带到下一条。
   useEffect(() => {
     setTagEditorOpen(false);
     setTagInput('');
+    setTagError('');
+    setTagNotice('');
     setRenamingNote(null);
   }, [selectedId]);
+
+  // 标签随「最后一条带该标签的笔记」一起消失：清掉筛选里已经不存在的标签，
+  // 否则删到最后一条后界面会停在空列表，看起来像标签还在。
+  const tagsKey = tags.join('\u0000');
+  useEffect(() => {
+    setTagFilter((current) => {
+      if (current.size === 0) return current;
+      const known = new Set(tags);
+      const next = new Set([...current].filter((tag) => known.has(tag)));
+      return next.size === current.size ? current : next;
+    });
+  }, [tagsKey]);
+
+  // 标签自动保存提示只短暂显示；组件卸载时清掉定时器。
+  useEffect(
+    () => () => {
+      if (tagNoticeTimerRef.current !== null) {
+        window.clearTimeout(tagNoticeTimerRef.current);
+        tagNoticeTimerRef.current = null;
+      }
+    },
+    []
+  );
 
   // 收起/展开状态持久化到本机（下次进入笔记工作区沿用）。
   useEffect(() => {
@@ -1016,9 +1046,17 @@ export function StandaloneNotesView({
     if (!selectedNote || !onSetTags) return;
     setTagSaving(true);
     setTagError('');
+    setTagNotice('');
     try {
       await onSetTags(selectedNote.id, tags);
       setTagInput('');
+      // 标签采用自动保存：成功后明确告诉用户「已经保存」，不要和正文的保存按钮混在一起。
+      setTagNotice('标签已自动保存');
+      if (tagNoticeTimerRef.current !== null) window.clearTimeout(tagNoticeTimerRef.current);
+      tagNoticeTimerRef.current = window.setTimeout(() => {
+        tagNoticeTimerRef.current = null;
+        setTagNotice('');
+      }, 2200);
     } catch (error) {
       // 不做乐观更新：失败时界面保持服务端旧标签。
       setTagError(
@@ -2712,8 +2750,42 @@ export function StandaloneNotesView({
                   >
                     重命名
                   </button>
-                  <span className="kr-standalone__tags">
-                    {(selectedNote.tags ?? []).slice(0, 2).map((tag) => (
+                  <span
+                    className={`kr-standalone__state${dirty ? ' is-dirty' : ''}`}
+                    role="status"
+                  >
+                    {dirty ? '正文未保存' : '正文已保存'}
+                  </span>
+                  <button
+                    type="button"
+                    className="kr-primary"
+                    onClick={save}
+                    disabled={!dirty || saving}
+                    title="只保存笔记正文（Ctrl+S）；标签会自动保存"
+                  >
+                    {saving ? '保存中…' : '保存正文'}
+                  </button>
+                  <button
+                    type="button"
+                    className="kr-ghost kr-standalone__trash"
+                    onClick={remove}
+                    disabled={deleting}
+                    title="移入回收站（可恢复）"
+                  >
+                    {deleting ? '移动中…' : '移入回收站'}
+                  </button>
+                </div>
+              </div>
+              {(selectedNote.tags ?? []).length > 0 || onSetTags ? (
+                <div className="kr-standalone__tag-row">
+                  <span className="kr-standalone__tag-row-label">
+                    标签
+                    {onSetTags ? (
+                      <span className="kr-standalone__tag-auto">自动保存</span>
+                    ) : null}
+                  </span>
+                  <div className="kr-standalone__tag-list">
+                    {(selectedNote.tags ?? []).map((tag) => (
                       <span key={tag} className="kr-standalone__tag">
                         {tag}
                         {onSetTags ? (
@@ -2729,78 +2801,53 @@ export function StandaloneNotesView({
                         ) : null}
                       </span>
                     ))}
-                    {(selectedNote.tags ?? []).length > 2 ? (
-                      <span
-                        className="kr-standalone__tag-more"
-                        title={`其余标签：${(selectedNote.tags ?? []).slice(2).join('、')}`}
-                      >
-                        +{(selectedNote.tags ?? []).length - 2}
-                      </span>
+                    {onSetTags ? (
+                      tagEditorOpen ? (
+                        <input
+                          className="kr-standalone__tag-input"
+                          value={tagInput}
+                          placeholder="新标签，Enter 保存"
+                          aria-label="添加标签"
+                          autoFocus
+                          disabled={tagSaving}
+                          onChange={(event) => setTagInput(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              event.preventDefault();
+                              addTag();
+                              setTagEditorOpen(false);
+                            } else if (event.key === 'Escape') {
+                              event.preventDefault();
+                              setTagInput('');
+                              setTagEditorOpen(false);
+                            }
+                          }}
+                          onBlur={() => {
+                            if (tagInput.trim()) addTag();
+                            setTagEditorOpen(false);
+                          }}
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          className="kr-ghost kr-standalone__tag-add"
+                          onClick={() => setTagEditorOpen(true)}
+                          title="为这条笔记添加标签；新增/移除后立即自动保存"
+                        >
+                          + 标签
+                        </button>
+                      )
                     ) : null}
-                  </span>
-                  {onSetTags ? (
-                    tagEditorOpen ? (
-                      <input
-                        className="kr-standalone__tag-input"
-                        value={tagInput}
-                        placeholder="新标签"
-                        aria-label="添加标签"
-                        autoFocus
-                        disabled={tagSaving}
-                        onChange={(event) => setTagInput(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') {
-                            event.preventDefault();
-                            addTag();
-                            setTagEditorOpen(false);
-                          } else if (event.key === 'Escape') {
-                            event.preventDefault();
-                            setTagInput('');
-                            setTagEditorOpen(false);
-                          }
-                        }}
-                        onBlur={() => {
-                          if (tagInput.trim()) addTag();
-                          setTagEditorOpen(false);
-                        }}
-                      />
-                    ) : (
-                      <button
-                        type="button"
-                        className="kr-ghost kr-standalone__tag-add"
-                        onClick={() => setTagEditorOpen(true)}
-                        title="为这条笔记添加标签"
-                      >
-                        + 标签
-                      </button>
-                    )
-                  ) : null}
+                  </div>
                   <span
-                    className={`kr-standalone__state${dirty ? ' is-dirty' : ''}`}
+                    className={`kr-standalone__tag-state${tagError ? ' is-error' : ''}`}
                     role="status"
+                    aria-live="polite"
                   >
-                    {dirty ? '未保存' : '已保存'}
+                    {tagSaving ? '标签保存中…' : tagError ? '' : tagNotice}
                   </span>
-                  <button
-                    type="button"
-                    className="kr-primary"
-                    onClick={save}
-                    disabled={!dirty || saving}
-                    title="保存独立笔记（Ctrl+S）"
-                  >
-                    {saving ? '保存中…' : '保存'}
-                  </button>
-                  <button
-                    type="button"
-                    className="kr-ghost kr-standalone__trash"
-                    onClick={remove}
-                    disabled={deleting}
-                    title="移入回收站（可恢复）"
-                  >
-                    {deleting ? '移动中…' : '移入回收站'}
-                  </button>
                 </div>
-              </div>
+              ) : null}
               {tagError ? (
                 <p className="kr-page-error kr-standalone__tag-error" role="alert">
                   {tagError}

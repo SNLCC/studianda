@@ -30,12 +30,6 @@ export {
   type UsageNoticeSection
 } from './usage-notice.js';
 export { USAGE_NOTICE_DOC_URL, openExternalLink } from './external-links.js';
-export {
-  QaView,
-  QA_HISTORY_STORAGE_KEY,
-  type QaViewProps
-} from './QaView.js';
-
 /**
  * 壳适配器（在基础接口上追加独立译文窗口）。
  *

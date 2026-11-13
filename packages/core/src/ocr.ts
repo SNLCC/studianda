@@ -14,6 +14,7 @@ import {
   resolveVisionProfile
 } from './parsing-config.js';
 import { resolveVisualService } from './model-services.js';
+import { chatOutputOptions } from './model-protocol.js';
 import { appendErrorLog } from './error-log.js';
 import type { SecretStore } from './secrets.js';
 import type { Store } from './store.js';
@@ -288,7 +289,7 @@ async function recognizeVision(
     },
     body: JSON.stringify({
       model,
-      max_tokens: maxTokens,
+      ...chatOutputOptions(baseUrl, maxTokens),
       messages: [
         {
           role: 'user',
@@ -972,7 +973,7 @@ async function regionVisionText(target: RegionVisionTarget, crop: Buffer): Promi
     },
     body: JSON.stringify({
       model: target.model,
-      max_tokens: regionMaxTokens,
+      ...chatOutputOptions(baseUrl, regionMaxTokens),
       messages: [
         {
           role: 'user',

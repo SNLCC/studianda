@@ -83,9 +83,47 @@ export function networkErrorMessage(error: unknown): string | null {
 }
 
 /**
+ * 是否 MiniMax 官方接口（国内站/国际站）。
+ *
+ * MiniMax 的 M3.1 Flash 强制开启思考且不可关闭，思考 token 也计入 `max_tokens`；
+ * 直接沿用其他平台的输出上限会出现"正文为空、finish_reason=length"的假失败。
+ */
+export function isMiniMaxHost(baseUrl: string): boolean {
+  let host = '';
+  try {
+    host = new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    host = '';
+  }
+  return host === 'api.minimax.cn' || host === 'api.minimaxi.com' || host === 'api.minimax.io';
+}
+
+/** MiniMax 思考预留：M3.1 Flash 默认 effort=max，给正文留出足够空间。 */
+export const MINIMAX_THINKING_RESERVE = 8192;
+
+/**
+ * 单个模型请求里的输出上限/思考参数。
+ *
+ * 只对 MiniMax 做协议适配：增加思考预留，并要求把思考拆到 `reasoning_content`，
+ * 避免 `<think>` 标签混进正文。其它平台保持原来的 `max_tokens` 行为。
+ */
+export function chatOutputOptions(
+  baseUrl: string,
+  maxTokens: number
+): Record<string, unknown> {
+  if (!isMiniMaxHost(baseUrl)) return { max_tokens: maxTokens };
+  const budget = Math.max(1, Math.trunc(maxTokens));
+  return {
+    max_tokens: Math.min(budget + MINIMAX_THINKING_RESERVE, 131_072),
+    reasoning_split: true
+  };
+}
+
+/**
  * 任务型调用是否附带 thinking 参数：
  *
  * - DeepSeek 官方地址：任务型调用关闭思考、最终回答显式开启（官方协议支持）；
+ * - MiniMax：M3.1 Flash 不允许关闭思考，发 disabled 会 400，因此一律不发；
  * - 其它平台：只有用户显式打开「任务型调用关闭深度思考」时，才在任务型调用发 disabled；
  *   最终回答一律不发（各厂商字段不统一，猜着发会把无关服务打挂）。
  */
@@ -103,6 +141,7 @@ export function taskThinkingOptions(
   if (host === 'api.deepseek.com') {
     return { thinking: { type: task ? 'disabled' : 'enabled' } };
   }
+  if (isMiniMaxHost(baseUrl)) return {};
   if (task && taskThinking) {
     return { thinking: { type: 'disabled' } };
   }

@@ -54,6 +54,10 @@ export interface MemoryHit {
   quote?: string; // 摘引原文（可空）
   created: string;
   score: number;
+  /** 笔记标签（只用于让模型理解归类；不是原文证据）。 */
+  tags?: string[];
+  /** 笔记所在虚拟文件夹（独立笔记用；空串表示根目录）。 */
+  folder?: string;
 }
 
 /**
@@ -127,7 +131,9 @@ function noteCandidate(note: NoteRecord, documentName: string): MemoryCandidate 
       title: standalone ? '独立笔记' : `笔记 · 第 ${note.page} 页`,
       text,
       ...(quote ? { quote } : {}),
-      created: note.created
+      created: note.created,
+      ...(note.tags?.length ? { tags: [...note.tags] } : {}),
+      ...(note.folderPath ? { folder: note.folderPath } : {})
     },
     haystack: `${quote}\n${text}`
   };
@@ -338,6 +344,13 @@ function annotationComment(hit: MemoryHit): string {
   return text;
 }
 
+function memoryNoteMeta(hit: MemoryHit): string {
+  const parts: string[] = [];
+  if (hit.folder) parts.push(`文件夹：${hit.folder}`);
+  if (hit.tags && hit.tags.length > 0) parts.push(`标签：${hit.tags.join('、')}`);
+  return parts.length > 0 ? `；${parts.join('；')}` : '';
+}
+
 function memoryRecordLine(hit: MemoryHit): string {
   const date = materialDate(hit.created);
   if (hit.kind === 'annotation') {
@@ -350,10 +363,11 @@ function memoryRecordLine(hit: MemoryHit): string {
       : `批注：${comment}`;
     return `[批注] 《${hit.documentName}》第 ${hit.page} 页（${date}）：${body}`;
   }
+  const meta = memoryNoteMeta(hit);
   if (!hit.documentId) {
-    return `[独立笔记]《${hit.documentName}》（无页码）：${oneLine(hit.text)}`;
+    return `[独立笔记]《${hit.documentName}》（无页码${meta}）：${oneLine(hit.text)}`;
   }
-  return `[笔记] 《${hit.documentName}》第 ${hit.page} 页（${date}）：${oneLine(hit.text)}`;
+  return `[笔记] 《${hit.documentName}》第 ${hit.page} 页（${date}${meta}）：${oneLine(hit.text)}`;
 }
 
 /**

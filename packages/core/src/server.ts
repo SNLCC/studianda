@@ -3051,165 +3051,6 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   // 会话表随数据目录一起备份/恢复（见 docs/QA-STANDALONE.md）。
   // ---------------------------------------------------------------------------
 
-  app.get(`${API_PREFIX}/qa/sessions`, async (request) => {
-    const query = (request.query ?? {}) as { q?: unknown };
-    const term = typeof query.q === 'string' ? query.q : '';
-    return options.store.listQaSessions(term);
-  });
-
-  app.post(`${API_PREFIX}/qa/sessions`, async (request, reply) => {
-    const body = (request.body ?? {}) as { title?: unknown };
-    const title = typeof body.title === 'string' ? body.title.trim().slice(0, 120) : '';
-    try {
-      return options.store.createQaSession(title);
-    } catch (error) {
-      return badRequest(reply, error instanceof Error ? error.message : '创建问答会话失败');
-    }
-  });
-
-  app.get(`${API_PREFIX}/qa/sessions/:id`, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const session = options.store.getQaSession(id);
-    if (!session) return notFound(reply, '问答会话不存在');
-    const query = (request.query ?? {}) as { limit?: unknown; before?: unknown };
-    const limit = Number(query.limit);
-    const before = Number(query.before);
-    const paged = Number.isInteger(limit) && limit > 0;
-    const messages = options.store.listQaMessages(id, {
-      ...(paged ? { limit } : {}),
-      ...(Number.isInteger(before) && before > 0 ? { beforeId: before } : {})
-    });
-    if (!paged) return { session, messages };
-    const first = messages[0];
-    return {
-      session,
-      messages,
-      hasMore: first ? options.store.hasOlderQaMessages(id, first.id) : false
-    };
-  });
-
-  app.patch(`${API_PREFIX}/qa/sessions/:id`, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const body = (request.body ?? {}) as { title?: unknown; pinned?: unknown };
-    if (body.title === undefined && body.pinned === undefined) {
-      return badRequest(reply, '需要 title 或 pinned');
-    }
-    if (body.title !== undefined && (typeof body.title !== 'string' || !body.title.trim())) {
-      return badRequest(reply, 'title 必须是非空字符串');
-    }
-    if (body.pinned !== undefined && typeof body.pinned !== 'boolean') {
-      return badRequest(reply, 'pinned 必须是布尔值');
-    }
-    if (typeof body.title === 'string') {
-      const renamed = options.store.renameQaSession(id, body.title.trim().slice(0, 120));
-      if (!renamed) return notFound(reply, '问答会话不存在');
-    }
-    if (typeof body.pinned === 'boolean') {
-      const updated = options.store.setQaSessionPinned(id, body.pinned);
-      if (!updated) return notFound(reply, '问答会话不存在');
-      return updated;
-    }
-    return options.store.getQaSession(id) ?? notFound(reply, '问答会话不存在');
-  });
-
-  app.delete(`${API_PREFIX}/qa/sessions/:id`, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    if (!options.store.getQaSession(id)) return notFound(reply, '问答会话不存在');
-    const lockKey = `qa:${id}`;
-    if (!tryBeginChatWrite(lockKey, reply)) return;
-    try {
-      options.store.deleteQaSession(id);
-      return { ok: true };
-    } finally {
-      endChatTurn(lockKey);
-    }
-  });
-
-  // 旧版独立问答历史存在 localStorage：迁移时一次性导入（不经过模型，不触发压缩）。
-  // 旧历史可能接近 1.8M 字符（中文 UTF-8 后 >2MB），因此这一条路由单独放宽 body 上限；
-  // 客户端也会分批导入（见 QaView），两边共同避免 413。
-  app.post(
-    `${API_PREFIX}/qa/sessions/:id/import`,
-    { bodyLimit: 8 * 1024 * 1024 },
-    async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const body = (request.body ?? {}) as { messages?: unknown };
-    if (!Array.isArray(body.messages)) return badRequest(reply, '需要 messages 数组');
-    const messages: QaImportMessage[] = [];    for (const item of body.messages) {
-      if (!item || typeof item !== 'object') continue;
-      const row = item as Record<string, unknown>;
-      if (row.role !== 'user' && row.role !== 'assistant') continue;
-      if (typeof row.content !== 'string' || !row.content.trim()) continue;
-      messages.push({
-        role: row.role,
-        content: row.content,
-        response:
-          row.response && typeof row.response === 'object'
-            ? (row.response as ChatResponse)
-            : null,
-        answered: typeof row.answered === 'boolean' ? row.answered : undefined,
-        created: typeof row.created === 'string' ? row.created : undefined
-      });
-    }
-    if (messages.length === 0) return badRequest(reply, '没有可导入的消息');
-    const lockKey = `qa:${id}`;
-    if (!tryBeginChatWrite(lockKey, reply)) return;
-    try {
-      return options.store.importQaMessages(id, messages);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '导入问答历史失败';
-      return message === '问答会话不存在' ? notFound(reply, message) : badRequest(reply, message);
-    } finally {
-      endChatTurn(lockKey);
-    }
-  });
-
-  // 独立问答「编辑并重问」：改 user 消息内容并删掉它之后的消息，后续由客户端重问。
-  app.patch(`${API_PREFIX}/qa/sessions/:id/messages/:messageId`, async (request, reply) => {
-    const { id, messageId } = request.params as { id: string; messageId: string };
-    if (!options.store.getQaSession(id)) return notFound(reply, '问答会话不存在');
-    const body = (request.body ?? {}) as { content?: unknown };
-    if (typeof body.content !== 'string' || !body.content.trim()) {
-      return badRequest(reply, '需要 content');
-    }
-    const numericId = Number(messageId);
-    if (!Number.isInteger(numericId) || numericId <= 0) {
-      return badRequest(reply, '消息 id 不合法');
-    }
-    const lockKey = `qa:${id}`;
-    if (!tryBeginChatWrite(lockKey, reply)) return;
-    try {
-      const result = options.store.editQaUserMessage(id, numericId, body.content.trim());
-      if (!result.ok) return notFound(reply, '用户消息不存在');
-      return result;
-    } catch (error) {
-      return badRequest(reply, error instanceof Error ? error.message : '编辑消息失败');
-    } finally {
-      endChatTurn(lockKey);
-    }
-  });
-
-  // 独立问答「从这个分支删除」：删除该消息及其后所有消息。
-  app.delete(`${API_PREFIX}/qa/sessions/:id/messages/:messageId`, async (request, reply) => {
-    const { id, messageId } = request.params as { id: string; messageId: string };
-    if (!options.store.getQaSession(id)) return notFound(reply, '问答会话不存在');
-    const numericId = Number(messageId);
-    if (!Number.isInteger(numericId) || numericId <= 0) {
-      return badRequest(reply, '消息 id 不合法');
-    }
-    const lockKey = `qa:${id}`;
-    if (!tryBeginChatWrite(lockKey, reply)) return;
-    try {
-      const result = options.store.deleteQaMessagesFrom(id, numericId);
-      if (!result.ok) return notFound(reply, '消息不存在');
-      return result;
-    } catch (error) {
-      return badRequest(reply, error instanceof Error ? error.message : '删除消息失败');
-    } finally {
-      endChatTurn(lockKey);
-    }
-  });
-
   app.get(`${API_PREFIX}/documents/:id/notes`, async (request) => {
     const { id } = request.params as { id: string };
     const query = request.query as { trash?: string };
@@ -4576,6 +4417,9 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     if (!body || (!hasAudio && questionText.trim() === '')) {
       return badRequest(reply, '需要 question');
     }
+    if (typeof body.documentId !== 'string' || !body.documentId.trim()) {
+      return badRequest(reply, '独立会话已移除，请先从文献库打开一篇文献再提问');
+    }
     const gate = await budgetGate(body);
     if (gate?.exceeded) {
       // 预算确认不是错误：返回 200 + needs_confirmation，前端弹确认框后带 confirm_budget 重发。
@@ -4724,6 +4568,9 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     const questionText = typeof body?.question === 'string' ? body.question : '';
     if (!body || (!hasAudio && questionText.trim() === '')) {
       return badRequest(reply, '需要 question');
+    }
+    if (typeof body.documentId !== 'string' || !body.documentId.trim()) {
+      return badRequest(reply, '独立会话已移除，请先从文献库打开一篇文献再提问');
     }
     const gate = await budgetGate(body);
     if (gate?.exceeded) {

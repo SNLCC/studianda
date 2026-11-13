@@ -11,6 +11,7 @@ const MIMO_ASR_SOURCE = 'https://mimo.mi.com/docs/zh-CN/api/audio/Speech-Recogni
 const MIMO_TTS_SOURCE = 'https://mimo.mi.com/docs/zh-CN/api/audio/tts';
 const MINIMAX_ASR_SOURCE = 'https://platform.minimax.io/docs/api-reference/speech-to-text';
 const MINIMAX_TTS_SOURCE = 'https://platform.minimax.io/docs/api-reference/speech-t2a-http';
+const MINIMAX_MODELS_SOURCE = 'https://platform.minimax.cn/docs/guides/models-intro';
 
 export interface SpeechModelPreset {
   id: string;
@@ -55,6 +56,8 @@ const SPEECH_MODELS: Record<string, SpeechModelPreset[]> = {
   ]
 };
 SPEECH_MODELS['api.minimaxi.com'] = SPEECH_MODELS['api.minimax.io']!;
+// 国内站域名同样是同一套接口与模型 id。
+SPEECH_MODELS['api.minimax.cn'] = SPEECH_MODELS['api.minimax.io']!;
 
 function hostnameOf(baseUrl: string): string {
   try {
@@ -101,6 +104,28 @@ export function officialModelMetadata(baseUrl: string, model: string): OfficialM
         capabilities: model === 'deepseek-v4-pro' ? ['chat'] : ['chat', 'image_input'],
         source: '官方文档（2026-09-16）',
         metadataUrl: DEEPSEEK_SOURCE
+      };
+    }
+  }
+  // MiniMax 国内站 / 国际站：M3.1 Flash 与 M3 都是原生多模态、1M 上下文。
+  // 官方文档明确 OpenAI 兼容接口支持图片输入（当前不支持音频输入），
+  // 所以能力只标 chat + vision，不标 omni/audio。
+  if (host === 'api.minimax.cn' || host === 'api.minimaxi.com' || host === 'api.minimax.io') {
+    if (model === 'MiniMax-M3.1-Flash') {
+      return {
+        contextWindow: 1_000_000,
+        maxOutput: 131_072,
+        capabilities: ['chat', 'vision'],
+        source: '官方文档（2026-11-13）',
+        metadataUrl: MINIMAX_MODELS_SOURCE
+      };
+    }
+    if (model === 'MiniMax-M3') {
+      return {
+        contextWindow: 1_000_000,
+        capabilities: ['chat', 'vision'],
+        source: '官方文档（2026-11-13）',
+        metadataUrl: MINIMAX_MODELS_SOURCE
       };
     }
   }

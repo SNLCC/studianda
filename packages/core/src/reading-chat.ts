@@ -60,6 +60,7 @@ import { pickPages } from './semantic.js';
 import { gotoWorkers, inputBudgetFor, readCapacity } from './capacity.js';
 import { resolveModelCapacity } from './model-services.js';
 import {
+  chatOutputOptions,
   networkErrorMessage,
   responseText,
   serviceErrorMessage,
@@ -403,11 +404,11 @@ export async function callChatModel(
       body: JSON.stringify({
         model: config.model,
         temperature: 0.2,
-        max_tokens: maxTokens,
+        ...chatOutputOptions(config.baseUrl, maxTokens),
         stream,
         messages: requestMessages,
         // DeepSeek 官方地址：任务型关闭思考、最终回答显式开启；其它平台只在用户明确
-        // 打开 task_thinking 时对任务型调用发 disabled。
+        // 打开 task_thinking 时对任务型调用发 disabled（MiniMax 由协议层跳过）。
         ...taskThinkingOptions(config.baseUrl, task, config.taskThinking === true)
       }),
       signal: signal ?? AbortSignal.timeout(120_000)

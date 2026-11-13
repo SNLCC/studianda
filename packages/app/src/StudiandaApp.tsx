@@ -117,7 +117,6 @@ type AppRuntimeAdapter = RuntimeAdapter & {
   }): Promise<{ ok: boolean; message?: string }>;
 };
 import { paragraphAt, type ParagraphLine } from '@studianda/shared';
-import { QaView } from './QaView.js';
 import { SettingsView } from './SettingsView.js';
 import { useMediaQuery } from './use-media-query.js';
 import {
@@ -323,19 +322,6 @@ function LibrarySidebar({
           <span className="kr-app-sidebar__nav-label">全部文献</span>
         </span>
         <b>{documents.length}</b>
-      </button>
-      <button
-        type="button"
-        className={`kr-app-sidebar__nav${showQa ? ' is-active' : ''}`}
-        onClick={onQa}
-        title="不依附任何文献，直接在整个文献库提问"
-      >
-        <span className="kr-app-sidebar__nav-main">
-          <span className="kr-app-sidebar__nav-icon">
-            <SidebarNavIcon name="qa" />
-          </span>
-          <span className="kr-app-sidebar__nav-label">会话</span>
-        </span>
       </button>
       <button
         type="button"
@@ -975,10 +961,15 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
   const availableTags = [
     ...new Set((documentsQuery.data ?? []).flatMap((document) => document.tags))
   ].sort();
+  const availableTagsKey = availableTags.join('\u0000');
   // 默认排序 = manual（拖拽顺序）；其它排序只是浏览排序，不改 manualOrder。
   const [sortMode, setSortMode] = useState<LibrarySort>(readLibrarySort);
   const [libraryView, setLibraryView] = useState<LibraryView>(readLibraryView);
   const [tagFilter, setTagFilter] = useState('');
+  // 标签只在仍有未删除文献/笔记时存在：最后一次删除后，筛选状态要跟着失效的标签一起清掉。
+  useEffect(() => {
+    if (tagFilter && !availableTags.includes(tagFilter)) setTagFilter('');
+  }, [availableTagsKey, tagFilter]);
   const [translationNotice, setTranslationNotice] = useState('');
   const [libraryNotice, setLibraryNotice] = useState('');
   /**
@@ -1391,6 +1382,8 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['documents'] });
       void queryClient.invalidateQueries({ queryKey: ['folders'] });
+      // 文献笔记随文献进入回收站：笔记标签列表也要同步（没有剩余笔记的标签自动消失）。
+      void queryClient.invalidateQueries({ queryKey: ['note-tags'] });
     }
   });
 
@@ -1399,6 +1392,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['documents'] });
       void queryClient.invalidateQueries({ queryKey: ['folders'] });
+      void queryClient.invalidateQueries({ queryKey: ['note-tags'] });
     }
   });
 
@@ -1407,6 +1401,8 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['documents'] });
       void queryClient.invalidateQueries({ queryKey: ['folders'] });
+      void queryClient.invalidateQueries({ queryKey: ['note-tags'] });
+      void queryClient.invalidateQueries({ queryKey: ['note-asset-usage'] });
     }
   });
 
@@ -1900,8 +1896,8 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
   const deleteStandaloneNoteMutation = useMutation({
     mutationFn: (id: string) => api.deleteNote(id),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['standalone-notes'] });
-      void queryClient.invalidateQueries({ queryKey: ['note-asset-usage'] });
+      // 删除后标签可能已不存在：一并刷新标签列表，避免筛选里残留空标签。
+      invalidateNoteLibrary();
       setFolderNotice('独立笔记已移入回收站，可恢复或彻底删除。');
     },
     onError: (error: Error) => appDialogs.alert(`移入回收站失败：${error.message}`)
@@ -1910,8 +1906,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
   const restoreStandaloneNoteMutation = useMutation({
     mutationFn: (id: string) => api.restoreNote(id),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['standalone-notes'] });
-      void queryClient.invalidateQueries({ queryKey: ['note-asset-usage'] });
+      invalidateNoteLibrary();
       setFolderNotice('独立笔记已恢复。');
     },
     onError: (error: Error) => appDialogs.alert(`恢复独立笔记失败：${error.message}`)
@@ -1920,8 +1915,8 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
   const purgeStandaloneNoteMutation = useMutation({
     mutationFn: (id: string) => api.purgeNote(id),
     onSuccess: (result, id) => {
-      void queryClient.invalidateQueries({ queryKey: ['standalone-notes'] });
-      void queryClient.invalidateQueries({ queryKey: ['note-asset-usage'] });
+      // 彻底删除后该笔记的标签不再属于任何笔记，必须让标签列表/筛选同步消失。
+      invalidateNoteLibrary();
       if (standaloneNoteId === id) setStandaloneNoteId(null);
       setFolderNotice(
         result.freedAssets > 0
@@ -3155,27 +3150,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
         />
       ) : null}
 
-      {showQa ? (
-        <QaView
-          api={api}
-          adapter={adapter}
-          documents={documentsQuery.data ?? []}
-          onOpenDocument={(documentId, page, quote) => {
-            const target = documentsQuery.data?.find((item) => item.id === documentId);
-            if (!target) {
-              appDialogs.alert('来源文献不存在或已从文献库删除。');
-              return;
-            }
-            setSelected({
-              document: target,
-              page: page > 0 ? page : target.currentPage,
-              quote
-            });
-          }}
-          onOpenStandaloneNote={(noteId) => void openStandaloneNoteById(noteId)}
-          onOpenMemorySource={openMemorySource}
-        />
-      ) : showReferenceGraph ? (
+      {showReferenceGraph ? (
         <ReferenceGraphView
           graph={referenceGraphQuery.data ?? null}
           loading={referenceGraphQuery.isLoading || referenceGraphQuery.isFetching}
@@ -6697,6 +6672,7 @@ function ReaderView({
     mutationFn: (id: string) => api.deleteNote(id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['notes', document.id] });
+      void queryClient.invalidateQueries({ queryKey: ['note-tags'] });
       void queryClient.invalidateQueries({ queryKey: ['note-asset-usage'] });
       setNotePurgeNotice('笔记已移入回收站，可在笔记回收站恢复或彻底删除。');
     },
@@ -6707,6 +6683,7 @@ function ReaderView({
     mutationFn: (id: string) => api.restoreNote(id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['notes', document.id] });
+      void queryClient.invalidateQueries({ queryKey: ['note-tags'] });
       void queryClient.invalidateQueries({ queryKey: ['note-asset-usage'] });
       setNotePurgeNotice('笔记已恢复。');
     },
@@ -6718,6 +6695,7 @@ function ReaderView({
     onSuccess: (result) => {
       void queryClient.invalidateQueries({ queryKey: ['notes', document.id] });
       void queryClient.invalidateQueries({ queryKey: ['standalone-notes'] });
+      void queryClient.invalidateQueries({ queryKey: ['note-tags'] });
       void queryClient.invalidateQueries({ queryKey: ['note-asset-usage'] });
       setNotePurgeNotice(
         result.freedAssets > 0

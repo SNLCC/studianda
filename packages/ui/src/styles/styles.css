@@ -3701,6 +3701,14 @@ a {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 12px;
 }
+.kr-model-services__preset-hint {
+  margin: -4px 0 0;
+  font-size: var(--kr-fs-caption);
+  line-height: 1.6;
+}
+.kr-model-services__preset-hint .kr-link-button {
+  margin-left: 2px;
+}
 .kr-model-services__editor label {
   display: grid;
   gap: 6px;
@@ -6141,81 +6149,11 @@ font-weight: 500;
   background: var(--kr-celadon);
   animation: kr-draft-caret 0.9s steps(1) infinite;
 }
-@keyframes kr-draft-caret {
-  50% {
-    opacity: 0;
-  }
-}
-.kr-chat__typing span {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--kr-celadon);
-  animation: kr-chat-dot 1.2s ease-in-out infinite;
-}
-.kr-chat__typing span:nth-child(2) {
-  animation-delay: 0.15s;
-}
-.kr-chat__typing span:nth-child(3) {
-  animation-delay: 0.3s;
-}
-@keyframes kr-chat-dot {
-  0%,
-  60%,
-  100% {
-    opacity: 0.25;
-    transform: translateY(0);
-  }
-  30% {
-    opacity: 1;
-    transform: translateY(-2px);
-  }
-}
+/* 输入框用比对话区更浅的纸面。 */
 .kr-chat__composer {
   flex: none;
   padding: 10px 2px 0;
   border-top: 1px solid var(--kr-line);
-  background: var(--kr-paper);
-}
-.kr-chat__quote {
-  margin-bottom: 8px;
-  padding: 7px 9px;
-  border: 1px solid var(--kr-line);
-  border-radius: 8px;
-  background: var(--kr-paper-sunk);
-}
-.kr-chat__quote-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  color: var(--kr-ink-faint);
-  font-size: var(--kr-fs-micro);
-}
-.kr-chat__quote-head button {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--kr-celadon-deep);
-  font-size: var(--kr-fs-micro);
-}
-.kr-chat__quote blockquote {
-  max-height: 92px;
-  margin: 5px 0 0;
-  overflow: auto;
-  color: var(--kr-ink-soft);
-  font-size: var(--kr-fs-caption);
-  line-height: 1.6;
-  white-space: pre-wrap;
-}
-.kr-chat__composer form {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin: 0;
-  padding: 8px 9px 6px;
-  border: 1px solid var(--kr-line-strong);
-  border-radius: 11px;
-  /* 输入框用比对话区更浅的纸面。 */
   background: var(--kr-paper-raised);
   box-shadow: 0 4px 18px rgb(45 58 48 / 5%);
 }
@@ -10128,6 +10066,48 @@ font-size: var(--kr-fs-body);
   gap: 4px;
   margin-top: 0;
 }
+/* 标签独立一行：与正文保存按钮分开，标签改动自动保存，不再和「保存正文」混在一起。 */
+.kr-standalone__tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 2px 0 6px;
+  border-bottom: 1px dashed var(--kr-line);
+  font-size: var(--kr-fs-caption);
+}
+.kr-standalone__tag-row-label {
+  display: inline-flex;
+  flex: none;
+  align-items: baseline;
+  gap: 5px;
+  color: var(--kr-ink-soft);
+}
+.kr-standalone__tag-auto {
+  padding: 0 5px;
+  border: 1px solid var(--kr-line);
+  border-radius: 999px;
+  color: var(--kr-ink-faint);
+  font-size: var(--kr-fs-micro);
+  line-height: 1.4;
+}
+.kr-standalone__tag-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 120px;
+}
+.kr-standalone__tag-state {
+  flex: none;
+  color: var(--kr-celadon-deep);
+  font-size: var(--kr-fs-micro);
+  white-space: nowrap;
+}
+.kr-standalone__tag-state.is-error {
+  color: var(--kr-vermilion-deep);
+}
 .kr-standalone__tag {
   display: inline-flex;
   flex: none;
@@ -11324,6 +11304,21 @@ details.kr-outline2__card > summary::-webkit-details-marker {
 }
 .kr-standalone__head-tools > .kr-standalone__tag-add {
   padding: 0 10px;
+}
+.kr-standalone__tag-list > .kr-standalone__tag-add {
+  height: 22px;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: var(--kr-fs-micro);
+}
+.kr-standalone__tag-list > .kr-standalone__tag-input {
+  width: 150px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: var(--kr-fs-micro);
 }
 .kr-standalone__head-tools .kr-standalone__move select {
   max-width: 160px;
@@ -12747,6 +12742,7 @@ details.kr-outline2__card > summary::-webkit-details-marker {
 }
 
 .kr-standalone__editor > .kr-standalone__editor-head,
+.kr-standalone__editor > .kr-standalone__tag-row,
 .kr-standalone__editor > .kr-standalone__tag-error {
   flex: none;
 }

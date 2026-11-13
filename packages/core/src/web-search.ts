@@ -6,6 +6,7 @@ import type {
   SearchResult
 } from '@studianda/shared';
 import { resolveModelService } from './model-services.js';
+import { chatOutputOptions } from './model-protocol.js';
 import type { SecretStore } from './secrets.js';
 import { annotate } from './source-tier.js';
 import type { Store } from './store.js';
@@ -385,7 +386,7 @@ export async function createSearchPlan(
         body: JSON.stringify({
           model: routed.model,
           temperature: 0.2,
-          max_tokens: 2048,
+          ...chatOutputOptions(routed.baseUrl, 2048),
           messages: [
             {
               role: 'system',

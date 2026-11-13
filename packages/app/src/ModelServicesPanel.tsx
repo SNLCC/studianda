@@ -64,7 +64,10 @@ function capabilitiesOf(name: string): string[] {
     'mimo-v2.5-tts-voicedesign': ['tts'],
     'mimo-v2.6-flash': ['chat', 'audio', 'omni'],
     'mimo-v2.6-pro': ['chat', 'audio', 'omni'],
-    'mimo-v2.6-pro-ultraspeed': ['chat', 'audio', 'omni']
+    'mimo-v2.6-pro-ultraspeed': ['chat', 'audio', 'omni'],
+    // MiniMax 官方 OpenAI 兼容接口支持文本 + 图片输入（当前不支持音频输入）。
+    'MiniMax-M3.1-Flash': ['chat', 'vision'],
+    'MiniMax-M3': ['chat', 'vision']
   };
   if (official[name]) return official[name];
   const capabilities = new Set<string>(['chat']);
@@ -139,7 +142,7 @@ function emptyConnection(platform: ProviderPreset | null): ModelServiceConnectio
     models: (platform?.models ?? []).map((name) => ({
       id: name,
       name,
-      capabilities: ['chat'],
+      capabilities: capabilitiesOf(name),
       source: 'preset',
       enabled: true
     })),
@@ -408,6 +411,9 @@ export function ModelServicesPanel({
     ? [...new Set([...draft.models.map((model) => model.name), ...availableModels])]
     : [];
 
+  const selectedPreset =
+    providersQuery.data?.find((provider) => provider.id === draft?.platform) ?? null;
+
   return (
     <section className="kr-settings__section">
       <div className="kr-settings__section-head">
@@ -500,6 +506,24 @@ export function ModelServicesPanel({
                   </select>
                 </label>
               </div>
+              {selectedPreset?.description ? (
+                <p className="kr-muted kr-model-services__preset-hint">
+                  {selectedPreset.description}
+                  {selectedPreset.docsUrl ? (
+                    <>
+                      {' '}
+                      <a
+                        className="kr-link-button"
+                        href={selectedPreset.docsUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        官方接入文档
+                      </a>
+                    </>
+                  ) : null}
+                </p>
+              ) : null}
               {draft.platform === 'local' ? (
                 <label>
                   <span>本地服务类型</span>
@@ -553,6 +577,9 @@ export function ModelServicesPanel({
                   placeholder={draft.hasKey ? '已保存，留空保留' : '填写平台 API Key'}
                   autoComplete="off"
                 />
+                {selectedPreset?.keyHint ? (
+                  <small className="kr-muted">{selectedPreset.keyHint}</small>
+                ) : null}
               </label>
               <div className="kr-settings__actions">
                 <button type="button" onClick={saveDraft} disabled={save.isPending}>

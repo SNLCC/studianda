@@ -28,6 +28,7 @@ import { orderTwoColumnLines } from './pdf-layout.js';
 import type { LayoutLine, LayoutPage } from './pdf-layout.js';
 import { heading } from './structure.js';
 import { resolveModelService } from './model-services.js';
+import { chatOutputOptions } from './model-protocol.js';
 import { requestMaxTokensFor, TASK_MAX_TOKENS } from './output-limit.js';
 
 // 段与段彼此独立，并发发送；4 是本机与常见云平台都稳的值（TRANSLATE_WORKERS）。
@@ -909,7 +910,7 @@ export async function retranslateTranslationSegment(
     body: JSON.stringify({
       model: config.model,
       temperature: 0,
-      max_tokens: config.maxTokens,
+      ...chatOutputOptions(config.baseUrl, config.maxTokens),
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: buildPrompt(target.source, targetLanguage) }

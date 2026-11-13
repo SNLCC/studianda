@@ -2,6 +2,7 @@ import type { SecretStore } from './secrets.js';
 import type { Store } from './store.js';
 import { getParsingConfig, resolveVisionProfile } from './parsing-config.js';
 import { resolveVisualService } from './model-services.js';
+import { chatOutputOptions } from './model-protocol.js';
 import { requestMaxTokensFor, TASK_MAX_TOKENS } from './output-limit.js';
 import { renderPdfPage } from './ocr.js';
 
@@ -259,7 +260,7 @@ async function readVisualPage(
         body: JSON.stringify({
           model: profile.model,
           temperature: 0,
-          max_tokens: profile.maxTokens,
+          ...chatOutputOptions(profile.baseUrl, profile.maxTokens),
           messages: [
             { role: 'system', content: VISUAL_INSTRUCTION },
             {

@@ -100,10 +100,6 @@ beforeAll(async () => {
       previousOrigin: ''
     }
   ]);
-  // 独立问答会话 + 消息。
-  const qaSession = store.createQaSession('问答会话');
-  store.appendQaMessage({ sessionId: qaSession.id, role: 'user', content: '问答问题' });
-
   // 笔记附件：记录 + 文件。
   const asset = await store.saveNoteAsset({
     dataUrl: `data:image/png;base64,${PNG_BASE64}`,
@@ -186,8 +182,8 @@ describe('POST /api/v1/maintenance/clear-user-data', () => {
       documents: 1,
       notes: 1,
       annotations: 1,
-      messages: 2,
-      sessions: 2,
+      messages: 1,
+      sessions: 1,
       translations: 2,
       note_assets: 1,
       backups: 1
@@ -198,7 +194,6 @@ describe('POST /api/v1/maintenance/clear-user-data', () => {
     expect(store.listDocuments(true)).toHaveLength(0);
     expect(store.getDocument(documentId)).toBe(null);
     expect(store.getTranslationSegments(documentId, 1)).toHaveLength(0);
-    expect(store.listQaSessions()).toHaveLength(0);
     expect(store.listNotes(documentId)).toHaveLength(0);
     expect(store.listAnnotations(documentId)).toHaveLength(0);
 

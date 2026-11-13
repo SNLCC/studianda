@@ -389,34 +389,6 @@ export interface ApiClient {
     messageId: number,
     sessionId?: string
   ): Promise<{ ok: boolean; removed: number }>;
-  /** 编辑独立问答一条用户消息并删除其后所有消息（随后由界面重问）。 */
-  editQaMessage(
-    sessionId: string,
-    messageId: number,
-    content: string
-  ): Promise<{ ok: boolean; removed: number }>;
-  /** 从独立问答某条消息起删除（该消息及其后全部）。 */
-  deleteQaMessagesFrom(
-    sessionId: string,
-    messageId: number
-  ): Promise<{ ok: boolean; removed: number }>;
-  /** 独立问答会话列表（按最近使用排序）；传 query 时按标题/消息内容做词面过滤。 */
-  listQaSessions(query?: string): Promise<QaSessionSummary[]>;
-  createQaSession(title?: string): Promise<QaSessionRecord>;
-  /**
-   * 打开一个独立问答会话：会话元数据 + 消息。
-   * 传 `limit` 时只取最新一页（配合 `before` 加载更早），返回值带 `hasMore`。
-   */
-  getQaSession(
-    id: string,
-    options?: { limit?: number; before?: number }
-  ): Promise<QaSessionDetail>;
-  renameQaSession(id: string, title: string): Promise<QaSessionRecord>;
-  /** 置顶/取消置顶独立问答会话（置顶会话排在列表最前）。 */
-  setQaSessionPinned(id: string, pinned: boolean): Promise<QaSessionRecord>;
-  deleteQaSession(id: string): Promise<{ ok: boolean }>;
-  /** 迁移旧版 localStorage 问答历史：把旧消息一次性导进指定会话。 */
-  importQaMessages(id: string, messages: QaImportMessage[]): Promise<QaSessionDetail>;
   listReadingTasks(documentId: string): Promise<ReadingTaskSummary[]>;
   createNote(input: CreateNoteInput): Promise<NoteRecord>;
   updateNote(id: string, input: UpdateNoteInput): Promise<NoteRecord>;
@@ -1408,76 +1380,10 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       );
     },
 
-    editQaMessage: (sessionId, messageId, content) =>
-      request<{ ok: boolean; removed: number }>(
-        `/qa/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(
-          String(messageId)
-        )}`,
-        { method: 'PATCH', body: JSON.stringify({ content }) }
-      ),
-
-    async deleteQaMessagesFrom(sessionId, messageId) {
-      return request<{ ok: boolean; removed: number }>(
-        `/qa/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(
-          String(messageId)
-        )}`,
-        { method: 'DELETE', body: JSON.stringify({}) }
-      );
-    },
-
     listReadingTasks: (documentId) =>
       request<ReadingTaskSummary[]>(
         `/documents/${encodeURIComponent(documentId)}/reading-tasks`
       ),
-
-    listQaSessions: (query) =>
-      request<QaSessionSummary[]>(
-        `/qa/sessions${query?.trim() ? `?q=${encodeURIComponent(query.trim())}` : ''}`
-      ),
-
-    createQaSession: (title) =>
-      request<QaSessionRecord>('/qa/sessions', {
-        method: 'POST',
-        body: JSON.stringify({ title: title ?? '' })
-      }),
-
-    getQaSession: (id, options) => {
-      const params = new URLSearchParams();
-      if (options?.limit && Number.isInteger(options.limit) && options.limit > 0) {
-        params.set('limit', String(options.limit));
-      }
-      if (options?.before && Number.isInteger(options.before) && options.before > 0) {
-        params.set('before', String(options.before));
-      }
-      const query = params.toString();
-      return request<QaSessionDetail>(
-        `/qa/sessions/${encodeURIComponent(id)}${query ? `?${query}` : ''}`
-      );
-    },
-
-    renameQaSession: (id, title) =>
-      request<QaSessionRecord>(`/qa/sessions/${encodeURIComponent(id)}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ title })
-      }),
-
-    setQaSessionPinned: (id, pinned) =>
-      request<QaSessionRecord>(`/qa/sessions/${encodeURIComponent(id)}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ pinned })
-      }),
-
-    async deleteQaSession(id) {
-      return request<{ ok: boolean }>(`/qa/sessions/${encodeURIComponent(id)}`, {
-        method: 'DELETE'
-      });
-    },
-
-    importQaMessages: (id, messages) =>
-      request<QaSessionDetail>(`/qa/sessions/${encodeURIComponent(id)}/import`, {
-        method: 'POST',
-        body: JSON.stringify({ messages })
-      }),
 
     createNote: (input) =>
       request<NoteRecord>('/notes', {

@@ -1,5 +1,6 @@
 import type { SecretStore } from './secrets.js';
 import { resolveModelService } from './model-services.js';
+import { chatOutputOptions } from './model-protocol.js';
 import type { Store } from './store.js';
 
 export interface ModelTestResult {
@@ -50,7 +51,7 @@ export async function testModelConnection(
       },
       body: JSON.stringify({
         model,
-        max_tokens: 16,
+        ...chatOutputOptions(baseUrl, 32),
         messages: [{ role: 'user', content: '只回复 OK' }]
       }),
       signal: signal ?? AbortSignal.timeout(30_000)

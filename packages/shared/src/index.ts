@@ -1200,6 +1200,12 @@ export interface ProviderPreset {
   baseUrl: string;
   models: string[];
   requiresKey: boolean;
+  /** 平台说明（界面显示在平台选择/Key 输入附近，例如 M Plan 与按量计费 Key 的区别）。 */
+  description?: string;
+  /** 官方接入文档地址（界面可点击打开；只放 https 链接）。 */
+  docsUrl?: string;
+  /** API Key 的获取位置/前缀提示（只用于界面说明，不做校验）。 */
+  keyHint?: string;
 }
 
 export type ModelServiceKind =
@@ -1704,7 +1710,7 @@ export interface ChatResponse {
   /**
    * 本轮回答方式（供界面如实标注）：
    * direct=直接回复（问候/界面问题）；web=仅联网结果；reading=文献精读；
-   * library=库内检索问答（独立问答默认路径，不读全文）。
+   * library=库内检索问答（不读全文）。
    */
   answer_mode?: 'direct' | 'web' | 'reading' | 'library';
   /**
