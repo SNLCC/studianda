@@ -125,7 +125,6 @@ export class UpdateManager {
 
   private scheduleStartupCheck(): void {
     if (!app.isPackaged) return;
-    if (process.env.STUDIANDA_DISABLE_UPDATE_CHECK === '1') return;
     if (!this.autoCheck || this.startupTimer) return;
     this.startupTimer = setTimeout(() => {
       this.startupTimer = null;

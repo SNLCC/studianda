@@ -149,10 +149,8 @@ export function UpdatePanel({ adapter }: { adapter: RuntimeAdapter }): JSX.Eleme
       ) : null}
 
       <p className="kr-muted">
-        启动后默认不自动检查更新；开启后只向 GitHub Releases 发送版本号等版本元数据，不上传
-        文献、笔记、批注或会话内容。可在此处开启或关闭；设置环境变量{' '}
-        <code>STUDIANDA_DISABLE_UPDATE_CHECK=1</code> 可强制关闭（重启应用后生效）；关闭后仍可
-        在本页手动检查。
+        启动后默认不自动检查更新；开启后只发送版本号等版本元数据，不上传文献、笔记、批注或
+        会话内容。可在此处开启或关闭；关闭后仍可在本页手动检查。
       </p>
 
       {update ? (

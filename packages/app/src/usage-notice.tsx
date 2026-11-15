@@ -11,9 +11,9 @@ import { USAGE_NOTICE_DOC_URL, openExternalLink } from './external-links.js';
 import type { RuntimeAdapter } from './runtime.js';
 
 /** 须知版本：与 docs/USAGE-NOTICE.md 的「文档版本」保持一致。 */
-export const USAGE_NOTICE_VERSION = 'v1.10';
+export const USAGE_NOTICE_VERSION = 'v1.11';
 /** 生效日期：与 docs/USAGE-NOTICE.md 保持一致。 */
-export const USAGE_NOTICE_EFFECTIVE_DATE = '2026-11-11';
+export const USAGE_NOTICE_EFFECTIVE_DATE = '2026-11-16';
 /** 适用的应用版本。 */
 export const USAGE_NOTICE_APPLICABLE_VERSION = '勘读 Studianda 0.1.x';
 
@@ -85,7 +85,7 @@ export const USAGE_NOTICE_SECTIONS: UsageNoticeSection[] = [
       '联网搜索：搜索词 → 你配置的相应服务，默认「每次询问」；把「搜索规划隐私策略」改为交给模型规划时，按所选范围把问题/选文等发给你配置的会话模型。',
       '语音：录音音频或待朗读文字 → 配置的语音服务；默认使用本机系统语音组件。',
       'Zotero/WebDAV：连接信息、文献条目与附件请求 → 本机 Zotero、api.zotero.org 或你填写的地址；默认本机模式。',
-      '更新检查：默认关闭，可在「设置 → 关于与更新」开启；开启后安装版启动约 10 秒向 GitHub Releases 发送版本号等元数据，不含文献、笔记或会话内容；可设置环境变量 STUDIANDA_DISABLE_UPDATE_CHECK=1 强制关闭。'
+      '更新检查：默认关闭，可在「设置 → 关于与更新」开启；开启后安装版启动约 10 秒发送版本号等元数据，不含文献、笔记或会话内容。'
     ]
   },
   {
