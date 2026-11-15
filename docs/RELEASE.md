@@ -25,7 +25,7 @@
 ## 发布前检查
 
 1. 工作区干净，`pnpm install --frozen-lockfile` 已通过（lockfile 与 package.json 一致）。
-2. 写发版说明：从 `docs/releases/v0.1.0.md` 复制为 `docs/releases/<tag>.md` 并改写内容。
+2. 写发版说明：从 `docs/releases/v0.1.2.md` 复制为 `docs/releases/<tag>.md` 并改写内容。
 3. 自检版本：`pnpm check:version`。
 4. **必须**跑一遍 `pnpm verify`（`typecheck` + `test` + `check:contract` + `check:ui` + `check:telemetry` + `check:governance` + `check:legal` + `build`）：全绿才能发版，失败不发布。CI 的 `ci.yml` 在 main 上跑同一入口，本地与 CI 结果应一致。
 5. **文档与声明自检**：如果本次发版改动了联网功能、默认行为或数据流向，同步更新 `docs/USAGE-NOTICE.md`（含文档版本与生效日期）与 README「数据与隐私」，并确认 `docs/USAGE-NOTICE.md` 与 `CONTRIBUTING.md` 中的产品边界仍然成立；`pnpm check:legal` 会校验版本、日期与两侧法律文件是否完整一致。
@@ -40,7 +40,7 @@
 - [ ] `pnpm install --frozen-lockfile` 通过
 - [ ] `pnpm verify` 全绿（typecheck / test / check:contract / check:ui / check:telemetry / check:governance / check:legal / build）
 - [ ] `pnpm check:version` 通过，tag 为 `v` + 版本号
-- [ ] `docs/releases/<tag>.md` 已写好，含变更、已知问题（未签名）与校验方法
+- [ ] `docs/releases/<tag>.md` 已写好：发布类型（测试版/正式版）、下载哪个文件、安装必读与问题反馈方式（正式版可附变更与 SHA256 校验指引）
 - [ ] 若改了联网功能或数据流向：`docs/USAGE-NOTICE.md` 与 README「数据与隐私」已同步
 - [ ] 安装包与源码仓库法律文件各自完整且一致（打包日志中的 `check:legal` 通过；可手动复跑 `node scripts/audit-legal-completeness.mjs --package`）
 
@@ -67,7 +67,7 @@
 node scripts/bump-version.mjs 0.1.0
 
 # 2) 写发版说明
-#    在 docs/releases/ 下新建 <tag>.md，参照 docs/releases/v0.1.0.md
+#    在 docs/releases/ 下新建 <tag>.md，参照 docs/releases/v0.1.2.md
 
 # 3) 自检
 pnpm check:version
@@ -160,6 +160,6 @@ Get-Content .\SHA256SUMS.txt
 ## 相关
 
 - 打包细节：见 [PACKAGING.md](PACKAGING.md)。
-- 发版说明模板：见 [docs/releases/v0.1.0.md](releases/v0.1.0.md)。
+- 发版说明模板：见 [docs/releases/v0.1.2.md](releases/v0.1.2.md)。
 - 产品边界与提交要求：见 [CONTRIBUTING.md](../CONTRIBUTING.md) 与 [USAGE-NOTICE.md](USAGE-NOTICE.md)。
 - 使用须知与逐功能数据流向：见 [USAGE-NOTICE.md](USAGE-NOTICE.md)。

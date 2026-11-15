@@ -352,6 +352,7 @@ export function TranslationLayoutView({
         </button>
       </div>
       <div className="kr-tl__viewport" ref={viewportRef}>
+        <p className="kr-tl__ai-notice">机器翻译 · 由 AI 生成，可能出错，请核对原文</p>
         {loading ? <p className="kr-muted kr-tl__status">正在渲染页面图像…</p> : null}
         {error ? <p className="kr-page-error">{error}</p> : null}
         {!loading && !error && !imageUrl ? (
@@ -366,6 +367,7 @@ export function TranslationLayoutView({
           <div
             className="kr-tl__page"
             ref={pageRef}
+            data-ai-copy="translation"
             style={{
               width: `${displayWidth}px`,
               height: `${displayHeight}px`

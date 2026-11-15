@@ -372,7 +372,12 @@ function SettingsViewContent({
       setClearDataConfirmText('');
       setClearDataRemoved(removed);
       notify(
-        `已清空本机用户数据：文献 ${removed.documents} 篇、笔记 ${removed.notes} 条、批注 ${removed.annotations} 条、会话 ${removed.sessions} 个（消息 ${removed.messages} 条）、译文 ${removed.translations} 条、图片资源 ${removed.note_assets} 个、备份 ${removed.backups} 份。`
+        `已清空本机用户数据：文献 ${removed.documents} 篇、笔记 ${removed.notes} 条、批注 ${removed.annotations} 条、会话 ${removed.sessions} 个（消息 ${removed.messages} 条）、译文 ${removed.translations} 条、图片资源 ${removed.note_assets} 个、备份 ${removed.backups} 份。` +
+          (result.failed && result.failed.length > 0
+            ? `另有 ${result.failed.length} 个文件被占用未能删除（${result.failed
+                .slice(0, 3)
+                .join('、')}${result.failed.length > 3 ? '…' : ''}），请关闭占用程序后手动删除。`
+            : '')
       );
       // 服务端已删除数据，界面缓存必须整体失效，避免继续展示已删除的文献/笔记。
       void queryClient.invalidateQueries();

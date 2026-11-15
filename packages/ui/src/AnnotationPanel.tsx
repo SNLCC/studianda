@@ -450,7 +450,9 @@ export function AnnotationPanel({
                   <blockquote>{annotation.quote}</blockquote>
                 ) : null}
                 {translations?.[annotation.id] ? (
-                  <blockquote className="kr-annotation__translation">
+                  <blockquote className="kr-annotation__translation" data-ai-copy="translation">
+                    <span className="kr-muted">机器翻译 · 由 AI 生成，可能出错，请核对原文</span>
+                    <br />
                     译文：{translations[annotation.id]}
                   </blockquote>
                 ) : null}

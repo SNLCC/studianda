@@ -4,7 +4,6 @@ import { useDialogFocusTrap } from './use-dialog-focus-trap.js';
 import { useAiCopyGuard } from './use-ai-copy-guard.js';
 import { ApiRequestError, createApiClient, type ApiClient } from '@studianda/api-client';
 import {
-  AI_OCR_COPY_SUFFIX,
   API_ERROR_CODES,
   DOCUMENT_CATEGORY_LABELS,
   DOCUMENT_TYPE_OPTIONS,
@@ -12,7 +11,9 @@ import {
   REFERENCE_GRAPH_ALL_NODE_LIMIT,
   documentCategoryOf,
   documentTypeLabel,
-  withAiExportHeader,
+  ocrCopySuffix,
+  ocrIsAiEngine,
+  ocrSourceLabel,
   withAiNoteHeader,
   type DocumentCategory,
   type DocumentCategoryCounts,
@@ -553,6 +554,53 @@ function documentCategory(document: DocumentSummary): DocumentCategory {
 // 文献库排序 / 视图持久化：刷新后保留；默认 = 默认排序（可拖拽）+ 卡片视图。
 const LIBRARY_SORT_STORAGE_KEY = 'studianda.library.sort';
 const LIBRARY_VIEW_STORAGE_KEY = 'studianda.library.view';
+
+/** 一次性导出说明的 localStorage 前缀标记：每个导出类型各记一个，只提示一次。 */
+const AI_EXPORT_METADATA_NOTICE_KEY = 'studianda.aiExport.metadataNoticeSeen';
+const ANNOTATED_PDF_NOTICE_KEY = 'studianda.aiExport.annotatedPdfNoticeSeen';
+
+/**
+ * 导出前的一次性说明：按 key 记标记，同一个 key 只弹一次。
+ *
+ * localStorage 不可用时每次都提示，比静默不提示更符合"如实告知"；
+ * 提示放在下载之前，让用户在拿到文件时就知情，而不是事后翻文档。
+ */
+function showExportNoticeOnce(key: string, title: string, message: string): void {
+  try {
+    if (window.localStorage.getItem(key) === 'yes') return;
+  } catch {
+    // 读不到标记就照常提示。
+  }
+  try {
+    appDialogs.alert(message, { title });
+  } finally {
+    try {
+      window.localStorage.setItem(key, 'yes');
+    } catch {
+      // 记不住标记时下次会再提示一次，可以接受。
+    }
+  }
+}
+
+/** 导出 Markdown 前的提示：文件头带 YAML 形式的机器可读 AI 元数据。 */
+function explainMarkdownMetadataOnce(): void {
+  showExportNoticeOnce(
+    AI_EXPORT_METADATA_NOTICE_KEY,
+    '导出说明',
+    '这个 Markdown 文件的开头带有机器可读的 AI 元数据（aigc: true、aigc_generator、aigc_exported_at），用来标明文件可能包含 AI 生成内容。' +
+      '\n\n它不影响正文，也不会改写你的原文；请不要删除或篡改这些字段。该提示只显示这一次。'
+  );
+}
+
+/** 导出带批注 PDF 前的提示：批注含 AI 内容时，副本同样写入 AI 元数据。 */
+function explainAnnotatedPdfOnce(): void {
+  showExportNoticeOnce(
+    ANNOTATED_PDF_NOTICE_KEY,
+    '导出说明',
+    '批注里如果包含 AI 回答或译文，这份 PDF 会像 Markdown 导出一样写入 AI 标识元数据（AIGC 等）。' +
+      '\n\n请不要删除或篡改这些字段。该提示只显示这一次。'
+  );
+}
 
 /** 关系图分页兜底的每页节点数（默认 all 全量模式不用它；仅超硬上限退回分页时按 500 一批）。 */
 const REFERENCE_GRAPH_PAGE_SIZE = 500;
@@ -5973,6 +6021,8 @@ function ReaderView({
   // 译文对照：由阅读区上方功能栏打开，作为原文与阅读伙伴之间的独立一栏；可与阅读伙伴同时展开。
   const [translationOpen, setTranslationOpen] = useState(false);
   const [ocrText, setOcrText] = useState<string | null>(null);
+  /** 本页 OCR 用的引擎（识别接口返回）：决定复制标识是"本机 OCR"还是"AI 模型识别"。 */
+  const [ocrPageEngine, setOcrPageEngine] = useState('');
   const [outline, setOutline] = useState<OutlineEntry[]>([]);
   const [outlineEditing, setOutlineEditing] = useState(false);
   const [outlineDraft, setOutlineDraft] = useState<Array<{ page: number; label: string }>>([]);
@@ -6192,11 +6242,11 @@ function ReaderView({
 
   const copyReflowedRegionText = async (): Promise<void> => {
     const text = ocrRegionResult?.textReflowed || ocrRegionResult?.text || '';
-    // 识别文本可能来自视觉模型或本机 OCR：复制时强制附带显式标识，避免无感知传播。
-    const marked = `${text}${AI_OCR_COPY_SUFFIX}`;
+    // 按实际识别引擎选标识：本机 Tesseract 说"本机 OCR"，AI 模型说"AI 模型识别"。
+    const marked = `${text}${ocrCopySuffix(ocrRegionResult?.engine)}`;
     try {
       await navigator.clipboard.writeText(marked);
-      setOcrRegionCopyMessage('已复制整理后的文本（含 AI/机器识别标识）。');
+      setOcrRegionCopyMessage('已复制整理后的文本（含 OCR/视觉识别标识）。');
     } catch {
       setOcrRegionCopyMessage('复制失败：请手动选中文本复制。');
     }
@@ -8085,6 +8135,7 @@ function ReaderView({
     mutationFn: () => api.recognizePage(document.id, page),
     onSuccess: (result) => {
       setOcrText(result.text);
+      setOcrPageEngine(result.engine ?? '');
       void queryClient.invalidateQueries({ queryKey: ['translation-page'] });
     }
   });
@@ -8199,8 +8250,9 @@ function ReaderView({
   const exportMutation = useMutation({
     mutationFn: () => api.exportDocument(document.id),
     onSuccess: (markdown) => {
-      // 文件头加显式导出声明、学术披露提示与隐式注释：导出内容可能包含 AI 生成的笔记。
-      const blob = new Blob([withAiExportHeader(markdown)], {
+      // 只有内容确实含 AI 标识时，文件头才会写入 AI 元数据；这时才提示一次。
+      if (markdown.startsWith('---\naigc: true')) explainMarkdownMetadataOnce();
+      const blob = new Blob([markdown], {
         type: 'text/markdown;charset=utf-8'
       });
       void downloadBlob(blob, `${document.name.replace(/\.pdf$/i, '')}-批注.md`);
@@ -8210,6 +8262,8 @@ function ReaderView({
   const exportAnnotatedPdf = useMutation({
     mutationFn: () => api.exportAnnotatedPdf(document.id),
     onSuccess: ({ bytes }) => {
+      // 首次导出 PDF 时提示一次：PDF 不写 AI 元数据，粘进批注的 AI 内容需自行注明。
+      explainAnnotatedPdfOnce();
       const blob = new Blob([bytes], { type: 'application/pdf' });
       void downloadBlob(blob, `${document.name.replace(/\.pdf$/i, '')}-批注.pdf`);
     }
@@ -9260,7 +9314,7 @@ function ReaderView({
         ) : null}
         <div className="kr-reader__nav">
           <details className="kr-export-menu" ref={exportMenuRef}>
-            <summary className="kr-icon-btn" title="导出（Markdown 文件头含 AI 生成声明）" aria-label="导出"><IconExport /></summary>
+            <summary className="kr-icon-btn" title="导出（内容含 AI 时文件头写入 AI 声明）" aria-label="导出"><IconExport /></summary>
             <div className="kr-export-menu__items">
               <button
                 type="button"
@@ -9270,11 +9324,12 @@ function ReaderView({
                   exportMutation.mutate();
                 }}
               >
-                {exportMutation.isPending ? '导出中…' : '导出批注（Markdown 含 AI 声明）'}
+                {exportMutation.isPending ? '导出中…' : '导出批注（Markdown）'}
               </button>
               <button
                 type="button"
                 disabled={exportAnnotatedPdf.isPending}
+                title="批注含 AI 内容时会写入 AI 元数据"
                 onClick={(event) => {
                   (event.currentTarget.closest('details') as HTMLDetailsElement | null)?.removeAttribute('open');
                   exportAnnotatedPdf.mutate();
@@ -9713,6 +9768,7 @@ function ReaderView({
               saving={saveTranslationConfig.isPending}
               recognizing={recognizeMutation.isPending}
               ocrText={ocrText}
+              ocrEngine={ocrPageEngine}
               pageText={pageTextQuery.data?.text ?? null}
               pageTextOrigin={pageTextQuery.data?.origin}
               savingPageText={savePageText.isPending}
@@ -10676,7 +10732,7 @@ function ReaderView({
           >
             <h2>区域识别结果</h2>
             <p className="kr-muted" role="note">
-              机器识别 · 可能由 AI 或本机 OCR 生成，可能出错，请核对原图。
+              OCR/视觉识别 · {ocrSourceLabel(ocrRegionResult.engine)}，可能出错，请核对原图。
             </p>
             <p className="kr-muted">
               第 {ocrRegionResult.page} 页 · 识别方式：{ocrRegionResult.engine || '未知'}
@@ -10696,7 +10752,7 @@ function ReaderView({
               整理后的文本（可编辑）
               <textarea
                 className="kr-ocr-region__text"
-                data-ai-copy="ocr"
+                data-ai-copy={ocrIsAiEngine(ocrRegionResult.engine) ? 'ocr-ai' : 'ocr'}
                 value={ocrRegionResult.textReflowed}
                 rows={8}
                 onChange={(event) =>
@@ -10710,7 +10766,9 @@ function ReaderView({
             ocrRegionResult.text !== ocrRegionResult.textReflowed ? (
               <details className="kr-ocr-region__raw">
                 <summary>逐行原文</summary>
-                <pre data-ai-copy="ocr">{ocrRegionResult.text}</pre>
+                <pre data-ai-copy={ocrIsAiEngine(ocrRegionResult.engine) ? 'ocr-ai' : 'ocr'}>
+                  {ocrRegionResult.text}
+                </pre>
               </details>
             ) : null}
             {ocrRegionCopyMessage ? (
@@ -10729,7 +10787,7 @@ function ReaderView({
               <button
                 type="button"
                 className="kr-primary"
-                title="复制整理后文本（自动附带机器识别标识）"
+                title="复制整理后文本（自动附带 OCR/视觉识别标识）"
                 onClick={() => void copyReflowedRegionText()}
               >
                 复制整理后文本

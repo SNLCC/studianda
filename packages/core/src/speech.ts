@@ -7,6 +7,7 @@ import type { SecretStore } from './secrets.js';
 import type { Store } from './store.js';
 import { readModelServices, resolveModelService } from './model-services.js';
 import { chatOutputOptions, thinkingOptions } from './model-protocol.js';
+import { assertEndpointTransport, isLocalOrLanHost } from './net-policy.js';
 import { requestMaxTokensFor, TASK_MAX_TOKENS } from './output-limit.js';
 
 const DEFAULTS = {
@@ -111,7 +112,12 @@ export function saveSpeechConfig(
       try {
         const parsed = new URL(url);
         if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error();
-      } catch {
+        // 与使用须知第 3 节一致：http 只允许本机/局域网，远程语音服务必须 https。
+        if (parsed.protocol === 'http:' && !isLocalOrLanHost(parsed.hostname)) {
+          throw new Error('语音服务地址必须使用 https；http 仅允许本机或局域网地址');
+        }
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('必须使用 https')) throw error;
         throw new Error('语音服务地址必须是 http/https URL');
       }
     }
@@ -724,6 +730,8 @@ function profile(
   if (config[`${kind}_mode`] !== 'custom') {
     throw new Error('语音模式未配置为模型服务或自定义服务');
   }
+  // 请求时再校验一次：拦住升级前保存的公网 http 地址（保存时校验收紧后才生效）。
+  assertEndpointTransport(config[`${kind}_url`], kind === 'tts' ? '语音播报服务地址' : '语音识别服务地址');
   return {
     baseUrl: config[`${kind}_url`],
     model: config[`${kind}_model`],

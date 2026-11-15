@@ -444,4 +444,25 @@ describe('annotated PDF export', () => {
     expect(keywords).toContain('machine learning');
     expect(keywords).toContain('translation');
   });
+
+  it('批注里粘贴了 AI 内容时写入 AI 元数据，纯手写批注不写', async () => {
+    const original = await makePdf();
+    // 与「复制回答 / 复制译文」追加的标识一致（用户把它粘进批注后仍留在正文里）。
+    const aiText = '（AI 生成内容 · 可能出错，请核实原文；不得删除、篡改或隐匿本标识。）';
+
+    const withAi = await buildAnnotatedPdf(original, [
+      annotation({ rects: '[]', style: 'page', quote: '原文', content: aiText })
+    ]);
+    const aiOutput = await PDFDocument.load(withAi.bytes);
+    const aiInfo = aiOutput.context.lookup(aiOutput.context.trailerInfo.Info, PDFDict);
+    expect(aiInfo.lookup(PDFName.of('AIGC'), PDFHexString).decodeText()).toBe('true');
+    expect(aiInfo.lookup(PDFName.of('AITool'), PDFHexString).decodeText()).toBe('Studianda');
+
+    const plain = await buildAnnotatedPdf(original, [
+      annotation({ rects: '[]', style: 'page', quote: '原文', content: '自己写的批注' })
+    ]);
+    const plainOutput = await PDFDocument.load(plain.bytes);
+    const plainInfo = plainOutput.context.lookup(plainOutput.context.trailerInfo.Info, PDFDict);
+    expect(plainInfo.has(PDFName.of('AIGC'))).toBe(false);
+  });
 });

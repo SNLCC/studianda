@@ -7,6 +7,7 @@ import type {
 } from '@studianda/shared';
 import { resolveModelService } from './model-services.js';
 import { chatOutputOptions, thinkingOptions } from './model-protocol.js';
+import { assertEndpointTransport } from './net-policy.js';
 import type { SecretStore } from './secrets.js';
 import { annotate } from './source-tier.js';
 import type { Store } from './store.js';
@@ -88,6 +89,8 @@ export function saveSearchConfig(
     }
     if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('搜索地址必须是 http/https');
     if (parsed.username || parsed.password) throw new Error('搜索地址不能带凭据');
+    // 与使用须知第 3 节一致：http 只允许本机/局域网，远程端点必须 https。
+    assertEndpointTransport(baseUrl, '搜索服务地址');
   }
   if (input.clear_key) secrets.clear('search.api_key');
   else if (input.api_key?.trim()) secrets.set('search.api_key', input.api_key.trim());
@@ -195,6 +198,8 @@ async function fetchDeepSeek(
   oriQuestion?: string
 ): Promise<Response> {
   const base = (baseUrl || DEEPSEEK_BASE_URL).replace(/\/+$/, '');
+  // 请求时再校验一次：拦住升级前保存下来的公网 http 地址（配置保存时校验收紧后才生效）。
+  assertEndpointTransport(base, '搜索服务地址');
   return requestWithRetry('搜索', () =>
     fetch(`${base}/v1/tools/search`, {
       method: 'POST',
@@ -307,6 +312,7 @@ async function fetchDeepSeekPage(
   url: string
 ): Promise<string> {
   const base = (baseUrl || DEEPSEEK_BASE_URL).replace(/\/+$/, '');
+  assertEndpointTransport(base, '抓取服务地址');
   const response = await requestWithRetry('抓取网页', () =>
     fetch(`${base}/v1/tools/fetch`, {
       method: 'POST',

@@ -103,6 +103,20 @@ export function saveRetrievalTokenCache(options: {
 }
 
 /**
+ * 删除某个作用域的磁盘 token 缓存（文件不存在或被占用时静默）。
+ *
+ * 缓存里是 chunk 的分词词项，属于可由正文还原的派生数据；文献被彻底删除时必须
+ * 一并清掉，否则"已删除"的文献仍能从缓存里读出词项。
+ */
+export function deleteRetrievalTokenCache(dataDir: string, cacheKey: string): void {
+  try {
+    unlinkSync(cacheFilePath(dataDir, cacheKey));
+  } catch {
+    // 不存在 / 被占用：缓存可重建，删除主流程不应因此失败。
+  }
+}
+
+/**
  * 清理 token 缓存目录：按 mtime 从新到旧保留，超过总字节预算/文件数就删除最旧；
  * 同时清掉崩溃留下的 .tmp。返回删除文件数与当前目录总字节数。
  */

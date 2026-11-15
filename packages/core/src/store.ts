@@ -21,6 +21,8 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { SCHEMA_SQL } from './store-schema.js';
+import { looksLikeAiContent, withAiExportHeader } from '@studianda/shared';
+import { purgeDocumentRetrievalCaches } from './retrieval.js';
 import { loadImage } from '@napi-rs/canvas';
 import type {
   AnnotationRecord,
@@ -3848,6 +3850,11 @@ export class Store {
       'annotations',
       'notes',
       'messages',
+      // 会话表存标题与早期摘要、目录页设置与参考文献编辑都含用户内容：
+      // 彻底删除文献时必须一并清掉，否则"已删除"的文献仍能读出摘要与编辑记录。
+      'document_chat_sessions',
+      'doc_navigation_toc',
+      'reference_edits',
       'translation_segments',
       'translation_pages',
       'page_edits',
@@ -3888,6 +3895,10 @@ export class Store {
       const chunkRows = this.db
         .prepare('SELECT rowid AS rowid FROM chunks WHERE document_id = ?')
         .all(id) as unknown as Array<{ rowid: number }>;
+      // 语义向量按 chunk_id 存；先按该文献的 chunk 删除，避免向量表残留可还原的语义信息。
+      this.db
+        .prepare('DELETE FROM vectors WHERE chunk_id IN (SELECT id FROM chunks WHERE document_id = ?)')
+        .run(id);
       const deleteFts = this.db.prepare('DELETE FROM chunks_fts WHERE rowid = ?');
       for (const chunk of chunkRows) deleteFts.run(chunk.rowid);
       this.db.prepare('DELETE FROM chunks WHERE document_id = ?').run(id);
@@ -3924,6 +3935,17 @@ export class Store {
     this.refreshNoteAssetCounts(affectedAssets);
     this.purgeNoteAssetRecords(affectedAssets);
     this.invalidateReferenceGraphCache();
+    // 派生缓存不在事务里：按作用域清掉内存索引与磁盘 token 缓存，再截断 WAL，减少残留。
+    try {
+      purgeDocumentRetrievalCaches(this, id);
+    } catch {
+      // 缓存可重建；清理失败不应让删除看起来没成功（revision 变化后旧缓存也不会再命中）。
+    }
+    try {
+      this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    } catch {
+      // WAL 仍有读/写者时 checkpoint 可能失败，下次启动还会再做。
+    }
   }
 
   /**
@@ -4056,15 +4078,19 @@ export class Store {
     }
 
     // 文件删除一律 best-effort：Windows 上被打开的文件删不掉，但清空数据不能因此整单失败。
+    // 删不掉的路径记进 failed，界面据此提示"逻辑数据已清空，但部分文件仍被占用"。
+    const failed: string[] = [];
+    const relPath = (target: string): string =>
+      path.relative(this.dataDir, target) || path.basename(target);
     let backupsRemoved = 0;
     for (const file of documentFiles) {
       try {
         unlinkSync(file);
       } catch {
-        // 文件被占用或已不存在：数据库记录已删除，残留文件不影响清空结果。
+        failed.push(relPath(file));
       }
     }
-    const removeFolderContents = (folder: string): void => {
+    const removeFolderContents = (folder: string, label: string): void => {
       let entries: Dirent[];
       try {
         entries = readdirSync(folder, { withFileTypes: true });
@@ -4077,14 +4103,14 @@ export class Store {
           if (entry.isDirectory()) rmSync(target, { recursive: true, force: true });
           else unlinkSync(target);
         } catch {
-          // 同上：单个文件被占用时跳过。
+          failed.push(`${label}/${entry.name}`);
         }
       }
     };
     // PDF 副本目录整体清理（连旧版本遗留/无记录的孤儿副本一起清）。
-    removeFolderContents(this.papersDir);
+    removeFolderContents(this.papersDir, 'papers');
     // 上传解析的临时目录（失败/中断时可能残留 PDF）。
-    removeFolderContents(path.join(this.dataDir, 'imports'));
+    removeFolderContents(path.join(this.dataDir, 'imports'), 'imports');
     // Markdown 扫描/导入结果文件（含扫描到/导入过的笔记路径与报告）。
     try {
       for (const name of readdirSync(this.dataDir)) {
@@ -4092,29 +4118,31 @@ export class Store {
           try {
             unlinkSync(path.join(this.dataDir, name));
           } catch {
-            // 文件被占用时跳过。
+            failed.push(name);
           }
         }
       }
     } catch {
       // 目录读取失败不影响已完成的数据库清空。
     }
-    removeFolderContents(path.join(this.dataDir, NOTE_ASSET_DIR));
-    removeFolderContents(path.join(this.dataDir, 'migration-backups'));
-    removeFolderContents(path.join(this.dataDir, 'diagnostics'));
+    removeFolderContents(path.join(this.dataDir, NOTE_ASSET_DIR), NOTE_ASSET_DIR);
+    removeFolderContents(path.join(this.dataDir, 'migration-backups'), 'migration-backups');
+    removeFolderContents(path.join(this.dataDir, 'diagnostics'), 'diagnostics');
     // 运行日志（可能含脱敏错误上下文）也属于本机数据：best-effort 删除，写日志的句柄会重建文件。
     for (const name of ['application.log', 'application.log.1']) {
+      const target = path.join(this.dataDir, name);
+      if (!existsSync(target)) continue;
       try {
-        unlinkSync(path.join(this.dataDir, name));
+        unlinkSync(target);
       } catch {
-        // 日志被占用或不存在时跳过。
+        failed.push(name);
       }
     }
     // 检索缓存目录（dataDir/cache/retrieval-index）。
     try {
       rmSync(path.join(this.dataDir, 'cache'), { recursive: true, force: true });
     } catch {
-      // 缓存文件被占用时跳过。
+      failed.push('cache/');
     }
     // 备份目录：按文件计数（备份 zip），staging 等子目录一并清理。
     const backupsDir = path.join(this.dataDir, 'backups');
@@ -4128,7 +4156,7 @@ export class Store {
             backupsRemoved += 1;
           }
         } catch {
-          // 正在写入/被占用的备份跳过。
+          failed.push(`backups/${entry.name}`);
         }
       }
     } catch {
@@ -4143,13 +4171,17 @@ export class Store {
     try {
       for (const entry of readdirSync(this.dataDir, { withFileTypes: true })) {
         if (entry.isDirectory() && entry.name.startsWith('.pre-restore-')) {
-          rmSync(path.join(this.dataDir, entry.name), { recursive: true, force: true });
+          try {
+            rmSync(path.join(this.dataDir, entry.name), { recursive: true, force: true });
+          } catch {
+            failed.push(entry.name);
+          }
         }
       }
     } catch {
       // 目录读取失败不影响已完成的数据库清空。
     }
-    return { ok: true, removed: { ...removed, backups: backupsRemoved } };
+    return { ok: true, removed: { ...removed, backups: backupsRemoved }, failed };
   }
 
   listAnnotations(documentId: string, trash = false): AnnotationRecord[] {
@@ -4908,7 +4940,13 @@ export class Store {
       }
     }
     return {
-      markdown: parts.filter((part) => part != null).join('\n').replace(/\n{3,}/g, '\n\n') + '\n',
+      // 只有内容里确实带 AI 标识（存为笔记的文件头 / 复制粘贴的标识文字）时才写文件头；
+      // 纯用户自己的笔记与批注导出不加 AI 元数据。
+      markdown: withAiExportHeader(
+        parts.filter((part) => part != null).join('\n').replace(/\n{3,}/g, '\n\n') + '\n',
+        notes.some((note) => looksLikeAiContent(note.content)) ||
+          annotations.some((annotation) => looksLikeAiContent(annotation.content))
+      ),
       filename: `${document.name.replace(/\.pdf$/i, '')}-批注.md`
     };
   }

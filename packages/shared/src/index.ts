@@ -556,6 +556,11 @@ export interface ClearUserDataResult {
     note_assets: number;
     backups: number;
   };
+  /**
+   * 逻辑数据已清空、但文件被占用而没能删除的路径（相对资料目录）。
+   * 为空/缺省表示文件也全部删除成功；界面据此提示用户关闭占用程序后重试。
+   */
+  failed?: string[];
 }
 
 /** 文件健康检查：仅 stat 文献文件是否存在，不读取正文。 */

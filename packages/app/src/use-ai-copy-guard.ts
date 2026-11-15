@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import {
   AI_ANSWER_COPY_SUFFIX,
   AI_OCR_COPY_SUFFIX,
+  AI_OCR_MODEL_COPY_SUFFIX,
   AI_TRANSLATION_COPY_SUFFIX
 } from '@studianda/shared';
 
@@ -24,6 +25,7 @@ interface SelectionCopy {
 function suffixFor(hosts: HTMLElement[]): string {
   const kinds = new Set(hosts.map((host) => host.dataset.aiCopy));
   if (kinds.size === 1 && kinds.has('translation')) return AI_TRANSLATION_COPY_SUFFIX;
+  if (kinds.size === 1 && kinds.has('ocr-ai')) return AI_OCR_MODEL_COPY_SUFFIX;
   if (kinds.size === 1 && kinds.has('ocr')) return AI_OCR_COPY_SUFFIX;
   return AI_ANSWER_COPY_SUFFIX;
 }

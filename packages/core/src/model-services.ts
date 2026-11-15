@@ -9,6 +9,7 @@ import type {
 import type { SecretStore } from './secrets.js';
 import type { Store } from './store.js';
 import { officialModelMetadata, speechModels } from './model-metadata.js';
+import { isLocalOrLanHost } from './net-policy.js';
 
 const SERVICES_KEY = 'model.services';
 const ROUTING_KEY = 'model.routing';
@@ -117,14 +118,6 @@ export function modelServicesImpact(
     speechAsr: (settings['speech.asr_connection_id'] ?? '') === id,
     speechTts: (settings['speech.tts_connection_id'] ?? '') === id
   };
-}
-function isLocalOrLanHost(host: string): boolean {
-  if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.local')) {
-    return true;
-  }
-  if (/^10\./.test(host) || /^192\.168\./.test(host)) return true;
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
-  return false;
 }
 
 /**

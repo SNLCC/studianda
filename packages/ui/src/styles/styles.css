@@ -7071,6 +7071,17 @@ font-size: var(--kr-fs-body);
   margin: 6px 4px;
   font-size: var(--kr-fs-caption);
 }
+.kr-tl__ai-notice {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0 0 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(246, 240, 226, 0.94);
+  color: var(--kr-muted-text, #6b6457);
+  font-size: var(--kr-fs-caption);
+}
 .kr-tl__page {
   position: relative;
   margin: 0 auto;

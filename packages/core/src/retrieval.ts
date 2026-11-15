@@ -11,6 +11,7 @@ import {
   type RetrievalIndex
 } from './retrieval-index.js';
 import {
+  deleteRetrievalTokenCache,
   loadRetrievalTokenCache,
   saveRetrievalTokenCache
 } from './retrieval-token-cache.js';
@@ -274,6 +275,18 @@ export function warmRetrievalIndex(store: Store, documentId: string): number {
   });
   evictRetrievalIndexCache(cacheKey);
   return built.entries;
+}
+
+/**
+ * 彻底删除文献后清理该文献作用域的检索缓存：内存索引（含/不含派生内容两种作用域）
+ * 与磁盘 token 缓存文件。缓存里是可还原正文的派生数据，必须随文献一起删除。
+ */
+export function purgeDocumentRetrievalCaches(store: Store, documentId: string): void {
+  for (const includeDerived of [true, false]) {
+    const key = scopeCacheKey(store, documentId, undefined, includeDerived);
+    retrievalIndexCache.delete(key);
+    deleteRetrievalTokenCache(store.dataDir, key);
+  }
 }
 
 function evictRetrievalIndexCache(protectedKey: string): void {

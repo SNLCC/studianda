@@ -5,6 +5,7 @@ import type {
 } from '@studianda/shared';
 import { resolveModelConnection, resolveModelService } from './model-services.js';
 import { isDeepSeekHost } from './model-protocol.js';
+import { isLocalOrLanHost } from './net-policy.js';
 import { isOcrLanguageCode, OCR_LANGUAGE_CATALOG } from './ocr-languages.js';
 import type { SecretStore } from './secrets.js';
 import type { Store } from './store.js';
@@ -266,6 +267,8 @@ export function parsingConfigForUse(
   if (!config.service_url) {
     throw new ParsingConfigError(400, '请先在识别设置中填写 MinerU / 解析服务的地址。');
   }
+  // 请求时再校验一次：拦住升级前保存的公网 http 地址。
+  validateUrl(config.service_url);
   if (!config.allow_remote && !isLoopback(config.service_url)) {
     throw new ParsingConfigError(403, '请先在识别设置中允许向所选远程服务发送页面图像。');
   }
@@ -276,7 +279,12 @@ function validateUrl(value: string): void {
   try {
     const url = new URL(value);
     if (!['http:', 'https:'].includes(url.protocol)) throw new Error();
-  } catch {
+    // 与使用须知第 3 节一致：http 只允许本机/局域网，远程解析服务必须 https。
+    if (url.protocol === 'http:' && !isLocalOrLanHost(url.hostname)) {
+      throw new ParsingConfigError(400, '识别服务地址必须使用 https；http 仅允许本机或局域网地址');
+    }
+  } catch (error) {
+    if (error instanceof ParsingConfigError) throw error;
     throw new ParsingConfigError(400, '识别服务地址必须是 http/https URL');
   }
 }

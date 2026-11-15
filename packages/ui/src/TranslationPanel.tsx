@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type React from 'react';
-import { AI_TRANSLATION_COPY_SUFFIX } from '@studianda/shared';
+import { AI_TRANSLATION_COPY_SUFFIX, ocrIsAiEngine, ocrSourceLabel } from '@studianda/shared';
 import type {
   TranslationConfigRecord,
   TranslationJobRecord,
@@ -143,6 +143,8 @@ export interface TranslationPanelProps {
   saving: boolean;
   recognizing: boolean;
   ocrText?: string | null;
+  /** 本页 OCR 实际引擎（识别接口返回）；缺省时不宣称是本机 OCR 还是 AI 模型。 */
+  ocrEngine?: string | null;
   pageText?: string | null;
   pageTextOrigin?: string;
   savingPageText: boolean;
@@ -209,6 +211,7 @@ export function TranslationPanel({
   saving,
   recognizing,
   ocrText,
+  ocrEngine,
   error,
   onSaveTargetLanguage,
   onTranslate,
@@ -741,8 +744,11 @@ export function TranslationPanel({
         {error ? <p className="kr-page-error">{error}</p> : null}
         {ocrText ? (
           <details className="kr-translation__ocr">
-            <summary>本页 OCR 文本（{ocrText.length} 字符）</summary>
-            <pre data-ai-copy="ocr">{ocrText}</pre>
+            <summary>
+              本页 OCR 文本（{ocrText.length} 字符
+              {ocrEngine ? ` · ${ocrSourceLabel(ocrEngine)}` : ''}）
+            </summary>
+            <pre data-ai-copy={ocrIsAiEngine(ocrEngine) ? 'ocr-ai' : 'ocr'}>{ocrText}</pre>
           </details>
         ) : null}
         <details className="kr-translation__ocr">
