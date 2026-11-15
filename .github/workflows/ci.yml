@@ -28,5 +28,8 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # 打包期会改写 electron-builder 的 NSIS 模板（去掉 WinShell 调用）；
+      # 先在 CI 验证 node_modules 里的模板可写，避免到 release 才暴露只读/硬链接问题。
+      - run: pnpm patch:nsis
       # 单一入口：本地与 CI 跑完全相同的检查，避免两边行为不一致。
       - run: pnpm verify
