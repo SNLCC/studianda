@@ -1,6 +1,6 @@
 {
-  "note": "随安装包分发的字体清单。woff2 由 scripts/build-fonts.py 从官方 TTF 生成；scripts/audit-packaged-legal.mjs 读取本文件，把字体并入 legal/THIRD-PARTY.md、legal/NOTICE.html 与 legal/inventory.json。修改字体来源或版本时必须同步更新本文件。",
-  "generatedBy": "scripts/build-fonts.py",
+  "note": "随安装包分发的字体许可清单。woff2 由 scripts/build-fonts.py 从官方 TTF 生成，并写出 packages/ui/src/styles/assets/fonts/fonts.manifest.json（文件、字节数、sha256）；本文件只记录来源、许可与版权，两者需要同步更新。scripts/audit-packaged-legal.mjs 读取本文件，把字体并入 legal/THIRD-PARTY.md、legal/NOTICE.html 与 legal/inventory.json；copyright 字段必须逐字等于字体二进制 name 表 ID 0；许可原文与说明见 legal/font-licenses/README.md。",
+  "generatedBy": "scripts/build-fonts.py（仅生成 woff2 与 fonts.manifest.json）",
   "fonts": [
     {
       "id": "noto-serif-cjk-sc",
@@ -17,6 +17,8 @@
       "license": "SIL Open Font License 1.1",
       "licenseFile": "legal/font-licenses/NotoSerifCJK-OFL-1.1.txt",
       "copyright": "© 2017-2024 Adobe (http://www.adobe.com/).",
+      "copyrightSource": "name table ID 0 of StudiandaSerifSC-Regular.woff2, StudiandaSerifSC-SemiBold.woff2",
+      "additionalPermission": null,
       "reservedFontName": null,
       "renamed": false,
       "files": [
@@ -39,6 +41,8 @@
       "license": "SIL Open Font License 1.1",
       "licenseFile": "legal/font-licenses/NotoSansCJK-OFL-1.1.txt",
       "copyright": "© 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'.",
+      "copyrightSource": "name table ID 0 of StudiandaSansSC-Regular.woff2, StudiandaSansSC-Medium.woff2",
+      "additionalPermission": null,
       "reservedFontName": "Source",
       "renamed": false,
       "files": [
@@ -48,7 +52,7 @@
     },
     {
       "id": "lxgw-wenkai-gb",
-      "name": "Studianda Kai",
+      "name": "LXGW WenKai GB（霞鹜文楷 GB）",
       "alias": "Studianda Kai",
       "weights": [
         400
@@ -61,7 +65,15 @@
       "upstreamAuthor": "LXGW (@lxgw)，基于 Fontworks / Monotype KK 的 Klee One",
       "license": "SIL Open Font License 1.1",
       "licenseFile": "legal/font-licenses/LXGWWenKaiGB-OFL-1.1.txt",
-      "copyright": "Copyright 2022-2026 LXGW, with Reserved Font Name '霞鹜', '霞鶩', '落霞孤鹜', '落霞孤鶩' and 'LXGW'. / Copyright 2020 The Klee Project Authors.",
+      "copyright": "Copyright 2022-2026 LXGW (https://github.com/lxgw/LxgwWenKaiGB), with Reserved Font Name '霞鹜', '霞鶩', '落霞孤鹜', '落霞孤鶩' and 'LXGW'.\nCopyright 2020 The Klee Project Authors (https://github.com/fontworks-fonts/Klee)",
+      "copyrightSource": "name table ID 0 of StudiandaKaiSC-Regular.woff2",
+      "additionalPermission": {
+        "present": true,
+        "text": "The Reserved Font Names '霞鹜', '霞鶩', '落霞孤鹜', '落霞孤鶩' and 'LXGW' may continue to be used in Modified Versions recompiled from the Original Version, without modifications to the font source code; or in Modified Versions subsetted or converted to other formats (e.g., WOFF/WOFF2) solely for web font delivery, provided such Modified Versions are not made available as installable desktop fonts (e.g., on mainstream platforms like Google Fonts, or third-party non-commercial platforms recognized by the author @lxgw; other web font platforms please contact the author @lxgw for confirmation).",
+        "condition": "该附加许可允许在子集化/转格式的修改版中继续使用保留名，前提是这些修改版不得作为可安装桌面字体提供。",
+        "compliance": "本项目已按 OFL §3 将家族名改为 Studianda Kai（name ID 1/3/4/6 见上），因此不依赖该附加许可；随包 woff2 只经 CSS @font-face 在应用内加载，不提供字体安装功能，也不作为可安装桌面字体分发。",
+        "redistributorNote": "再分发者不要把 app.asar 内的 Kai woff2 解出后转成可安装字体对外提供。"
+      },
       "reservedFontName": "霞鹜 / 霞鶩 / 落霞孤鹜 / 落霞孤鶩 / LXGW",
       "renamed": true,
       "renameNote": "子集化与格式转换构成 OFL 定义的 Modified Version；原家族名含保留名 LXGW，故按 OFL 第 3 条改为 Studianda Kai。版权声明、作者与许可字段原样保留。",
@@ -85,6 +97,8 @@
       "license": "SIL Open Font License 1.1",
       "licenseFile": "legal/font-licenses/NotoLatin-OFL-1.1.txt",
       "copyright": "Copyright 2022 The Noto Project Authors (https://github.com/notofonts/latin-greek-cyrillic)",
+      "copyrightSource": "name table ID 0 of StudiandaSerifLatin-Regular.woff2, StudiandaSerifLatin-SemiBold.woff2",
+      "additionalPermission": null,
       "reservedFontName": null,
       "renamed": false,
       "files": [
@@ -108,6 +122,8 @@
       "license": "SIL Open Font License 1.1",
       "licenseFile": "legal/font-licenses/NotoLatin-OFL-1.1.txt",
       "copyright": "Copyright 2022 The Noto Project Authors (https://github.com/notofonts/latin-greek-cyrillic)",
+      "copyrightSource": "name table ID 0 of StudiandaSansLatin-Regular.woff2, StudiandaSansLatin-Medium.woff2",
+      "additionalPermission": null,
       "reservedFontName": null,
       "renamed": false,
       "files": [

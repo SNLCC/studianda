@@ -1,10 +1,10 @@
 # 第三方组件与许可证声明
 
-生成时间：2026-11-11T13:04:11.075Z
+生成时间：2026-11-15T10:24:30.016Z
 
 本清单从**实际安装包** `resources/app.asar` 的依赖树生成，覆盖渲染器、Core 和生产依赖；不是仅根据源码清单推测。
 
-本项目的 PolyForm Noncommercial 1.0.0 许可证仅适用于本项目原创代码；随包分发的第三方组件仍分别适用其自身许可证，本项目许可证不改变、不限制这些组件在其许可证下的权利。
+本项目的 Apache License 2.0 许可证仅适用于本项目原创代码；随包分发的第三方组件仍分别适用其自身许可证，本项目许可证不改变、不限制这些组件在其许可证下的权利。随包字体、PDF.js 包内的第三方资源（CMaps、标准字体、ICC、WASM 解码器）与 Electron 运行时文件（含 Chromium、FFmpeg、ICU 等）均分别按各自自身许可分发，均不属于本项目许可范围；逐项许可见 `legal/THIRD-PARTY.md`、`legal/upstream/official/pdfjs-wasm/` 与 `legal/upstream/official/electron-runtime-dlls.md`；随包字体的逐款许可、版权与保留名见 `legal/fonts.json` 与 `legal/font-licenses/`。
 
 ## Electron 与 Chromium
 
@@ -121,13 +121,13 @@
 |---|---|---|---|---|
 | Noto Serif CJK SC | 2.003 | `Studianda Serif` | SIL Open Font License 1.1 | [font-noto-serif-cjk-sc-NotoSerifCJK-OFL-1.1.txt](licenses/font-noto-serif-cjk-sc-NotoSerifCJK-OFL-1.1.txt) |
 | Noto Sans CJK SC | 2.004 | `Studianda Sans` | SIL Open Font License 1.1 | [font-noto-sans-cjk-sc-NotoSansCJK-OFL-1.1.txt](licenses/font-noto-sans-cjk-sc-NotoSansCJK-OFL-1.1.txt) |
-| Studianda Kai | 1.530 | `Studianda Kai` | SIL Open Font License 1.1 | [font-lxgw-wenkai-gb-LXGWWenKaiGB-OFL-1.1.txt](licenses/font-lxgw-wenkai-gb-LXGWWenKaiGB-OFL-1.1.txt) |
+| LXGW WenKai GB（霞鹜文楷 GB） | 1.530 | `Studianda Kai` | SIL Open Font License 1.1 | [font-lxgw-wenkai-gb-LXGWWenKaiGB-OFL-1.1.txt](licenses/font-lxgw-wenkai-gb-LXGWWenKaiGB-OFL-1.1.txt) |
 | Noto Serif | 2.015 | `Studianda Serif Latin` | SIL Open Font License 1.1 | [font-noto-serif-latin-NotoLatin-OFL-1.1.txt](licenses/font-noto-serif-latin-NotoLatin-OFL-1.1.txt) |
 | Noto Sans | 2.015 | `Studianda Sans Latin` | SIL Open Font License 1.1 | [font-noto-sans-latin-NotoLatin-OFL-1.1.txt](licenses/font-noto-sans-latin-NotoLatin-OFL-1.1.txt) |
 
 - `Studianda Serif`：字重 400 / 600；保留字体内部名（其保留名与本项目命名不冲突）；版权声明：© 2017-2024 Adobe (http://www.adobe.com/).；来源 https://github.com/notofonts/noto-cjk/releases；覆盖口径见 `legal/fonts.json`。
 - `Studianda Sans`：字重 400 / 500；保留字体内部名（其保留名与本项目命名不冲突）；版权声明：© 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'.；来源 https://github.com/notofonts/noto-cjk/releases；覆盖口径见 `legal/fonts.json`。
-- `Studianda Kai`：字重 400；已按 OFL 第 3 条改名（原保留名：霞鹜 / 霞鶩 / 落霞孤鹜 / 落霞孤鶩 / LXGW），版权声明、作者与许可字段原样保留；版权声明：Copyright 2022-2026 LXGW, with Reserved Font Name '霞鹜', '霞鶩', '落霞孤鹜', '落霞孤鶩' and 'LXGW'. / Copyright 2020 The Klee Project Authors.；来源 https://github.com/lxgw/LxgwWenKaiGB/releases；覆盖口径见 `legal/fonts.json`。
+- `Studianda Kai`：字重 400；已按 OFL 第 3 条改名（原保留名：霞鹜 / 霞鶩 / 落霞孤鹜 / 落霞孤鶩 / LXGW），版权声明、作者与许可字段原样保留；版权声明：Copyright 2022-2026 LXGW (https://github.com/lxgw/LxgwWenKaiGB), with Reserved Font Name '霞鹜', '霞鶩', '落霞孤鹜', '落霞孤鶩' and 'LXGW'. Copyright 2020 The Klee Project Authors (https://github.com/fontworks-fonts/Klee)；来源 https://github.com/lxgw/LxgwWenKaiGB/releases；覆盖口径见 `legal/fonts.json`。
 - `Studianda Serif Latin`：字重 400 / 600；保留字体内部名（其保留名与本项目命名不冲突）；版权声明：Copyright 2022 The Noto Project Authors (https://github.com/notofonts/latin-greek-cyrillic)；来源 https://github.com/notofonts/latin-greek-cyrillic；覆盖口径见 `legal/fonts.json`。
 - `Studianda Sans Latin`：字重 400 / 500；保留字体内部名（其保留名与本项目命名不冲突）；版权声明：Copyright 2022 The Noto Project Authors (https://github.com/notofonts/latin-greek-cyrillic)；来源 https://github.com/notofonts/latin-greek-cyrillic；覆盖口径见 `legal/fonts.json`。
 
@@ -135,18 +135,26 @@
 
 以下组件内嵌在二进制、WASM 或安装器中，不单独出现在 node_modules 依赖树；本节的许可证原文均在 `legal/upstream/` 下随包分发。
 
-- @napi-rs/canvas 原生二进制（Node-API native addon）：包含 Skia、ICU、libavif 0.14.0 / libavif-sys 0.17.0、libaom-sys 0.17.2（BSD-2-Clause）、libjpeg-turbo（IJG/BSD/Zlib）、libloading 0.9.0（ISC）、foldhash 0.2.0 / bytemuck 1.25.2（Zlib）、MPL-2.0 组件（cssparser、cssparser-macros、dtoa-short、selectors）等 142 个 SBOM 组件。清单与逐组件许可证类型见 `upstream/official/napi-canvas/NAPI-CANVAS-THIRD-PARTY.md` 、`COMPONENTS.md` 、`COMPONENT-LICENSES.md` 与 `sbom.cdx.json`，原文见同目录；MPL-2.0 源码获取方式见该说明。
+- @napi-rs/canvas 原生二进制（Node-API native addon）：包含 Skia、ICU、libavif 0.14.0 / libavif-sys 0.17.0、libaom-sys 0.17.2（BSD-2-Clause）、libjpeg-turbo（IJG/BSD/Zlib）、libloading 0.9.0（ISC）、foldhash 0.2.0 / bytemuck 1.25.2（Zlib）、MPL-2.0 组件（cssparser、cssparser-macros、dtoa-short、selectors）等 142 个 SBOM 组件。清单与逐组件许可证类型见 `upstream/official/napi-canvas/NAPI-CANVAS-THIRD-PARTY.md` 、`COMPONENTS.md` 、`COMPONENT-LICENSES.md` 与 `sbom.cdx.json`，原文见同目录。四个 MPL-2.0 组件的**未修改上游源码归档**随包提供于 `upstream/official/napi-canvas/mpl-sources/`（含 SHA-256 清单），同时保留官方仓库地址。
 - Tesseract.js-core WASM：内嵌 Tesseract、Leptonica、giflib、libjpeg-turbo、libpng、libtiff、libwebp、openlibm、zlib；说明见 `upstream/Tesseract-core-THIRD-PARTY.md`，原文见 `upstream/official/tesseract-core/`。
 - PDF.js WASM / 资源：JBIG2、OpenJPEG、QCMS、CMaps、标准字体、ICC；说明见 `upstream/official/pdfjs-wasm/PDFJS-WASM-THIRD-PARTY.md`。
 - tesseract.js 预构建 dist：内嵌 buffer 6.0.3（MIT）、ieee754 1.2.1（BSD-3-Clause）、regenerator-runtime（MIT）、zlib.js（MIT）；buffer/ieee754 原文见 `upstream/official/tesseract-embedded/`。
 - NSIS 安装器：安装器 stub 使用 NSIS 3.0.4.1（zlib/libpng license），许可证原文见 `upstream/official/nsis-COPYING.txt`。
-- nsis7z.dll：NSIS 的 7z 解压插件（安装时解压 app-64.7z），基于 7-Zip 19.00 源码（Nik Medved / Igor Pavlov）；按 7-Zip License（GNU LGPL-2.1+，含 unRAR 限制）分发。许可原文、来源与完整对应源码见 `upstream/official/nsis7z/`。
+- nsis7z.dll：NSIS 的 7z 解压插件（安装时解压 app-64.7z），基于 7-Zip 19.00 源码（Nik Medved / Igor Pavlov）；按 7-Zip License（GNU LGPL-2.1+，含 unRAR 限制）分发。许可原文、来源与完整对应源码见 `upstream/official/nsis7z/`；实际随包 DLL 的来源包与 SHA-256 见该目录 `README.md`。
 - StdUtils.dll：NSIS 插件（electron-builder 模板使用），作者 LoRd_MuldeR；按 GNU LGPL-2.1-or-later 分发，许可、澄清说明与完整对应源码见 `upstream/official/nsis-plugins/stdutils/`。
 - UAC.dll：NSIS 提权插件，作者 Anders；按 ZLIB/LIBPNG License 分发，许可与源码见 `upstream/official/nsis-plugins/uac/`。
-- WinShell.dll：NSIS 快捷方式/AppUserModelID 插件，作者 Anders；上游页面标注 Freeware，来源记录见 `upstream/official/nsis-plugins/winshell/`。
 - elevate.exe：NSIS 提权辅助程序（MIT，Copyright (c) 2007 Johannes Passing），原文见 `upstream/official/elevate-MIT.txt`。
-- FFmpeg：Electron 内置 `ffmpeg.dll`（LGPL-2.1-or-later，Electron 官方构建，未修改）；源代码与构建配置见 https://github.com/electron/electron ，许可证见 `upstream/official/ffmpeg-LGPL-2.1.txt`。
+- FFmpeg：Electron 内置 `ffmpeg.dll`（LGPL-2.1-or-later，Electron 官方构建，未修改）；许可证见 `upstream/official/ffmpeg-LGPL-2.1.txt`，对应源码与书面说明见 `legal/COMPATIBILITY.md`。
+- Electron 运行时二进制（`ffmpeg.dll`、`d3dcompiler_47.dll`、`dxcompiler.dll`、`dxil.dll`、`vulkan-1.dll`、`vk_swiftshader.dll`、`icudtl.dat` 等）：由 Electron/Chromium 发行物原样提供、本项目未修改；版权与许可声明随 `electron/LICENSE.txt` 与 `electron/LICENSES.chromium.html` 分发，补充说明见 `upstream/official/electron-runtime-dlls.md`。
 - pako 的 zlib 兼容层：说明见 `upstream/official/pako-zlib-README.txt`。
+
+> 安装器**不随包分发 WinShell 插件**，但保留其行为：该插件上游只有 "Freeware" 标注、没有许可文本或源码，不构成再分发授权；构建期由 `scripts/patch-nsis-templates.mjs` 把调用改写为 `apps/desktop/build/nsis/aumid.nsh` 的宏（NSIS 自带 System 插件 + Windows 公开 API），快捷方式 AUMID 仍照常写入/清除。证据见 `upstream/official/nsis-plugins/winshell/README.md`。
+
+## 强制署名与特别声明
+
+- **libjpeg-turbo（IJG）**：随包分发的 Tesseract WASM 与 `skia.node` 只含 libjpeg-turbo 二进制、不含其源码，按 IJG 许可需在产品文档中写明：`This software is based in part on the work of the Independent JPEG Group.`
+- **MPL-2.0**：cssparser、cssparser-macros、dtoa-short、selectors 四个组件按 MPL-2.0 §3.2(a) 随包提供未修改源码归档（见上文 `mpl-sources/`），并同时给出官方仓库地址。
+- **随包字体**：9 个 woff2 按各自自身许可分发，不属于本项目许可范围；逐款许可、版权行、保留名与改名说明见 `legal/fonts.json`、`legal/font-licenses/README.md` 与本文件「随包字体」一节。
 
 
 ## 运行时下载、不随包分发的资源
@@ -169,4 +177,4 @@
 
 ## 再分发
 
-安装包内保留 `legal/` 目录。再分发时不得删除该目录及其中的许可证原文。
+安装包内保留 `legal/` 目录。再分发时请保留该目录及其中的许可证原文（Apache-2.0 要求保留 LICENSE/NOTICE，各第三方许可证也要求保留其声明）。

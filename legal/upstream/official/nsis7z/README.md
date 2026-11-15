@@ -27,6 +27,22 @@ Windows 安装包 `Studianda-Setup-*.exe` 由 electron-builder 的 NSIS 目标�
 
 unRAR 限制：7-Zip 中的 RAR 解压引擎基于 unRAR 源码，其许可禁止用该代码反向实现 RAR 压缩算法，
 并要求在文档与源码注释中明确说明。本项目只使用 NSIS 插件解压 7z 应用负载，不提供 RAR 压缩/解压功能。
+`source/nsis7z/CPP/7zip/Bundles/Nsis7z/Nsis7z.vcxproj` 的编译清单只含 Bcj2 / Branch / Copy / Delta /
+Lzma / Lzma2 / Xz 编解码器，**不含** `Compress/Rar*` 源码，因此该限制不构成本项目的障碍。
+
+## 随包分发的二进制（可核对）
+
+安装器由 electron-builder 的 NSIS 目标编译，插件取自 `nsis-resources-3.4.1`（未修改）。为避免
+“声称源码合规但无法确认 DLL 来源”，这里记录实际随包分发的二进制及其哈希：
+
+| 文件 | 来源包 | 字节数 | SHA-256 |
+|---|---|---|---|
+| `plugins/x86-unicode/nsis7z.dll`（本安装包实际嵌入的版本） | `nsis-resources-3.4.1` | 434 176 | `B393F05E8FF919EF071181050E1873C9A776E1A0AE8329AEFFF7007D0CADF592` |
+| `plugins/x64-unicode/nsis7z.dll`（同一资源包内，本安装器未使用） | `nsis-resources-3.4.1` | 543 232 | `3136E5BF77A6094C43639AD6667740BB35DBAFFDA88CB263AE982829713FA19C` |
+
+说明：DLL 是上游预编译产物，无法用本仓库的源码逐字节复算；可核对的是「来源包 + 版本 + 哈希 +
+未修改」这一证据链。重新构建时 electron-builder 从本机缓存取用同一资源包；如果哈希变化，说明上游
+资源包被替换，应重新核对版本与源码对应关系。
 
 ## 对应源码（随包提供）
 
@@ -45,11 +61,11 @@ unRAR 限制：7-Zip 中的 RAR 解压引擎基于 unRAR 源码，其许可禁�
 | nsis7z 插件 | Nsis7z 19.00（2019-03-24），`Contrib/nsis7z` | `6f2f3730049926f40442ee0c8b7d3e3dee7ace544d82467ff8059ea3f4201c58`（归档） |
 | 7-Zip | 7-Zip 19.00 源码归档 | `9ba70a5e8485cf9061b30a2a84fe741de5aeb8dd271aab8889da0e9b3bf1868e` |
 
-## 与项目许可证（PolyForm Noncommercial 1.0.0）的关系
+## 与项目许可证（Apache License 2.0）的关系
 
 这是两个**相互独立**的许可层，不是把 7-Zip 重新按项目许可授权：
 
-- 项目自身代码（包括本仓库的安装器脚本、应用代码）按 **PolyForm Noncommercial License 1.0.0** 发布；
+- 项目自身代码（包括本仓库的安装器脚本、应用代码）按 **Apache License 2.0** 发布；
 - `nsis7z.dll` / 7-Zip 代码仍按 **7-Zip License（GNU LGPL-2.1+ 等）** 发布，任何再分发都必须保留
   LGPL 赋予接收者的权利，不能用项目许可限制这些权利；
 - LGPL 允许把该库与采用其他条款的作品一起分发，条件是履行 LGPL 的声明、许可与源码义务；本项目通过

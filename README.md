@@ -176,7 +176,7 @@
 <details>
 <summary><strong>可以免费用吗？</strong></summary>
 
-项目按 **PolyForm Noncommercial 1.0.0** 发布：个人学习、教学、公共研究等非商业用途可以使用、修改与再分发（需随附许可条款与 NOTICE）；商业使用需单独授权。模型、搜索等第三方服务的费用由你自己的账号承担。
+项目按 **Apache License 2.0** 发布：任何人都可以使用、修改与再分发（含商业用途），需保留版权与许可声明以及 NOTICE 中的归属信息。模型、搜索等第三方服务的费用由你自己的账号承担。
 </details>
 
 <details>
@@ -223,8 +223,8 @@
 
 ## 许可
 
-- 项目自身代码按 **PolyForm Noncommercial License 1.0.0** 发布（见 [LICENSE](LICENSE)、[NOTICE](NOTICE)）：非商业用途可以使用、修改与再分发（需随附许可条款与 NOTICE）；**这不是 OSI 开源许可证**，商业使用需单独授权。
+- 项目自身代码按 **Apache License 2.0** 发布（见 [LICENSE](LICENSE)、[NOTICE](NOTICE)）：可以自由使用、修改与再分发（含商业用途），需保留版权与许可声明以及 NOTICE 中的归属信息；这是 OSI 认可的开源许可证。
 - 第三方组件仍适用各自许可证：清单与原文见 [`legal/THIRD-PARTY.md`](legal/THIRD-PARTY.md)、[`legal/NOTICE.html`](legal/NOTICE.html)、[`legal/inventory.json`](legal/inventory.json)。
-- Windows 安装器内嵌 NSIS 7z 解压插件 `nsis7z.dll`（基于 7-Zip 19.00 源码，按 7-Zip License / LGPL-2.1+ 与 unRAR 限制分发）及 StdUtils / UAC / WinShell 等 NSIS 插件；对应许可、来源与源码见 [`legal/upstream/official/nsis7z/`](legal/upstream/official/nsis7z/README.md) 与 [`legal/upstream/official/nsis-plugins/`](legal/upstream/official/nsis-plugins/README.md)，第三方许可与项目许可的兼容性说明见 [`legal/COMPATIBILITY.md`](legal/COMPATIBILITY.md)。
+- Windows 安装器内嵌 NSIS 7z 解压插件 `nsis7z.dll`（基于 7-Zip 19.00 源码，按 7-Zip License / LGPL-2.1+ 与 unRAR 限制分发）及 StdUtils / UAC 等 NSIS 插件；WinShell 已由本项目脚本实现替代、不再随包（见 [`legal/upstream/official/nsis-plugins/winshell/README.md`](legal/upstream/official/nsis-plugins/winshell/README.md)）；对应许可、来源与源码见 [`legal/upstream/official/nsis7z/`](legal/upstream/official/nsis7z/README.md) 与 [`legal/upstream/official/nsis-plugins/`](legal/upstream/official/nsis-plugins/README.md)，第三方许可与项目许可的兼容性说明见 [`legal/COMPATIBILITY.md`](legal/COMPATIBILITY.md)。
 - 本机 OCR 使用 `tesseract.js`（Apache-2.0）；语言训练数据来自官方 `tesseract-ocr/tessdata_fast`（Apache-2.0），**不随仓库或安装包分发**，只在你于设置中主动下载时联网获取。
-- 界面内置开源中文字体，按相关协议分发。
+- 界面内置开源中文字体，按各自自身许可分发（逐款许可见 [`legal/fonts.json`](legal/fonts.json)，版权行与许可见 [`legal/font-licenses/`](legal/font-licenses/README.md)）。

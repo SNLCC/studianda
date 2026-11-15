@@ -359,6 +359,9 @@ console.log(
 );
 
 if (installer) {
+  // 生成安装包前先移除模板里的 WinShell 插件调用：该 DLL 只有 "Freeware" 标注、
+  // 无许可文本与源码，不构成再分发授权（详见 scripts/patch-nsis-templates.mjs）。
+  run('node', [path.join(root, 'scripts', 'patch-nsis-templates.mjs')]);
   run(
     pnpm,
     [

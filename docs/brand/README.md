@@ -70,4 +70,4 @@ python scripts/generate-icon.py
 - 名称（勘读 / Studianda）的造词、含义与写法见 [`NAME.md`](NAME.md)；
 - 图形由 `scripts/generate-icon.py` 以几何图形程序化绘制，属本项目原创，未使用任何第三方图标素材或字体；
 - 名称/图标的使用许可见 [`legal/BRAND.md`](../../legal/BRAND.md)；图标的生成脚本与输出文件见 `scripts/generate-icon.py` 与 `apps/desktop/build/`；
-- 项目自身许可见根目录 `LICENSE`（PolyForm Noncommercial 1.0.0）。
+- 项目自身许可见根目录 `LICENSE`（Apache License 2.0）。

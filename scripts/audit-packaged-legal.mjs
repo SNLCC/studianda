@@ -144,6 +144,7 @@ if (existsSync(fontsManifestPath)) {
       homepage: font.upstream,
       packageJson: '',
       fontAlias: font.alias,
+      fontUpstreamName: font.upstreamName ?? '',
       fontWeights: font.weights,
       fontRenamed: Boolean(font.renamed),
       fontReservedName: font.reservedFontName,
@@ -333,7 +334,8 @@ const fontNotes = bundledFonts
     const rename = record.fontRenamed
       ? `已按 OFL 第 3 条改名（原保留名：${record.fontReservedName}），版权声明、作者与许可字段原样保留`
       : '保留字体内部名（其保留名与本项目命名不冲突）';
-    return `- \`${record.fontAlias}\`：字重 ${weights}；${rename}；版权声明：${record.fontCopyright || '见许可证原文'}；来源 ${record.repository}；覆盖口径见 \`legal/fonts.json\`。`;
+    const copyright = String(record.fontCopyright || '见许可证原文').replace(/\s*\n\s*/g, ' ');
+    return `- \`${record.fontAlias}\`：字重 ${weights}；${rename}；版权声明：${copyright}；来源 ${record.repository}；覆盖口径见 \`legal/fonts.json\`。`;
   })
   .join('\n');
 
@@ -351,18 +353,26 @@ const embeddedNotes = `## 内嵌原生二进制（native binary）/ WASM / 安�
 
 以下组件内嵌在二进制、WASM 或安装器中，不单独出现在 node_modules 依赖树；本节的许可证原文均在 \`legal/upstream/\` 下随包分发。
 
-- @napi-rs/canvas 原生二进制（Node-API native addon）：包含 Skia、ICU、libavif 0.14.0 / libavif-sys 0.17.0、libaom-sys 0.17.2（BSD-2-Clause）、libjpeg-turbo（IJG/BSD/Zlib）、libloading 0.9.0（ISC）、foldhash 0.2.0 / bytemuck 1.25.2（Zlib）、MPL-2.0 组件（cssparser、cssparser-macros、dtoa-short、selectors）等 142 个 SBOM 组件。清单与逐组件许可证类型见 \`upstream/official/napi-canvas/NAPI-CANVAS-THIRD-PARTY.md\` 、\`COMPONENTS.md\` 、\`COMPONENT-LICENSES.md\` 与 \`sbom.cdx.json\`，原文见同目录；MPL-2.0 源码获取方式见该说明。
+- @napi-rs/canvas 原生二进制（Node-API native addon）：包含 Skia、ICU、libavif 0.14.0 / libavif-sys 0.17.0、libaom-sys 0.17.2（BSD-2-Clause）、libjpeg-turbo（IJG/BSD/Zlib）、libloading 0.9.0（ISC）、foldhash 0.2.0 / bytemuck 1.25.2（Zlib）、MPL-2.0 组件（cssparser、cssparser-macros、dtoa-short、selectors）等 142 个 SBOM 组件。清单与逐组件许可证类型见 \`upstream/official/napi-canvas/NAPI-CANVAS-THIRD-PARTY.md\` 、\`COMPONENTS.md\` 、\`COMPONENT-LICENSES.md\` 与 \`sbom.cdx.json\`，原文见同目录。四个 MPL-2.0 组件的**未修改上游源码归档**随包提供于 \`upstream/official/napi-canvas/mpl-sources/\`（含 SHA-256 清单），同时保留官方仓库地址。
 - Tesseract.js-core WASM：内嵌 Tesseract、Leptonica、giflib、libjpeg-turbo、libpng、libtiff、libwebp、openlibm、zlib；说明见 \`upstream/Tesseract-core-THIRD-PARTY.md\`，原文见 \`upstream/official/tesseract-core/\`。
 - PDF.js WASM / 资源：JBIG2、OpenJPEG、QCMS、CMaps、标准字体、ICC；说明见 \`upstream/official/pdfjs-wasm/PDFJS-WASM-THIRD-PARTY.md\`。
 - tesseract.js 预构建 dist：内嵌 buffer 6.0.3（MIT）、ieee754 1.2.1（BSD-3-Clause）、regenerator-runtime（MIT）、zlib.js（MIT）；buffer/ieee754 原文见 \`upstream/official/tesseract-embedded/\`。
 - NSIS 安装器：安装器 stub 使用 NSIS 3.0.4.1（zlib/libpng license），许可证原文见 \`upstream/official/nsis-COPYING.txt\`。
-- nsis7z.dll：NSIS 的 7z 解压插件（安装时解压 app-64.7z），基于 7-Zip 19.00 源码（Nik Medved / Igor Pavlov）；按 7-Zip License（GNU LGPL-2.1+，含 unRAR 限制）分发。许可原文、来源与完整对应源码见 \`upstream/official/nsis7z/\`。
+- nsis7z.dll：NSIS 的 7z 解压插件（安装时解压 app-64.7z），基于 7-Zip 19.00 源码（Nik Medved / Igor Pavlov）；按 7-Zip License（GNU LGPL-2.1+，含 unRAR 限制）分发。许可原文、来源与完整对应源码见 \`upstream/official/nsis7z/\`；实际随包 DLL 的来源包与 SHA-256 见该目录 \`README.md\`。
 - StdUtils.dll：NSIS 插件（electron-builder 模板使用），作者 LoRd_MuldeR；按 GNU LGPL-2.1-or-later 分发，许可、澄清说明与完整对应源码见 \`upstream/official/nsis-plugins/stdutils/\`。
 - UAC.dll：NSIS 提权插件，作者 Anders；按 ZLIB/LIBPNG License 分发，许可与源码见 \`upstream/official/nsis-plugins/uac/\`。
-- WinShell.dll：NSIS 快捷方式/AppUserModelID 插件，作者 Anders；上游页面标注 Freeware，来源记录见 \`upstream/official/nsis-plugins/winshell/\`。
 - elevate.exe：NSIS 提权辅助程序（MIT，Copyright (c) 2007 Johannes Passing），原文见 \`upstream/official/elevate-MIT.txt\`。
-- FFmpeg：Electron 内置 \`ffmpeg.dll\`（LGPL-2.1-or-later，Electron 官方构建，未修改）；源代码与构建配置见 https://github.com/electron/electron ，许可证见 \`upstream/official/ffmpeg-LGPL-2.1.txt\`。
+- FFmpeg：Electron 内置 \`ffmpeg.dll\`（LGPL-2.1-or-later，Electron 官方构建，未修改）；许可证见 \`upstream/official/ffmpeg-LGPL-2.1.txt\`，对应源码与书面说明见 \`legal/COMPATIBILITY.md\`。
+- Electron 运行时二进制（\`ffmpeg.dll\`、\`d3dcompiler_47.dll\`、\`dxcompiler.dll\`、\`dxil.dll\`、\`vulkan-1.dll\`、\`vk_swiftshader.dll\`、\`icudtl.dat\` 等）：由 Electron/Chromium 发行物原样提供、本项目未修改；版权与许可声明随 \`electron/LICENSE.txt\` 与 \`electron/LICENSES.chromium.html\` 分发，补充说明见 \`upstream/official/electron-runtime-dlls.md\`。
 - pako 的 zlib 兼容层：说明见 \`upstream/official/pako-zlib-README.txt\`。
+
+> 安装器**不随包分发 WinShell 插件**，但保留其行为：该插件上游只有 "Freeware" 标注、没有许可文本或源码，不构成再分发授权；构建期由 \`scripts/patch-nsis-templates.mjs\` 把调用改写为 \`apps/desktop/build/nsis/aumid.nsh\` 的宏（NSIS 自带 System 插件 + Windows 公开 API），快捷方式 AUMID 仍照常写入/清除。证据见 \`upstream/official/nsis-plugins/winshell/README.md\`。
+
+## 强制署名与特别声明
+
+- **libjpeg-turbo（IJG）**：随包分发的 Tesseract WASM 与 \`skia.node\` 只含 libjpeg-turbo 二进制、不含其源码，按 IJG 许可需在产品文档中写明：\`This software is based in part on the work of the Independent JPEG Group.\`
+- **MPL-2.0**：cssparser、cssparser-macros、dtoa-short、selectors 四个组件按 MPL-2.0 §3.2(a) 随包提供未修改源码归档（见上文 \`mpl-sources/\`），并同时给出官方仓库地址。
+- **随包字体**：9 个 woff2 按各自自身许可分发，不属于本项目许可范围；逐款许可、版权行、保留名与改名说明见 \`legal/fonts.json\`、\`legal/font-licenses/README.md\` 与本文件「随包字体」一节。
 `;
 
 const markdown = `# 第三方组件与许可证声明
@@ -371,7 +381,7 @@ const markdown = `# 第三方组件与许可证声明
 
 本清单从**实际安装包** \`resources/app.asar\` 的依赖树生成，覆盖渲染器、Core 和生产依赖；不是仅根据源码清单推测。
 
-本项目的 PolyForm Noncommercial 1.0.0 许可证仅适用于本项目原创代码；随包分发的第三方组件仍分别适用其自身许可证，本项目许可证不改变、不限制这些组件在其许可证下的权利。
+本项目的 Apache License 2.0 许可证仅适用于本项目原创代码；随包分发的第三方组件仍分别适用其自身许可证，本项目许可证不改变、不限制这些组件在其许可证下的权利。随包字体、PDF.js 包内的第三方资源（CMaps、标准字体、ICC、WASM 解码器）与 Electron 运行时文件（含 Chromium、FFmpeg、ICU 等）均分别按各自自身许可分发，均不属于本项目许可范围；逐项许可见 \`legal/THIRD-PARTY.md\`、\`legal/upstream/official/pdfjs-wasm/\` 与 \`legal/upstream/official/electron-runtime-dlls.md\`；随包字体的逐款许可、版权与保留名见 \`legal/fonts.json\` 与 \`legal/font-licenses/\`。
 
 ## Electron 与 Chromium
 
@@ -418,7 +428,7 @@ ${embeddedNotes}
 
 ## 再分发
 
-安装包内保留 \`legal/\` 目录。再分发时不得删除该目录及其中的许可证原文。
+安装包内保留 \`legal/\` 目录。再分发时请保留该目录及其中的许可证原文（Apache-2.0 要求保留 LICENSE/NOTICE，各第三方许可证也要求保留其声明）。
 `;
 
 const sources = `# 许可证来源与哈希
@@ -443,12 +453,17 @@ ${sourceRows}
 ## 安装器组件
 
 - NSIS 3.0.4.1（zlib/libpng license）：\`upstream/official/nsis-COPYING.txt\`
-- nsis7z.dll（基于 7-Zip 19.00，7-Zip License / LGPL-2.1+，含 unRAR 限制）：许可与来源见 \`upstream/official/nsis7z/\`
+- nsis7z.dll（基于 7-Zip 19.00，7-Zip License / LGPL-2.1+，含 unRAR 限制）：许可、来源、随包源码与实际 DLL 的 SHA-256 见 \`upstream/official/nsis7z/\`
 - StdUtils.dll（LoRd_MuldeR，GNU LGPL-2.1+）：许可、澄清与源码见 \`upstream/official/nsis-plugins/stdutils/\`
 - UAC.dll（Anders，ZLIB/LIBPNG）：许可与源码见 \`upstream/official/nsis-plugins/uac/\`
-- WinShell.dll（Anders，上游页面标注 Freeware）：来源记录见 \`upstream/official/nsis-plugins/winshell/\`
 - elevate.exe（MIT）：\`upstream/official/elevate-MIT.txt\`
 - FFmpeg（Electron 内置 ffmpeg.dll，LGPL-2.1-or-later）：\`upstream/official/ffmpeg-LGPL-2.1.txt\`
+- WinShell.dll：**已由脚本实现替代**，不再随包分发 DLL（AUMID 行为保留）；依据与证据见 \`upstream/official/nsis-plugins/winshell/README.md\`
+
+## 内嵌组件的固定版本源码
+
+- MPL-2.0 组件源码归档（cssparser 0.38.0、cssparser-macros 0.7.0、dtoa-short 0.3.5、selectors 0.41.0）：\`upstream/official/napi-canvas/mpl-sources/\`，逐文件 SHA-256 见该目录 \`README.md\`
+- Electron 运行时二进制说明（ffmpeg/d3dcompiler/dxcompiler/dxil/vulkan/swiftshader/icu）：\`upstream/official/electron-runtime-dlls.md\`
 
 ${missing.length === 0 ? '' : `## 缺失项\n\n${missing.map((record) => `- ${record.name}@${record.version}（${record.license}）`).join('\n')}\n`}
 ## 免责声明
@@ -479,7 +494,7 @@ const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <title>勘读 Studianda 第三方声明</title>
 <style>body{max-width:1000px;margin:40px auto;padding:0 20px;font:14px/1.7 system-ui,"Microsoft YaHei",sans-serif;color:#2c2a24;background:#f4eedf}h1,h2,h3{font-family:Georgia,serif}table{border-collapse:collapse;width:100%;font-size:12px}td,th{border:1px solid #d8cdb8;padding:5px 7px;text-align:left;vertical-align:top}pre{white-space:pre-wrap;word-break:break-word;background:#fbf7ed;border:1px solid #e3d9c5;padding:10px;font-size:11px;max-height:420px;overflow:auto}a{color:#4f765e}</style></head><body>
 <h1>勘读 Studianda 第三方组件与许可证声明</h1><p>生成时间：${htmlEscape(generatedAt)}</p>
-<p>本项目的 PolyForm Noncommercial 1.0.0 许可证仅适用于本项目原创代码；随包分发的第三方组件仍分别适用其自身许可证，本项目许可证不改变、不限制这些组件在其许可证下的权利。</p>
+<p>本项目的 Apache License 2.0 许可证仅适用于本项目原创代码；随包分发的第三方组件仍分别适用其自身许可证，本项目许可证不改变、不限制这些组件在其许可证下的权利。随包字体、PDF.js 包内的第三方资源（CMaps、标准字体、ICC、WASM 解码器）与 Electron 运行时文件（含 Chromium、FFmpeg、ICU 等）均分别按各自自身许可分发，均不属于本项目许可范围；逐项许可见 <a href="upstream/official/pdfjs-wasm/PDFJS-WASM-THIRD-PARTY.md">PDF.js 资源声明</a>、<a href="upstream/official/electron-runtime-dlls.md">Electron 运行时说明</a> 与本文件下方清单；随包字体的逐款许可、版权与保留名见 <a href="fonts.json">fonts.json</a> 与 <a href="font-licenses/README.md">font-licenses/README.md</a>。</p>
 <p>Electron ${htmlEscape(electronVersion)} / Chromium：许可证见 <a href="electron/LICENSE.txt">electron/LICENSE.txt</a> 与 <a href="electron/LICENSES.chromium.html">Chromium 第三方声明</a>；Node.js ${htmlEscape(process.versions.node)}：<a href="runtime/Node-LICENSE.txt">Node-LICENSE.txt</a>。</p>
 <table><thead><tr><th>组件</th><th>版本</th><th>许可证</th><th>许可证文件</th></tr></thead><tbody>
 ${records
@@ -494,7 +509,7 @@ ${records
   .join('\n')}
 </tbody></table>
 ${bundledFonts.length
-  ? `<h2>随包字体</h2><p>字体由官方发行物子集化并转为 woff2，随安装包分发；许可证原文见下方。</p>
+  ? `<h2>随包字体</h2><p>字体由官方发行物子集化并转为 woff2，随安装包分发；按各自自身许可分发（见 fonts.json 的 license 字段），不属于本项目许可范围。版权行、保留名与改名说明见 <a href="fonts.json">fonts.json</a> 与 <a href="font-licenses/README.md">font-licenses/README.md</a>；许可证原文见下方。</p>
 <table><thead><tr><th>字体</th><th>版本</th><th>部署别名</th><th>许可证</th><th>许可证文件</th></tr></thead><tbody>
 ${bundledFonts
   .map(
@@ -519,10 +534,13 @@ ${bundledFonts
 <li><a href="upstream/official/nsis7z/README.md">nsis7z.dll</a>（NSIS 7z 解压插件，基于 7-Zip 19.00；7-Zip License / LGPL-2.1+，含 unRAR 限制；<a href="upstream/official/nsis7z/README.md">许可、来源与随包源码</a>）</li>
 <li><a href="upstream/official/nsis-plugins/stdutils/README.md">StdUtils.dll</a>（NSIS 插件，LoRd_MuldeR；GNU LGPL-2.1+；<a href="upstream/official/nsis-plugins/stdutils/">许可、澄清与随包源码</a>）</li>
 <li><a href="upstream/official/nsis-plugins/uac/README.md">UAC.dll</a>（NSIS 提权插件，Anders；ZLIB/LIBPNG；<a href="upstream/official/nsis-plugins/uac/">许可与源码</a>）</li>
-<li><a href="upstream/official/nsis-plugins/winshell/README.md">WinShell.dll</a>（NSIS 快捷方式/AppUserModelID 插件，Anders；来源记录）</li>
+<li><a href="upstream/official/nsis-plugins/winshell/README.md">WinShell.dll：已由脚本实现替代</a>（上游无许可文本，不随包分发；快捷方式 AUMID 仍由安装脚本写入）</li>
 <li><a href="upstream/official/elevate-MIT.txt">elevate.exe</a>（MIT，Copyright (c) 2007 Johannes Passing）</li>
-<li><a href="upstream/official/ffmpeg-LGPL-2.1.txt">FFmpeg（Electron 内置 ffmpeg.dll，LGPL-2.1-or-later）</a>；源代码见 <a href="https://github.com/electron/electron">electron/electron</a></li>
+<li><a href="upstream/official/napi-canvas/mpl-sources/README.md">MPL-2.0 源码归档</a>（cssparser 0.38.0、cssparser-macros 0.7.0、dtoa-short 0.3.5、selectors 0.41.0，随包提供）</li>
+<li><a href="upstream/official/electron-runtime-dlls.md">Electron 运行时二进制</a>（ffmpeg/d3dcompiler/dxcompiler/dxil/vulkan/swiftshader/icu，来源与声明依据）</li>
+<li><a href="upstream/official/ffmpeg-LGPL-2.1.txt">FFmpeg（Electron 内置 ffmpeg.dll，LGPL-2.1-or-later）</a>；源代码与书面说明见 <a href="COMPATIBILITY.md">legal/COMPATIBILITY.md</a></li>
 </ul>
+<p><strong>强制署名：</strong>libjpeg-turbo（IJG）— This software is based in part on the work of the Independent JPEG Group.</p>
 <h2>许可证原文</h2>${licenseBlocks.join('\n')}
 </body></html>`;
 const inventory = {

@@ -74,7 +74,10 @@ const repoRequiredFiles = [
   'legal/upstream/official/nsis-plugins/uac/source/uac.cpp',
   'legal/upstream/official/nsis-plugins/winshell/README.md',
   'docs/USAGE-NOTICE.md',
-  'apps/desktop/build/INSTALLER-NOTICE.txt'
+  'apps/desktop/build/INSTALLER-NOTICE.txt',
+  'legal/font-licenses/README.md',
+  'legal/upstream/official/electron-runtime-dlls.md',
+  'legal/upstream/official/napi-canvas/mpl-sources/README.md'
 ];
 for (const file of repoRequiredFiles) {
   if (!existsSync(path.join(root, file))) fail(`仓库缺少法律文件：${file}`);
@@ -122,16 +125,129 @@ if (existsSync(installerNoticeFile)) {
   }
   const text = normalize(bytes.toString('utf8'));
   for (const needle of [
-    'PolyForm Noncommercial',
+    'Apache License 2.0',
     'LICENSE',
     'NOTICE',
     'USAGE-NOTICE.md',
-    'resources/legal/'
+    'resources/legal/',
+    'Independent JPEG Group',
+    'MPL-2.0',
+    'font-licenses'
   ]) {
     if (!text.includes(needle)) {
       fail(`INSTALLER-NOTICE.txt 未提及 ${needle}`);
     }
   }
+  // WinShell 已由本项目脚本实现替代，安装页不应再把它列为随包组件。
+  if (text.includes('WinShell')) {
+    fail('INSTALLER-NOTICE.txt 仍提到 WinShell：该插件已从安装包移除，安装页不应再列为随包组件');
+  }
+  if (/PolyForm/i.test(text)) {
+    fail('INSTALLER-NOTICE.txt 仍包含 PolyForm');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 3.5) 项目自身许可：Apache License 2.0（防止误改回非商业许可或替换许可文本）
+// ---------------------------------------------------------------------------
+const licenseText = normalize(readFileSync(path.join(root, 'LICENSE'), 'utf8'));
+for (const needle of ['Apache License', 'Version 2.0, January 2004']) {
+  if (!licenseText.includes(needle)) {
+    fail(`LICENSE 不是 Apache License 2.0 全文（缺少「${needle}」）`);
+  }
+}
+const rootLicenseField = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).license;
+if (rootLicenseField !== 'Apache-2.0') {
+  fail(`根 package.json 的 license 应为 Apache-2.0（当前 ${rootLicenseField ?? '(缺失)'}）`);
+}
+
+// 各 workspace 包的 license 字段也必须是 Apache-2.0（防止只改根包）。
+for (const relative of [
+  'apps/desktop/package.json',
+  'packages/shared/package.json',
+  'packages/core/package.json',
+  'packages/host/package.json',
+  'packages/ui/package.json',
+  'packages/app/package.json',
+  'packages/api-client/package.json'
+]) {
+  const field = JSON.parse(readFileSync(path.join(root, relative), 'utf8')).license;
+  if (field !== 'Apache-2.0') {
+    fail(`${relative} 的 license 应为 Apache-2.0（当前 ${field ?? '(缺失)'}）`);
+  }
+}
+
+// NOTICE 必须是归属声明：含版权行、不含 PolyForm、也不含 Apache 许可全文。
+const noticeText = normalize(readFileSync(path.join(root, 'NOTICE'), 'utf8'));
+if (!/Copyright\s+\d{4}/.test(noticeText)) {
+  fail('NOTICE 缺少版权行（Copyright <year>）');
+}
+if (/PolyForm/i.test(noticeText)) {
+  fail('NOTICE 仍包含 PolyForm；历史许可说明应只放在 README/发布说明中');
+}
+if (noticeText.includes('TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION')) {
+  fail('NOTICE 不应包含 Apache 许可全文（全文应只在 LICENSE）');
+}
+
+// ---------------------------------------------------------------------------
+// 3.6) 许可原文有效性：不得是 404 占位、不得为空
+// ---------------------------------------------------------------------------
+const legalRoot = path.join(root, 'legal');
+const legalFiles = existsSync(legalRoot) ? walkFiles(legalRoot) : [];
+for (const relative of legalFiles) {
+  const text = normalize(readFileSync(path.join(legalRoot, relative), 'utf8'));
+  if (/404:\s*Not Found/.test(text)) {
+    fail(`legal/${relative} 是 404 占位内容，不是真实许可原文`);
+  }
+  const base = path.basename(relative);
+  if (/^(LICEN[CS]E|COPYING)/i.test(base) && text.trim().length < 200) {
+    fail(`legal/${relative} 疑似不是完整许可原文（去空白后不足 200 字符）`);
+  }
+}
+
+// 清单与字体清单引用的每一份许可原文都必须非空、且不能是占位内容。
+const referencedLicenseFiles = new Set();
+const inventoryForLicenses = JSON.parse(readFileSync(path.join(root, 'legal/inventory.json'), 'utf8'));
+for (const record of [
+  ...(inventoryForLicenses.runtime ?? []),
+  ...(inventoryForLicenses.fonts ?? []),
+  ...(inventoryForLicenses.packages ?? [])
+]) {
+  for (const file of record.licenseFiles ?? []) {
+    const relative = String(file.path ?? '').replace(/^\//, '');
+    if (!relative) continue;
+    referencedLicenseFiles.add(relative);
+  }
+}
+for (const font of JSON.parse(readFileSync(path.join(root, 'legal/fonts.json'), 'utf8')).fonts ?? []) {
+  if (font.licenseFile) {
+    referencedLicenseFiles.add(font.licenseFile.replace(/^legal\//, ''));
+  }
+}
+for (const relative of referencedLicenseFiles) {
+  const full = path.join(legalRoot, relative);
+  if (!existsSync(full)) {
+    fail(`引用的许可原文不存在：legal/${relative}`);
+    continue;
+  }
+  const bytes = readFileSync(full);
+  if (bytes.length < 100) {
+    fail(`引用的许可原文过短（${bytes.length} B）：legal/${relative}`);
+  }
+  if (/404:\s*Not Found/.test(normalize(bytes.toString('utf8')))) {
+    fail(`引用的许可原文是 404 占位：legal/${relative}`);
+  }
+}
+
+// MPL-2.0 固定版本源码归档必须与说明同在（R2 回归保护）。
+const mplSources = path.join(legalRoot, 'upstream/official/napi-canvas/mpl-sources');
+if (existsSync(mplSources)) {
+  const archives = readdirSync(mplSources).filter((name) => /\.(crate|tar\.gz)$/i.test(name));
+  if (archives.length < 4) {
+    fail(`MPL-2.0 源码归档不足 4 个（当前 ${archives.length} 个）：legal/upstream/official/napi-canvas/mpl-sources/`);
+  }
+} else {
+  fail('缺少 legal/upstream/official/napi-canvas/mpl-sources/（MPL-2.0 源码归档）');
 }
 
 // ---------------------------------------------------------------------------

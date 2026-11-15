@@ -33,6 +33,12 @@ files:
   - "!**/pdfjs-dist/standard_fonts/Liberation*"
   - "!**/pdfjs-dist/standard_fonts/LICENSE_LIBERATION"
   - "!**/pdfjs-dist/wasm/quickjs*"
+  # @napi-rs/canvas 的其它平台可选依赖不应进入 Windows x64 安装包
+  # （每个 24–38 MB；根 package.json 的 pnpm.supportedArchitectures 也会阻止安装）
+  - "!**/@napi-rs/canvas-android-*/**"
+  - "!**/@napi-rs/canvas-darwin-*/**"
+  - "!**/@napi-rs/canvas-linux-*/**"
+  - "!**/@napi-rs/canvas-win32-arm64-*/**"
 extraResources:
   - from: ../../legal
     to: legal
@@ -63,6 +69,10 @@ win:
     - nsis
 nsis:
   license: build/INSTALLER-NOTICE.txt
+  # 用本项目自己的脚本实现替换 electron-builder 模板里的 WinShell 插件调用
+  # （WinShell 上游无许可文本，不能随包再分发）。见 build/nsis/aumid.nsh
+  # 与 scripts/patch-nsis-templates.mjs。
+  include: nsis/aumid.nsh
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico
   oneClick: false

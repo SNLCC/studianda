@@ -8,7 +8,7 @@ Windows 安装包由 electron-builder 的 NSIS 目标生成，安装器内嵌以
 | `nsis7z.dll` | 基于 7-Zip 19.00，7-Zip License / LGPL-2.1+，含 unRAR 限制；随包源码 | `upstream/official/nsis7z/` |
 | `StdUtils.dll` | GNU LGPL-2.1-or-later；随包源码 | `upstream/official/nsis-plugins/stdutils/` |
 | `UAC.dll` | ZLIB/LIBPNG License；随包源码 | `upstream/official/nsis-plugins/uac/` |
-| `WinShell.dll` | 作者 Anders，上游页面标注 Freeware | `upstream/official/nsis-plugins/winshell/` |
+| ~~`WinShell.dll`~~ | **已由脚本实现替代**：上游只有 "Freeware" 标注、无许可文本与源码，不构成再分发授权；`scripts/patch-nsis-templates.mjs` 把调用改写为 `apps/desktop/build/nsis/aumid.nsh` 的宏（Windows 公开 API，不随包 DLL） | `upstream/official/nsis-plugins/winshell/`（替代记录与证据） |
 
 `elevate.exe`（MIT）与 Electron 内置 FFmpeg（LGPL-2.1-or-later）的声明见对应目录。
 

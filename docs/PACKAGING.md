@@ -180,6 +180,34 @@ apps/desktop/release/win-unpacked/Studianda.exe
 > 不会再补 BOM（只有 `license_<lang>.txt` 走自动补 BOM 的分支），所以 BOM 必须存在于文件本身。
 > 核对：`$b=[System.IO.File]::ReadAllBytes('apps/desktop/build/INSTALLER-NOTICE.txt'); ($b[0..2] | ForEach-Object { $_.ToString('X2') }) -join ' '` 应为 `EF BB BF`。
 
+## 安装器插件许可（WinShell 已由脚本实现替代）
+
+electron-builder 的 NSIS 模板默认会在创建/迁移快捷方式时调用 `WinShell::SetLnkAUMI`、
+`WinShell::UninstShortcut` 与 `WinShell::UninstAppUserModelId`，从而把 `WinShell.dll` 嵌进
+安装包。该插件上游只有 "Freeware" 标注，官方发行包 `WinShell.zip` 内只有两个 DLL，没有许可文本、
+没有源码，**不构成再分发授权**。
+
+本项目不再随包分发该 DLL，但保留原行为：`scripts/package.mjs` 在编译 NSIS 之前运行
+`scripts/patch-nsis-templates.mjs`，把上述调用改写为 `apps/desktop/build/nsis/aumid.nsh` 里的宏。
+该宏用 NSIS 自带的 System 插件与官方 `Win\COM.nsh` / `Win\Propkey.nsh` 定义，调用 Windows 公开
+API（`CLSID_ShellLink` → `IPersistFile` → `IPropertyStore` → `PKEY_AppUserModel_ID`）写入/清除
+快捷方式属性，并调用 `IPersistFile::Save` 落盘。改写脚本幂等，可单独执行：
+
+```powershell
+node scripts/patch-nsis-templates.mjs
+```
+
+`apps/desktop/electron-builder.yml` 的 `nsis.include` 指向该脚本文件；改写脚本会复核模板中不再
+存在任何 `WinShell::` 调用（有残留即打包失败），并检查三个宏都有定义。
+
+说明：
+
+- 不引入任何第三方插件，也不自编译 DLL：安装器里只有脚本文本；
+- 安装时仍会像以前一样，在开始菜单/桌面快捷方式上写入 `com.studianda.app` 这个 AUMID；
+- 卸载与快捷方式迁移时仍会清除旧快捷方式的该属性；
+- 应用启动时仍调用 `app.setAppUserModelId(...)`，与快捷方式属性一致。
+
+
 ## 代码签名
 
 当前不使用代码签名证书，安装包与主程序均未签名：Windows SmartScreen 可能提示「未知发布者」。

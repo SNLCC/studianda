@@ -3,7 +3,7 @@
 宿主契约包。`RuntimeAdapter`、`HostCapabilities`、窗口/更新/数据位置接口都在这里；
 `@studianda/app` 与 `@studianda/ui` 只依赖它，不直接接触 Electron 或 DSH。
 
-本包是项目自有代码，按根目录 `LICENSE` / `NOTICE` 的 PolyForm Noncommercial 1.0.0
+本包是项目自有代码，按根目录 `LICENSE` / `NOTICE` 的 Apache License 2.0
 发布；不包含第三方运行时代码。
 
 ## 实现方

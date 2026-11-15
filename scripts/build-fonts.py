@@ -102,7 +102,8 @@ def build_charset(font: TTFont, tier: str) -> list[int]:
 
 
 def instantiate(src: str, wght: float, cache_dir: str) -> str:
-    tag = '%s-%s.ttf' % (os.path.splitext(os.path.basename(src))[0], int(wght))
+    # 缓存名带 -named：早期缓存由 updateFontNames=False 生成，名称表未随字重刷新，不能复用。
+    tag = '%s-%s-named.ttf' % (os.path.splitext(os.path.basename(src))[0], int(wght))
     out = os.path.join(cache_dir, tag)
     if os.path.exists(out):
         return out
@@ -115,7 +116,7 @@ def instantiate(src: str, wght: float, cache_dir: str) -> str:
             if axis.axisTag not in settings:
                 settings[axis.axisTag] = axis.defaultValue
     instance = instancer.instantiateVariableFont(
-        font, settings, inplace=False, updateFontNames=False
+        font, settings, inplace=False, updateFontNames=True
     )
     instance.save(out)
     instance.close()

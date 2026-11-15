@@ -59,8 +59,8 @@
     {
       "file": "PDFJS-WASM-THIRD-PARTY.md",
       "source": "https://www.npmjs.com/package/pdfjs-dist/v/6.4.299",
-      "sha256": "f842dccef1725db7126467679c002e30dd00ffca3280e2dcf587521ddaf28d77",
-      "size": 1327
+      "sha256": "255ee13e695b11e86b67c9d9218cd8094f99f3c88f04cb9a8b3d77538cc4946e",
+      "size": 1835
     }
   ]
 }

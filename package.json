@@ -1,9 +1,9 @@
 {
   "name": "studianda",
   "private": true,
-  "version": "0.1.1-test.1",
+  "version": "0.1.2",
   "description": "勘读 Studianda — 一站式人文社科学术空间（Electron + Node/TypeScript Core）",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "Apache-2.0",
   "packageManager": "pnpm@10.30.3",
   "scripts": {
     "build": "pnpm --filter @studianda/shared build && pnpm --filter @studianda/host build && pnpm --filter @studianda/ui build && pnpm --filter @studianda/api-client build && pnpm --filter @studianda/app build && pnpm --filter @studianda/core build && pnpm --filter @studianda/desktop build",
@@ -16,6 +16,7 @@
     "check:governance": "node scripts/check-governance.mjs",
     "check:host": "node scripts/check-host-boundary.mjs",
     "check:legal": "node scripts/audit-legal-completeness.mjs",
+    "patch:nsis": "node scripts/patch-nsis-templates.mjs",
     "export:source": "git archive --format=zip --output=studianda-src.zip HEAD",
     "check:contract": "node scripts/check-contract.mjs",
     "check:ui": "pnpm --filter @studianda/ui build && node scripts/check-ui-consumable.mjs",
@@ -33,5 +34,15 @@
     "esbuild": "^0.25.0",
     "typescript": "^5.9.3",
     "vitest": "^4.0.0"
+  },
+  "pnpm": {
+    "supportedArchitectures": {
+      "os": [
+        "win32"
+      ],
+      "cpu": [
+        "x64"
+      ]
+    }
   }
 }

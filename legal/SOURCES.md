@@ -1,6 +1,6 @@
 # 许可证来源与哈希
 
-生成时间：2026-11-11T13:04:11.075Z
+生成时间：2026-11-15T10:24:30.016Z
 
 “官方仓库”列取自各包 `package.json` 的 repository/homepage；许可证文件哈希取自安装包内实际文件。
 
@@ -114,12 +114,17 @@
 ## 安装器组件
 
 - NSIS 3.0.4.1（zlib/libpng license）：`upstream/official/nsis-COPYING.txt`
-- nsis7z.dll（基于 7-Zip 19.00，7-Zip License / LGPL-2.1+，含 unRAR 限制）：许可与来源见 `upstream/official/nsis7z/`
+- nsis7z.dll（基于 7-Zip 19.00，7-Zip License / LGPL-2.1+，含 unRAR 限制）：许可、来源、随包源码与实际 DLL 的 SHA-256 见 `upstream/official/nsis7z/`
 - StdUtils.dll（LoRd_MuldeR，GNU LGPL-2.1+）：许可、澄清与源码见 `upstream/official/nsis-plugins/stdutils/`
 - UAC.dll（Anders，ZLIB/LIBPNG）：许可与源码见 `upstream/official/nsis-plugins/uac/`
-- WinShell.dll（Anders，上游页面标注 Freeware）：来源记录见 `upstream/official/nsis-plugins/winshell/`
 - elevate.exe（MIT）：`upstream/official/elevate-MIT.txt`
 - FFmpeg（Electron 内置 ffmpeg.dll，LGPL-2.1-or-later）：`upstream/official/ffmpeg-LGPL-2.1.txt`
+- WinShell.dll：**已由脚本实现替代**，不再随包分发 DLL（AUMID 行为保留）；依据与证据见 `upstream/official/nsis-plugins/winshell/README.md`
+
+## 内嵌组件的固定版本源码
+
+- MPL-2.0 组件源码归档（cssparser 0.38.0、cssparser-macros 0.7.0、dtoa-short 0.3.5、selectors 0.41.0）：`upstream/official/napi-canvas/mpl-sources/`，逐文件 SHA-256 见该目录 `README.md`
+- Electron 运行时二进制说明（ffmpeg/d3dcompiler/dxcompiler/dxil/vulkan/swiftshader/icu）：`upstream/official/electron-runtime-dlls.md`
 
 
 ## 免责声明

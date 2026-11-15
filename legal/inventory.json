@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-11T13:04:11.075Z",
+  "generatedAt": "2026-11-15T10:24:30.016Z",
   "electron": "44.5.1",
   "node": "24.21.0",
   "asar": "app.asar",
@@ -51,6 +51,7 @@
       "homepage": "https://github.com/notofonts/noto-cjk/releases",
       "packageJson": "",
       "fontAlias": "Studianda Serif",
+      "fontUpstreamName": "",
       "fontWeights": [
         400,
         600
@@ -75,6 +76,7 @@
       "homepage": "https://github.com/notofonts/noto-cjk/releases",
       "packageJson": "",
       "fontAlias": "Studianda Sans",
+      "fontUpstreamName": "",
       "fontWeights": [
         400,
         500
@@ -92,19 +94,20 @@
     },
     {
       "font": true,
-      "name": "Studianda Kai",
+      "name": "LXGW WenKai GB（霞鹜文楷 GB）",
       "version": "1.530",
       "license": "SIL Open Font License 1.1",
       "repository": "https://github.com/lxgw/LxgwWenKaiGB/releases",
       "homepage": "https://github.com/lxgw/LxgwWenKaiGB/releases",
       "packageJson": "",
       "fontAlias": "Studianda Kai",
+      "fontUpstreamName": "LXGW WenKai GB（霞鹜文楷 GB）",
       "fontWeights": [
         400
       ],
       "fontRenamed": true,
       "fontReservedName": "霞鹜 / 霞鶩 / 落霞孤鹜 / 落霞孤鶩 / LXGW",
-      "fontCopyright": "Copyright 2022-2026 LXGW, with Reserved Font Name '霞鹜', '霞鶩', '落霞孤鹜', '落霞孤鶩' and 'LXGW'. / Copyright 2020 The Klee Project Authors.",
+      "fontCopyright": "Copyright 2022-2026 LXGW (https://github.com/lxgw/LxgwWenKaiGB), with Reserved Font Name '霞鹜', '霞鶩', '落霞孤鹜', '落霞孤鶩' and 'LXGW'.\nCopyright 2020 The Klee Project Authors (https://github.com/fontworks-fonts/Klee)",
       "licenseFiles": [
         {
           "path": "licenses/font-lxgw-wenkai-gb-LXGWWenKaiGB-OFL-1.1.txt",
@@ -122,6 +125,7 @@
       "homepage": "https://github.com/notofonts/latin-greek-cyrillic",
       "packageJson": "",
       "fontAlias": "Studianda Serif Latin",
+      "fontUpstreamName": "",
       "fontWeights": [
         400,
         600
@@ -146,6 +150,7 @@
       "homepage": "https://github.com/notofonts/latin-greek-cyrillic",
       "packageJson": "",
       "fontAlias": "Studianda Sans Latin",
+      "fontUpstreamName": "",
       "fontWeights": [
         400,
         500

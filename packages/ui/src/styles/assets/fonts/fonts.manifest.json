@@ -1,8 +1,8 @@
 [
   {
     "file": "StudiandaSerifSC-Regular.woff2",
-    "bytes": 11169136,
-    "sha256": "8BF92AB4CE64ED303C7A3B57B72C3D72B504084A342338D3523DB7EB6EF87CDE",
+    "bytes": 11168936,
+    "sha256": "5329E86415B45A98EB4FB9C78E4C053F79E4728F985FEABAB8B26F92328635BE",
     "weight": 400,
     "tier": "full",
     "codepoints": 44777,
@@ -10,8 +10,8 @@
   },
   {
     "file": "StudiandaSerifSC-SemiBold.woff2",
-    "bytes": 11267092,
-    "sha256": "E9D86C3C3CC53486400FDCC8E40B35BE82DF27AFCB51726E5CD83180F3D4087E",
+    "bytes": 11266872,
+    "sha256": "8CFE445056C835196C448B30DF24E65AEDFB80E589791F12A77C23C5E71EE6A7",
     "weight": 600,
     "tier": "full",
     "codepoints": 44777,
@@ -19,8 +19,8 @@
   },
   {
     "file": "StudiandaSansSC-Regular.woff2",
-    "bytes": 7559228,
-    "sha256": "3856BE309A751F4A831261845D1A9CE57ADD26686EA23614964E568CC431DBEE",
+    "bytes": 7559180,
+    "sha256": "ED52F2F9D44CCBF5F4A692DCE42C53D925DF09C94439702883E4DFE89C312F41",
     "weight": 400,
     "tier": "full",
     "codepoints": 44810,
@@ -28,8 +28,8 @@
   },
   {
     "file": "StudiandaSansSC-Medium.woff2",
-    "bytes": 7691828,
-    "sha256": "5C3A2A6AB0096D0AFA22B365E003DBEE79D02ED80C7D17729B965E4282B6A02B",
+    "bytes": 7692236,
+    "sha256": "5BF09DBF64808C4E3485BA2629D2288D0DD6B1A19ACF65EE20D97BE2541EA044",
     "weight": 500,
     "tier": "full",
     "codepoints": 44810,
@@ -46,8 +46,8 @@
   },
   {
     "file": "StudiandaSerifLatin-Regular.woff2",
-    "bytes": 101616,
-    "sha256": "1BDF7779C9027B28CF6025BCE7768916301DBC1F8270843190382A36E1E84BC6",
+    "bytes": 101628,
+    "sha256": "CDDF396D2823995D23348079697514376231F50E7A9AD772E2E3D04247B259D1",
     "weight": 400,
     "tier": "latin",
     "codepoints": 1847,
@@ -55,8 +55,8 @@
   },
   {
     "file": "StudiandaSerifLatin-SemiBold.woff2",
-    "bytes": 111388,
-    "sha256": "2890601D563A222A85BACBF76A589F5653E1C6B5C4E89B57A9EFBB3D96DD84CC",
+    "bytes": 111320,
+    "sha256": "4A6CA928DE7AE551D42A304238F80BB763FF115AE7FCF7380B978551BBEFFA16",
     "weight": 600,
     "tier": "latin",
     "codepoints": 1847,
@@ -64,8 +64,8 @@
   },
   {
     "file": "StudiandaSansLatin-Regular.woff2",
-    "bytes": 97264,
-    "sha256": "DA4B32B11F57697C4B530E7075B765C51CE8BD753493EB2DDCAD1DDEC764C875",
+    "bytes": 97096,
+    "sha256": "4698AEA4775C227B90CF896DEDC69E19612357DDEED135667AEE81B014647851",
     "weight": 400,
     "tier": "latin",
     "codepoints": 1847,
@@ -73,8 +73,8 @@
   },
   {
     "file": "StudiandaSansLatin-Medium.woff2",
-    "bytes": 103096,
-    "sha256": "A92D9F6227E18FB4C2ADAB4AF30D66A2F4327222E665A0EB3089B61211D383AC",
+    "bytes": 103000,
+    "sha256": "2CD0DFEA0F509A0469AEC4BAC66152E9AA17550B3127CA8351FA603C8211FFCA",
     "weight": 500,
     "tier": "latin",
     "codepoints": 1847,
