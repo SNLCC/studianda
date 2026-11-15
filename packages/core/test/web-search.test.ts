@@ -1,14 +1,32 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { SecretStore } from '../src/secrets.js';
 import { Store } from '../src/store.js';
-import { getSearchConfig, saveSearchConfig, searchWeb } from '../src/web-search.js';
+import {
+  getSearchConfig,
+  saveSearchConfig,
+  searchWeb,
+  searchWebQueries,
+  webResultDetail,
+  withFetchedContent
+} from '../src/web-search.js';
 
 const dataDir = mkdtempSync(path.join(tmpdir(), 'studianda-search-'));
 const store = new Store(dataDir);
 const secrets = new SecretStore();
+
+function ok(payload: unknown): Response {
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { 'content-type': 'application/json' }
+  });
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 afterAll(() => {
   store.close();
@@ -136,6 +154,8 @@ describe('web search', () => {
       expect(results[0]).toMatchObject({
         title: 'Snippet 标题',
         snippet: '来自 snippet',
+        // 长摘要单独保留：给模型阅读用，不覆盖界面展示的 snippet。
+        summary: 'summary 不应覆盖 snippet',
         kind: 'web'
       });
       expect(results[1]!.snippet).toBe('来自 summary');
@@ -202,11 +222,131 @@ describe('web search', () => {
     saveSearchConfig(store, secrets, {
       provider: 'deepseek',
       permission: 'review',
-      clear_key: true
+      clear_key: true,
+      send_question: false,
+      fetch_content: false
     });
     await expect(searchWeb(store, secrets, 'query')).rejects.toThrow('请先配置搜索平台密钥');
 
     saveSearchConfig(store, secrets, { provider: 'deepseek', permission: 'off', api_key: 'key' });
     await expect(searchWeb(store, secrets, 'query')).rejects.toThrow('联网搜索已在隐私权限中关闭');
+    saveSearchConfig(store, secrets, { permission: 'review' });
+  });
+
+  it('默认不把问题原文发给搜索服务；开启 send_question 后才发', async () => {
+    saveSearchConfig(store, secrets, {
+      provider: 'deepseek',
+      permission: 'review',
+      api_key: 'key',
+      send_question: false
+    });
+    const bodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal('fetch', async (_input: unknown, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return ok({ results: [] });
+    });
+    await searchWeb(store, secrets, 'query', { question: '原始问题' });
+    expect(bodies[0]).not.toHaveProperty('ori_question');
+
+    saveSearchConfig(store, secrets, { send_question: true });
+    await searchWeb(store, secrets, 'query', { question: '原始问题'.repeat(40) });
+    // 官方限制 ≤128 字符。
+    expect(bodies[1]!.ori_question).toBe('原始问题'.repeat(40).slice(0, 128));
+  });
+
+  it('408/429/5xx 重试一次；其它 4xx 立即报可执行错误', async () => {
+    saveSearchConfig(store, secrets, {
+      provider: 'deepseek',
+      permission: 'review',
+      api_key: 'key'
+    });
+    let calls = 0;
+    vi.stubGlobal('fetch', async () => {
+      calls += 1;
+      return new Response('{}', { status: 429 });
+    });
+    await expect(searchWeb(store, secrets, 'q')).rejects.toThrow('请求过于频繁');
+    expect(calls).toBe(2);
+
+    calls = 0;
+    vi.stubGlobal('fetch', async () => {
+      calls += 1;
+      return new Response('{}', { status: 400 });
+    });
+    await expect(searchWeb(store, secrets, 'q')).rejects.toThrow('请求参数不合法');
+    expect(calls).toBe(1);
+  });
+
+  it('开启抓取后只抓前两条、截断正文，单页失败回退摘要', async () => {
+    saveSearchConfig(store, secrets, {
+      provider: 'deepseek',
+      permission: 'review',
+      api_key: 'key',
+      fetch_content: true
+    });
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.endsWith('/v1/tools/search')) {
+        return ok({
+          results: [
+            { title: 'A', url: 'https://example.com/a', snippet: 'a' },
+            { title: 'B', url: 'https://example.com/b', snippet: 'b' },
+            { title: 'C', url: 'https://example.com/c', snippet: 'c' }
+          ]
+        });
+      }
+      const body = JSON.parse(String(init?.body)) as { url: string };
+      if (body.url.endsWith('/b')) return new Response('{}', { status: 404 });
+      return ok({ title: 'A', content: '正'.repeat(9000) });
+    });
+    const results = await withFetchedContent(store, secrets, await searchWeb(store, secrets, 'q'));
+    expect(urls.filter((url) => url.endsWith('/v1/tools/fetch'))).toHaveLength(2);
+    expect(results[0]!.content).toHaveLength(4000);
+    // 抓取失败的那条静默回退：没有 content，仍有摘要。
+    expect(results[1]).not.toHaveProperty('content');
+    expect(results[1]!.snippet).toBe('b');
+    // 第三条根本不会去抓。
+    expect(results[2]).not.toHaveProperty('content');
+  });
+
+  it('模型材料优先长摘要，正文用不可信边界包起来', () => {
+    const detail = webResultDetail({
+      title: '标题',
+      url: 'https://example.com/a',
+      snippet: '短摘要',
+      summary: '长摘要',
+      content: '网页正文',
+      retrieved_at: '',
+      kind: 'web'
+    });
+    expect(detail).toContain('长摘要');
+    expect(detail).toContain('<<<正文开始>>>');
+    expect(detail).toContain('<<<正文结束>>>');
+    expect(detail.indexOf('长摘要')).toBeLessThan(detail.indexOf('<<<正文开始>>>'));
+    expect(detail).toContain('不可信');
+  });
+
+  it('计划里的搜索词全部失败时如实报错，而不是静默返回空', async () => {
+    saveSearchConfig(store, secrets, {
+      provider: 'deepseek',
+      permission: 'review',
+      api_key: 'key'
+    });
+    vi.stubGlobal('fetch', async () => new Response('{}', { status: 401 }));
+    await expect(searchWebQueries(store, secrets, ['a', 'b'])).rejects.toThrow('密钥无效');
+  });
+
+  it('只有一个搜索词失败时不阻断其它词', async () => {
+    let call = 0;
+    vi.stubGlobal('fetch', async () => {
+      call += 1;
+      if (call === 1) return new Response('{}', { status: 400 });
+      return ok({ results: [{ title: 'A', url: 'https://example.com/a', snippet: 'a' }] });
+    });
+    const results = await searchWebQueries(store, secrets, ['a', 'b']);
+    expect(results).toHaveLength(1);
+    expect(results[0]!.url).toBe('https://example.com/a');
   });
 });

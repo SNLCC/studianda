@@ -6,6 +6,7 @@ import type {
   DiscoveryReportRecord,
   ReadingPlanRecord
 } from '@studianda/shared';
+import { FAILED_ANSWER_PREFIX } from '@studianda/shared';
 import { ensureAutoOcr } from './ocr.js';
 import { planReading } from './reading-plan.js';
 import {
@@ -61,10 +62,14 @@ import { gotoWorkers, inputBudgetFor, readCapacity } from './capacity.js';
 import { resolveModelCapacity } from './model-services.js';
 import {
   chatOutputOptions,
+  isDeepSeekHost,
   networkErrorMessage,
+  reasoningEffortOptions,
   responseText,
+  safetyCheckOptions,
   serviceErrorMessage,
-  taskThinkingOptions
+  taskThinkingOptions,
+  type ReasoningEffort
 } from './model-protocol.js';
 import type { SourceKind } from './routing.js';
 import { sweepReport, type SweepReport } from './sweep.js';
@@ -92,6 +97,21 @@ export interface ReadingChatConfig {
    * 旧设置路径不设置该字段，因此旧配置的请求体与改动前完全一致。
    */
   taskThinking?: boolean;
+  /**
+   * 平台模型元数据里的 reasoning_effort：思考强度（low/high/max）。
+   *
+   * 只在 DeepSeek 官方地址发送（见 reasoningEffortOptions）；不设置时沿用平台默认
+   * （官方默认 high）。任务型调用本身会关闭思考，强度不参与请求。
+   */
+  reasoningEffort?: ReasoningEffort;
+  /**
+   * 内容安全审核增强（DeepSeek `safety_check: high`）。
+   *
+   * 关闭时仍有平台默认的低档检查；缺省视为开启，只有用户显式关闭时才不发。
+   * 只用于面向用户的回答请求（`task=false`），批次阅读/审计/压缩/翻译这些过程性调用不发，
+   * 避免增强层拖慢并误拒原文。
+   */
+  safetyCheck?: boolean;
   /**
    * 证据审计的输出模式（合规 P2-19）：
    * - `rewrite`（默认）：按审计结果确定性改写缺证段落、推断加前缀、移除未核验引用/页码；
@@ -217,7 +237,26 @@ function numericToken(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.round(value) : null;
 }
 
-function usageFromPayload(payload: unknown): { input: number; output: number } | null {
+/**
+ * 输入中命中上下文缓存（前缀缓存）的 token 数。
+ *
+ * DeepSeek 放在 `prompt_cache_hit_tokens`；OpenAI 风格放在
+ * `prompt_tokens_details.cached_tokens` / `input_tokens_details.cached_tokens`。
+ * 只用于展示与核对缓存是否生效，不影响容量计算（它已包含在输入 token 里）。
+ */
+function cacheHitTokens(row: Record<string, unknown>): number {
+  const direct = numericToken(row.prompt_cache_hit_tokens);
+  if (direct !== null) return direct;
+  const details = row.prompt_tokens_details ?? row.input_tokens_details;
+  if (details && typeof details === 'object') {
+    return numericToken((details as Record<string, unknown>).cached_tokens) ?? 0;
+  }
+  return 0;
+}
+
+function usageFromPayload(
+  payload: unknown
+): { input: number; output: number; cached: number } | null {
   if (!payload || typeof payload !== 'object') return null;
   const usage = (payload as { usage?: unknown }).usage;
   if (!usage || typeof usage !== 'object') return null;
@@ -225,7 +264,7 @@ function usageFromPayload(payload: unknown): { input: number; output: number } |
   const input = numericToken(row.prompt_tokens) ?? numericToken(row.input_tokens);
   const output = numericToken(row.completion_tokens) ?? numericToken(row.output_tokens);
   if (input === null && output === null) return null;
-  return { input: input ?? 0, output: output ?? 0 };
+  return { input: input ?? 0, output: output ?? 0, cached: cacheHitTokens(row) };
 }
 
 const HISTORY_SUMMARY_RULE =
@@ -259,6 +298,39 @@ export interface PreparedHistory {
 export const HISTORY_MAX_MESSAGES = 20;
 export const HISTORY_MAX_CHARS = 4000;
 
+/**
+ * 界面把失败写成「回答未完成：<错误>」并落库（见 StudiandaApp 的 onError）。
+ *
+ * 那句不是模型说过的话：带着 HTTP 状态、地址之类的内容回传给模型，既会让它把错误文案
+ * 当成自己上一轮的发言，也会把不该进上下文的信息再发一遍。历史里一律换成中性替身。
+ * 前缀本身定义在 `@studianda/shared`，UI 与 core 共用，避免改文案后识别失配。
+ */
+export { FAILED_ANSWER_PREFIX };
+/** 失败轮次在历史里的中性替身正文（不包含原始错误文案）。 */
+export const FAILED_ANSWER_HISTORY = '（上一轮回答未能完成，没有产生内容）';
+/** 单条历史被截断时追加的标记：让模型知道这段话没说完，不要当成完整结论。 */
+export const HISTORY_TRUNCATED_MARK = '…（本条历史已截断）';
+
+/** 这条助手正文是不是界面写的失败占位（不能作为模型发言进入任何提示词）。 */
+export function isFailedAnswerPlaceholder(text: string): boolean {
+  return text.trim().startsWith(FAILED_ANSWER_PREFIX);
+}
+
+/**
+ * 历史单条的最终内容：失败占位换成中性替身，超长按上限截断并留标记。
+ *
+ * 用户提问不会命中失败前缀（只有 assistant 才会被写成那样），但仍然共用截断逻辑。
+ */
+function historyContent(text: string, role: 'user' | 'assistant'): string {
+  const trimmed = text.trim();
+  if (role === 'assistant' && isFailedAnswerPlaceholder(trimmed)) {
+    return FAILED_ANSWER_HISTORY;
+  }
+  return trimmed.length > HISTORY_MAX_CHARS
+    ? `${trimmed.slice(0, HISTORY_MAX_CHARS)}${HISTORY_TRUNCATED_MARK}`
+    : trimmed;
+}
+
 /** 历史消息本身的成本（每条一次固定开销；与 request_budget 的消息计数口径一致）。 */
 function historyCost(prior: readonly HistoryMessage[]): number {
   return prior.reduce((total, row) => total + cost(row.content) + PER_MESSAGE_COST, 0);
@@ -278,7 +350,8 @@ function droppedTurnsOf(rows: readonly HistoryMessage[]): number {
 /**
  * 把 `ChatRequest.history` 收敛成 prior messages。
  *
- * 规则：只保留 user/assistant 与**非空**内容；单条截到 4000 字；最多保留最近 20 条；
+ * 规则：只保留 user/assistant 与**非空**内容；失败占位（`回答未完成：…`）换成中性替身；
+ * 单条超 4000 字截断并留标记；最多保留最近 20 条；
  * 超容量时**从最旧开始丢**（按整轮丢：user 连同它的 assistant 答；绝不截断当前问题或证据）。
  * 返回的 `dropped` 是被丢掉的历史轮数——包含「超过 20 条上限」裁掉的部分，调用方必须写进
  * notice，不能静默丢历史。
@@ -302,17 +375,17 @@ export function prepareHistory(
       const role = value.role;
       const content = value.content.trim();
       if ((role === 'user' || role === 'assistant') && content) {
-        collected.push({ role, content: content.slice(0, HISTORY_MAX_CHARS) });
+        collected.push({ role, content: historyContent(content, role) });
       }
       continue;
     }
     const question = typeof value.question === 'string' ? value.question.trim() : '';
     if (question) {
-      collected.push({ role: 'user', content: question.slice(0, HISTORY_MAX_CHARS) });
+      collected.push({ role: 'user', content: historyContent(question, 'user') });
     }
     const answer = typeof value.answer === 'string' ? value.answer.trim() : '';
     if (answer) {
-      collected.push({ role: 'assistant', content: answer.slice(0, HISTORY_MAX_CHARS) });
+      collected.push({ role: 'assistant', content: historyContent(answer, 'assistant') });
     }
   }
   // 只保留最近 N 条：历史是理解追问的上下文，越旧越不重要；
@@ -365,21 +438,29 @@ export async function callChatModel(
   user: string,
   maxTokens = 1200,
   signal?: AbortSignal,
-  onDelta?: (delta: string) => void,
+  /**
+   * 已停用：回答不再流式，始终整段返回。
+   *
+   * 形参保留只是为了不改动 18 处既有调用点的位置参数；实现里**永远不会调用它**。
+   */
+  _onDelta?: (delta: string) => void,
   onMeta?: (meta: { finishReason?: string }) => void,
   inputLimit?: number,
   phase = '',
   prior: readonly HistoryMessage[] = [],
   /**
-   * 任务型调用标记（审计/修订/批次阅读/回读规划等过程性请求）。
+   * 任务型调用标记（审计/修订/批次阅读/翻译/回读规划等过程性请求）。
    *
-   * 只有 `config.taskThinking === true && task === true` 时才在请求体加
-   * `thinking: { type: 'disabled' }`；其他情况（默认 task=false、旧配置无 taskThinking）
-   * 请求体**完全不出现**该字段，保持与改动前一致。最终回答不传 task（保留平台深思）。
+   * - DeepSeek 官方地址：任务型一律关闭思考、最终回答显式开启（见 taskThinkingOptions）；
+   * - 其它平台：只有 `config.taskThinking === true && task === true` 时才加
+   *   `thinking: { type: 'disabled' }`，其余情况请求体**完全不出现**该字段。
    */
   task = false
 ): Promise<string> {
-  const stream = Boolean(onDelta);
+  // 本次请求是否真的会思考：决定要不要为思维链加输出预留、要不要发思考强度。
+  // DeepSeek 官方只有非任务型（最终回答）会开启思考；MiniMax 恒为开启，
+  // 但它的预留已经在 chatOutputOptions 里按平台固定处理。
+  const thinking = isDeepSeekHost(config.baseUrl) && !task;
   // 请求消息与容量检查用同一份数组：历史作为 prior 夹在系统指令与材料之间。
   const requestMessages = messages(system, user, prior);
   const inputText = requestMessages.map((message) => message.content).join('\n');
@@ -403,13 +484,22 @@ export async function callChatModel(
       },
       body: JSON.stringify({
         model: config.model,
+        // 思考模式下官方会忽略 temperature（不报错、也不生效）：这里保留是为了
+        // 非思考/任务型调用仍然按低温度采样，不要因为看到它"好像没起作用"就删掉。
         temperature: 0.2,
-        ...chatOutputOptions(config.baseUrl, maxTokens),
-        stream,
+        // 开启思考时给思维链留出输出空间，否则 1200 的正文预算会被推理吃掉。
+        ...chatOutputOptions(config.baseUrl, maxTokens, thinking),
+        // 始终整段返回：不再请求流式响应。
+        stream: false,
         messages: requestMessages,
         // DeepSeek 官方地址：任务型关闭思考、最终回答显式开启；其它平台只在用户明确
         // 打开 task_thinking 时对任务型调用发 disabled（MiniMax 由协议层跳过）。
-        ...taskThinkingOptions(config.baseUrl, task, config.taskThinking === true)
+        ...taskThinkingOptions(config.baseUrl, task, config.taskThinking === true),
+        // 思考强度只在真的会思考时才有意义（关闭思考时官方会忽略强度）。
+        ...(thinking ? reasoningEffortOptions(config.baseUrl, config.reasoningEffort) : {}),
+        // 内容审核只挂在面向用户的回答上：过程性调用（task=true）不发，
+        // 既避免每批都付审核 token/收尾延迟，也不让审核误拒原文。
+        ...(task ? {} : safetyCheckOptions(config.baseUrl, config.safetyCheck !== false))
       }),
       signal: signal ?? AbortSignal.timeout(120_000)
     });
@@ -421,79 +511,6 @@ export async function callChatModel(
   }
   if (!response.ok) {
     throw new Error(`${phase ? `${phase}：` : ''}${serviceErrorMessage(response.status)}`);
-  }
-  if (onDelta && response.body) {
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let content = '';
-    let finishReason = '';
-    let reasoningOnly = false;
-    let done = false;
-    let streamUsage: { input: number; output: number } | null = null;
-    while (!done) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      buffer += decoder.decode(chunk.value, { stream: true });
-      let boundary = buffer.indexOf('\n');
-      while (boundary >= 0) {
-        const line = buffer.slice(0, boundary).trim();
-        buffer = buffer.slice(boundary + 1);
-        if (line.startsWith('data:')) {
-          const data = line.slice(5).trim();
-          if (data === '[DONE]') {
-            done = true;
-            break;
-          }
-          try {
-            const payload = JSON.parse(data) as {
-              choices?: Array<{
-                delta?: { content?: unknown; reasoning_content?: unknown };
-                finish_reason?: unknown;
-              }>;
-              usage?: unknown;
-            };
-            streamUsage = usageFromPayload(payload) ?? streamUsage;
-            const choice = payload.choices?.[0];
-            if (typeof choice?.finish_reason === 'string') finishReason = choice.finish_reason;
-            const rawDelta = choice?.delta?.content;
-            let delta = '';
-            if (Array.isArray(rawDelta)) {
-              delta = rawDelta
-                .filter(
-                  (part): part is { type?: unknown; text?: unknown } =>
-                    Boolean(part) && typeof part === 'object'
-                )
-                .filter((part) => part.type === 'text' || part.type === 'output_text')
-                .map((part) => (typeof part.text === 'string' ? part.text : ''))
-                .join('');
-            } else if (typeof rawDelta === 'string') {
-              delta = rawDelta;
-            }
-            if (!delta && choice?.delta?.reasoning_content) reasoningOnly = true;
-            if (delta) {
-              content += delta;
-              onDelta(delta);
-            }
-          } catch {
-            // 忽略非 JSON 心跳行
-          }
-        }
-        boundary = buffer.indexOf('\n');
-      }
-    }
-    if (finishReason === 'length') {
-      throw new Error('模型达到输出上限，正文或结构化结果可能被截断；请提高输出预留，或使用非推理模式。');
-    }
-    if (!content.trim()) {
-      throw new Error(
-        reasoningOnly
-          ? '模型仅返回推理或空正文；请增加输出预留或切换非推理模式。'
-          : '模型没有返回可显示的正文。'
-      );
-    }
-    recordModelUsage(inputText, content, streamUsage);
-    return content.trim();
   }
   const payload = (await response.json()) as unknown;
   const choice = (
@@ -592,7 +609,8 @@ async function synthesize(
     undefined,
     inputLimit,
     '形成文献分析',
-    preparedHistory.prior
+    preparedHistory.prior,
+    false
   );
   const sources: ChatSource[] = bank.map((item) => {
     const document = store.getDocument(item.documentId ?? documentId);
@@ -759,6 +777,21 @@ function userContext(question: string, selection: string): string {
     return `${head}\n（本轮没有选文——用户没有从文献里选任何文字。）`;
   }
   return `${head}\n选文（用户在文献里选中的原文，逐字）：${selection}`;
+}
+
+/**
+ * 批量阅读的用户消息：**先原文、后问题/选文**。
+ *
+ * 顺序是缓存收益的前提：同一页集换成另一个问题时，前面的整批原文逐字相同，
+ * 才会命中上下文缓存（官方缓存按完整前缀单元匹配）；问题写在原文前面，会让
+ * 后面整块原文每次都无法复用。不要把这里的顺序改回去，改前先看缓存命中数据。
+ */
+export function batchReadingPrompt(
+  material: string,
+  question: string,
+  selection: string
+): string {
+  return `${material}\n\n${userContext(question, selection)}`;
 }
 
 /** 单篇/跨文献路径：把已读页原文交给审计，摘引按来源编号逐字核验。 */
@@ -932,7 +965,7 @@ function withQuestionContext(
     callChatModel(
       config,
       instruction,
-      `${userContext(question, selection)}\n${material}`,
+      batchReadingPrompt(material, question, selection),
       3000,
       signal,
       undefined,
@@ -1605,7 +1638,7 @@ export async function answerWithCorpus(
     callChatModel(
       config,
       instruction,
-      `${userContext(question, selection)}\n${material}`,
+      batchReadingPrompt(material, question, selection),
       3000,
       signal,
       undefined,
@@ -2266,7 +2299,7 @@ export async function answerWithReading(
           callChatModel(
             config,
             instruction,
-            `${userContext(question, selection)}\n${material}`,
+            batchReadingPrompt(material, question, selection),
             3000,
             signal,
             undefined,
@@ -2994,7 +3027,7 @@ export async function answerWithReading(
     callChatModel(
       config,
       instruction,
-      `${userContext(question, selection)}\n${material}`,
+      batchReadingPrompt(material, question, selection),
       3000,
       signal,
       undefined,

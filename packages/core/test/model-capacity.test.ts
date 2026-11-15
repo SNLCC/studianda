@@ -12,10 +12,10 @@ import { Store } from '../src/store.js';
  *
  * 口径：
  * - 模型条目可以带 `context_window`（8192–4000000）、`capacity_mode`、`task_thinking`、
- *   `capacity_source`；
+ *   `reasoning_effort`、`capacity_source`；
  * - 只有 `capacity_mode='manual'` 且窗口合法时才覆盖全局容量；auto/未配置/越界一律沿用全局；
- * - `task_thinking` 本版本只保存与展示，**不**发送平台私有参数（callChatModel 请求体没有
- *   `thinking` 字段，默认行为不变）。
+ * - `task_thinking` / `reasoning_effort` 只向支持对应参数的平台发送（DeepSeek 官方地址）；
+ *   其它平台不发送这些字段，请求体与历史行为一致。
  */
 
 const dataDir = mkdtempSync(path.join(tmpdir(), 'studianda-model-capacity-'));
@@ -184,8 +184,8 @@ describe('chatInputLimit 使用模型手动容量', () => {
   });
 });
 
-describe('task_thinking 不改变请求（默认行为不变）', () => {
-  it('callChatModel 请求体没有 thinking 字段（本版本只保存设置，不发送私有参数）', async () => {
+describe('task_thinking 不改变非官方平台的请求', () => {
+  it('callChatModel 对非 DeepSeek 地址不带 thinking 字段（不猜平台私有参数）', async () => {
     const fetchMock = vi.fn(async (_url: string, init: { body: string }) => {
       void init;
       return {

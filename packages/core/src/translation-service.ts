@@ -28,7 +28,7 @@ import { orderTwoColumnLines } from './pdf-layout.js';
 import type { LayoutLine, LayoutPage } from './pdf-layout.js';
 import { heading } from './structure.js';
 import { resolveModelService } from './model-services.js';
-import { chatOutputOptions } from './model-protocol.js';
+import { chatOutputOptions, thinkingOptions } from './model-protocol.js';
 import { requestMaxTokensFor, TASK_MAX_TOKENS } from './output-limit.js';
 
 // 段与段彼此独立，并发发送；4 是本机与常见云平台都稳的值（TRANSLATE_WORKERS）。
@@ -581,7 +581,13 @@ export async function translatePage(
           undefined,
           (meta) => {
             finishReason = meta.finishReason;
-          }
+          },
+          undefined,
+          '',
+          [],
+          // 逐段翻译是过程性任务：DeepSeek 官方地址会因此关闭思考，
+          // 否则每段都先跑一段高强度思维链，既慢又容易把输出预算吃光。
+          true
         );
         // finish_reason=length：服务端按输出上限截断了，兼容服务有时仍返回 stop，
         // 这里至少把明确给出的 length 拦下来，不把截断的译文当成功结果落库。
@@ -791,7 +797,11 @@ async function translateSingleText(
     undefined,
     (meta) => {
       finishReason = meta.finishReason;
-    }
+    },
+    undefined,
+    '',
+    [],
+    true
   );
   if (finishReason === 'length') {
     throw new Error('这段文本被服务端输出上限截断，请减少选文长度后重试');
@@ -911,6 +921,8 @@ export async function retranslateTranslationSegment(
       model: config.model,
       temperature: 0,
       ...chatOutputOptions(config.baseUrl, config.maxTokens),
+      // 单段重译同样是过程性任务：官方地址关闭思考，保持可复现且不占输出预算。
+      ...thinkingOptions(config.baseUrl, false),
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: buildPrompt(target.source, targetLanguage) }

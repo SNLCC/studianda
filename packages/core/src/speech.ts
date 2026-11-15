@@ -6,7 +6,7 @@ import type { SpeechConfigRecord, SpeechTranscription } from '@studianda/shared'
 import type { SecretStore } from './secrets.js';
 import type { Store } from './store.js';
 import { readModelServices, resolveModelService } from './model-services.js';
-import { chatOutputOptions } from './model-protocol.js';
+import { chatOutputOptions, thinkingOptions } from './model-protocol.js';
 import { requestMaxTokensFor, TASK_MAX_TOKENS } from './output-limit.js';
 
 const DEFAULTS = {
@@ -33,6 +33,23 @@ export function getSpeechConfig(
   const settings = store.getSettings();
   const bool = (key: string, fallback: boolean): boolean =>
     key in settings ? settings[key] === 'true' : fallback;
+  const ttsMode: SpeechConfigRecord['tts_mode'] =
+    settings['speech.tts_mode'] === 'custom'
+      ? 'custom'
+      : settings['speech.tts_mode'] === 'model'
+        ? 'model'
+        : 'system';
+  // 流式朗读只对 DeepSeek 官方连接开放：其它平台没有对应的 WebSocket 接口。
+  // 这里不能调用 speechStreamingAvailable（它会反过来调用本函数）。
+  const ttsStreaming = ((): boolean => {
+    if (ttsMode === 'system') return false;
+    try {
+      const config = profile(store, secrets, 'tts');
+      return Boolean(config.key) && speechProtocol(config.baseUrl) === 'deepseek';
+    } catch {
+      return false;
+    }
+  })();
   return {
     input_enabled: bool('speech.input_enabled', DEFAULTS.input_enabled),
     output_enabled: bool('speech.output_enabled', DEFAULTS.output_enabled),
@@ -49,12 +66,7 @@ export function getSpeechConfig(
         : settings['speech.asr_mode'] === 'model'
           ? 'model'
           : 'system',
-    tts_mode:
-      settings['speech.tts_mode'] === 'custom'
-        ? 'custom'
-        : settings['speech.tts_mode'] === 'model'
-          ? 'model'
-          : 'system',
+    tts_mode: ttsMode,
     asr_url: settings['speech.asr_url'] ?? '',
     tts_url: settings['speech.tts_url'] ?? '',
     asr_model: settings['speech.asr_model'] ?? '',
@@ -63,7 +75,8 @@ export function getSpeechConfig(
     tts_connection_id: settings['speech.tts_connection_id'] ?? '',
     voice: settings['speech.voice'] ?? '',
     has_asr_key: Boolean(secrets.get('speech.asr_key')?.trim()),
-    has_tts_key: Boolean(secrets.get('speech.tts_key')?.trim())
+    has_tts_key: Boolean(secrets.get('speech.tts_key')?.trim()),
+    tts_streaming: ttsStreaming
   };
 }
 
@@ -137,7 +150,7 @@ export function saveSpeechConfig(
   return getSpeechConfig(store, secrets);
 }
 
-function speechProtocol(baseUrl: string): 'mimo' | 'minimax' | 'openai' {
+function speechProtocol(baseUrl: string): 'mimo' | 'minimax' | 'deepseek' | 'openai' {
   let host = '';
   try {
     host = new URL(baseUrl).hostname.toLowerCase();
@@ -145,6 +158,7 @@ function speechProtocol(baseUrl: string): 'mimo' | 'minimax' | 'openai' {
     return 'openai';
   }
   if (host === 'api.xiaomimimo.com') return 'mimo';
+  if (host === 'api.deepseek.com') return 'deepseek';
   if (
     ['api.minimax.io', 'api.minimaxi.com', 'api.minimax.chat', 'api-uw.minimax.io'].includes(
       host
@@ -268,6 +282,7 @@ export async function voicesForSpeechConnection(
   model: string
 ): Promise<SpeechVoiceList> {
   const protocol = speechProtocol(baseUrl);
+  if (protocol === 'deepseek') return deepseekVoiceList();
   if (protocol === 'mimo') return mimoVoiceList(model);
   if (protocol === 'minimax') return minimaxVoiceList(baseUrl, apiKey);
   return {
@@ -806,6 +821,227 @@ export function validateWav(bytes: Uint8Array): WavInfo | null {
   return { channels, bitsPerSample, sampleRate, durationSeconds };
 }
 
+/* ------------------------------------------------------------------------- *
+ * DeepSeek 语音：识别 / 合成 / 流式朗读
+ *
+ * 只用公开接口字段与端点；实现与文案都是本项目自己的写法，没有引入任何第三方代码。
+ * ------------------------------------------------------------------------- */
+
+/** 预置音色（官方只提供两个固定音色，不支持语速调节）。 */
+export const DEEPSEEK_VOICES: Array<{ id: string; label: string }> = [
+  { id: 'stella', label: '海星（女声，默认）' },
+  { id: 'tide', label: '暗潮（男声）' }
+];
+
+const DEEPSEEK_VOICE_IDS = new Set(DEEPSEEK_VOICES.map((voice) => voice.id));
+
+export function deepseekVoiceList(): SpeechVoiceList {
+  return {
+    voices: DEEPSEEK_VOICES.map((voice) => ({ ...voice })),
+    source: '官方文档',
+    note: 'DeepSeek 语音合成提供 2 个预置音色；不支持语速调节。'
+  };
+}
+
+/** DeepSeek 语音接口的错误 → 可执行中文提示（不回显上游响应体）。 */
+function deepseekSpeechError(status: number, action: '语音识别' | '语音合成'): string {
+  const known: Record<number, string> = {
+    400:
+      action === '语音识别'
+        ? '音频格式不受支持或缺少文件：需要 16 位 PCM WAV 或 Ogg Opus。'
+        : '没有可朗读的文本，或文本未通过内容审核。',
+    402: 'DeepSeek 账号余额不足，请充值后重试。',
+    408: `${action}上传超时，请重试。`,
+    413:
+      action === '语音识别'
+        ? '音频超过 8 MiB，请缩短录音后重试。'
+        : '请求体过大（上限 64 KiB）。',
+    429: `${action}并发已满，请稍后重试。`,
+    503: `${action}服务繁忙，请稍后重试。`,
+    504: `${action}超时，请稍后重试。`
+  };
+  return known[status] ?? `${action}返回 HTTP ${status}。`;
+}
+
+/** 计费字符：汉字（含扩展 A）算 2，其它字符算 1。 */
+export function speechBillableChars(text: string): number {
+  let total = 0;
+  for (const char of Array.from(text)) {
+    total += /[\u3400-\u9fff]/.test(char) ? 2 : 1;
+  }
+  return total;
+}
+
+/**
+ * 超长时按计费字符截断。
+ *
+ * 朗读是易失输出（不落库、不参与证据），截断比整段失败更可用；证据类文本不经过这里。
+ */
+function truncateSpeechText(text: string, max = 10_000): string {
+  let total = 0;
+  let out = '';
+  for (const char of Array.from(text)) {
+    const cost = /[\u3400-\u9fff]/.test(char) ? 2 : 1;
+    if (total + cost > max) break;
+    out += char;
+    total += cost;
+  }
+  return out;
+}
+
+/** DeepSeek 语音识别：整段 16 位 PCM WAV；语种自动识别，没有语种参数。 */
+async function deepseekTranscribe(
+  baseUrl: string,
+  key: string,
+  bytes: Uint8Array,
+  filename: string,
+  mimeType: string
+): Promise<SpeechTranscription> {
+  const form = new FormData();
+  form.append(
+    'file',
+    new Blob([new Uint8Array(bytes)], { type: mimeType || 'audio/wav' }),
+    filename || 'speech.wav'
+  );
+  const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/v1/tools/asr`, {
+    method: 'POST',
+    headers: key ? { Authorization: `Bearer ${key}` } : {},
+    body: form,
+    signal: AbortSignal.timeout(120_000)
+  });
+  if (!response.ok) throw new Error(deepseekSpeechError(response.status, '语音识别'));
+  const payload = (await response.json()) as { text?: unknown };
+  const text = typeof payload.text === 'string' ? payload.text.trim() : '';
+  if (!text) throw new Error('语音识别没有返回文字');
+  return { text: text.slice(0, 8000), confidence: null, source: 'deepseek' };
+}
+
+/** DeepSeek 语音合成：整段文本 → wav；`filter_markdown` 让朗读不念 Markdown 标记。 */
+async function deepseekSynthesize(
+  baseUrl: string,
+  key: string,
+  text: string,
+  voice: string
+): Promise<{ bytes: Uint8Array; contentType: string }> {
+  const voiceId = (voice.trim() || 'stella').toLowerCase();
+  if (!DEEPSEEK_VOICE_IDS.has(voiceId)) {
+    throw new Error('DeepSeek 语音合成只支持 stella（女声）或 tide（男声）两个音色。');
+  }
+  const spoken = truncateSpeechText(text.trim());
+  if (!spoken) throw new Error('没有可朗读的文本');
+  const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/v1/tools/tts`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(key ? { Authorization: `Bearer ${key}` } : {})
+    },
+    body: JSON.stringify({
+      text: spoken,
+      voice_id: voiceId,
+      format: 'wav',
+      filter_markdown: true
+    }),
+    signal: AbortSignal.timeout(90_000)
+  });
+  if (!response.ok) throw new Error(deepseekSpeechError(response.status, '语音合成'));
+  const contentType = response.headers.get('content-type') || 'audio/wav';
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.byteLength === 0) throw new Error('语音合成没有返回音频');
+  if (bytes.byteLength > 30 * 1024 * 1024) throw new Error('返回的音频超过 30 MB');
+  return { bytes, contentType };
+}
+
+/** 当前配置是否支持流式朗读（只读计算，路由与界面共用）。 */
+export function speechStreamingAvailable(store: Store, secrets: SecretStore): boolean {
+  try {
+    return getSpeechConfig(store, secrets).tts_streaming;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 边合成边播：连官方 WebSocket，一次性发完文本后持续吐 PCM 帧（24 kHz、16 位、单声道）。
+ *
+ * 鉴权放在子协议里（`Sec-WebSocket-Protocol`），不需要额外请求头，也不引入第三方
+ * WebSocket 库；运行时缺少 WebSocket 时明确报错，由调用方回退到整段合成。
+ */
+export async function streamSpeech(
+  store: Store,
+  secrets: SecretStore,
+  text: string,
+  onAudio: (chunk: Uint8Array) => void
+): Promise<void> {
+  const speech = getSpeechConfig(store, secrets);
+  if (!speech.tts_streaming) throw new Error('当前语音服务不支持流式朗读');
+  const config = profile(store, secrets, 'tts');
+  const WebSocketCtor = (globalThis as { WebSocket?: typeof WebSocket }).WebSocket;
+  if (!WebSocketCtor) throw new Error('当前运行时不支持 WebSocket，无法流式合成');
+  const voiceId = (speech.voice.trim() || 'stella').toLowerCase();
+  if (!DEEPSEEK_VOICE_IDS.has(voiceId)) {
+    throw new Error('DeepSeek 语音合成只支持 stella（女声）或 tide（男声）两个音色。');
+  }
+  const spoken = truncateSpeechText(text.trim());
+  if (!spoken) throw new Error('没有可朗读的文本');
+  const base = config.baseUrl.replace(/\/+$/, '').replace(/^http/, 'ws');
+  const url =
+    `${base}/v1/tools/tts?voice_id=${encodeURIComponent(voiceId)}` +
+    '&format=pcm&filter_markdown=true';
+  const socket = new WebSocketCtor(url, ['tts', `bearer.${config.key}`]);
+  socket.binaryType = 'arraybuffer';
+  await new Promise<void>((resolve, reject) => {
+    let done = false;
+    const timer = setTimeout(() => complete(new Error('流式合成连接超时')), 20_000);
+    function complete(error?: Error): void {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try {
+        socket.close();
+      } catch {
+        // 关闭失败不影响结果
+      }
+      if (error) reject(error);
+      else resolve();
+    }
+    socket.addEventListener('open', () => {
+      clearTimeout(timer);
+      socket.send(JSON.stringify({ event: 'text', text: spoken }));
+      socket.send(JSON.stringify({ event: 'finish_text' }));
+    });
+    socket.addEventListener('message', (event) => {
+      if (typeof event.data === 'string') {
+        try {
+          const message = JSON.parse(event.data) as {
+            event?: string;
+            code?: string;
+            message?: string;
+          };
+          if (message.event === 'finish') {
+            complete(
+              message.code === 'success'
+                ? undefined
+                : new Error(`流式合成失败：${message.message || message.code || '未知错误'}`)
+            );
+          }
+        } catch {
+          // 忽略非 JSON 文本帧
+        }
+        return;
+      }
+      if (event.data instanceof ArrayBuffer) onAudio(new Uint8Array(event.data));
+    });
+    socket.addEventListener('error', () => complete(new Error('流式合成连接失败')));
+    socket.addEventListener('close', (event) => {
+      complete(
+        event.code === 1000 || event.code === 0
+          ? undefined
+          : new Error(`流式合成连接中断（${event.code}）`)
+      );
+    });
+  });
+}
+
 export async function transcribeAudio(
   store: Store,
   secrets: SecretStore,
@@ -820,6 +1056,15 @@ export async function transcribeAudio(
   const profileConfig = profile(store, secrets, 'asr');
   const language = config.language;
   const protocol = speechProtocol(profileConfig.baseUrl);
+  if (protocol === 'deepseek') {
+    return deepseekTranscribe(
+      profileConfig.baseUrl,
+      profileConfig.key,
+      bytes,
+      filename,
+      mimeType
+    );
+  }
   if (protocol === 'mimo') {
     return mimoTranscribe(profileConfig.baseUrl, profileConfig.key, profileConfig.model, bytes, language);
   }
@@ -857,6 +1102,9 @@ export async function synthesizeSpeech(
   }
   const config = profile(store, secrets, 'tts');
   const protocol = speechProtocol(config.baseUrl);
+  if (protocol === 'deepseek') {
+    return deepseekSynthesize(config.baseUrl, config.key, text, speech.voice);
+  }
   if (protocol === 'mimo') {
     return mimoSynthesize(config.baseUrl, config.key, config.model, text, speech.voice);
   }
@@ -1094,6 +1342,8 @@ export async function correctTranscript(
         model: routed.model,
         temperature: 0,
         ...chatOutputOptions(routed.baseUrl, maxTokens),
+        // 纠错只改错字：官方地址显式关闭思考，避免思维链拖慢实时转写并占用输出预算。
+        ...thinkingOptions(routed.baseUrl, false),
         messages: [
           { role: 'system', content: CORRECTION_SYSTEM_PROMPT },
           {

@@ -1,5 +1,10 @@
 import type { Store } from './store.js';
-import { callChatModel, type ReadingChatConfig } from './reading-chat.js';
+import {
+  FAILED_ANSWER_HISTORY,
+  callChatModel,
+  isFailedAnswerPlaceholder,
+  type ReadingChatConfig
+} from './reading-chat.js';
 import { readDocumentChatSessions } from './document-chat-sessions.js';
 
 /**
@@ -45,6 +50,8 @@ interface PendingPair {
   userId: number;
   question: string;
   answer: string;
+  /** 当前 answer 只是失败占位的中性替身（不是模型原文），后到的真实回答应替换它。 */
+  failedOnly?: boolean;
 }
 
 const compactionFailureUntil = new Map<string, number>();
@@ -82,7 +89,7 @@ function fallbackPairsOf(history: unknown): ReadingHistoryPair[] {
   return pairs;
 }
 
-/** 把消息行按「user 后紧跟 assistant」配对；失败的助手占位也算一轮（保留其内容）。 */
+/** 把消息行按「user 后紧跟 assistant」配对；失败占位换成中性替身，不当作模型发言。 */
 function pairsFromMessages(
   rows: ReturnType<Store['listMessages']>
 ): PendingPair[] {
@@ -93,8 +100,25 @@ function pairsFromMessages(
       if (current) pairs.push(current);
       current = { userId: row.id, question: row.content, answer: '' };
     } else if (current) {
-      // 同一轮出现多个 assistant 消息（失败占位/重答残留）时合并，避免丢上下文。
-      current.answer = current.answer ? `${current.answer}\n${row.content}` : row.content;
+      const content = row.content.trim();
+      if (!content) continue;
+      // 「回答未完成：…」是界面写的失败占位，不是模型说过的话：不并入正文，
+      // 否则下一轮模型会把 HTTP 错误当成自己上一轮的回答，错误文案也会被再发一遍。
+      if (isFailedAnswerPlaceholder(content)) {
+        if (!current.answer) {
+          current.answer = FAILED_ANSWER_HISTORY;
+          current.failedOnly = true;
+        }
+        continue;
+      }
+      // 同一轮出现多个 assistant 消息（失败占位/重答残留）时合并，避免丢上下文；
+      // 先失败后重答时用真实回答替换替身。
+      if (current.failedOnly || !current.answer) {
+        current.answer = content;
+      } else {
+        current.answer = `${current.answer}\n${content}`;
+      }
+      current.failedOnly = false;
     }
   }
   if (current) pairs.push(current);

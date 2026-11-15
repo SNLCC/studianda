@@ -26,20 +26,6 @@ function jsonResponse(payload: unknown): Response {
   });
 }
 
-function sseResponse(rows: string[]): Response {
-  const encoder = new TextEncoder();
-  const body = rows.map((row) => `data: ${row}\n\n`).join('');
-  return new Response(
-    new ReadableStream({
-      start(controller) {
-        controller.enqueue(encoder.encode(body));
-        controller.close();
-      }
-    }),
-    { status: 200, headers: { 'content-type': 'text/event-stream' } }
-  );
-}
-
 describe('模型 token 用量收集', () => {
   it('非流式：供应商返回 usage 时用真实值', async () => {
     vi.stubGlobal('fetch', async () =>
@@ -77,31 +63,57 @@ describe('模型 token 用量收集', () => {
     );
   });
 
-  it('流式：usage chunk 夹在 SSE 里也计入', async () => {
+  it('非流式：记录命中上下文缓存的 token（DeepSeek 字段）', async () => {
     vi.stubGlobal('fetch', async () =>
-      sseResponse([
-        JSON.stringify({ choices: [{ delta: { content: '流式' } }] }),
-        JSON.stringify({ choices: [{ delta: { content: '回答' } }] }),
-        JSON.stringify({
-          choices: [],
-          usage: { input_tokens: 88, output_tokens: 12, total_tokens: 100 }
-        }),
-        '[DONE]'
-      ])
+      jsonResponse({
+        choices: [{ message: { content: '回答正文' } }],
+        usage: {
+          prompt_tokens: 1000,
+          completion_tokens: 20,
+          prompt_cache_hit_tokens: 800,
+          prompt_cache_miss_tokens: 200
+        }
+      })
     );
-    const deltas: string[] = [];
     const collected = await collectModelUsage(() =>
-      callChatModel(config, '系统', '材料', 256, undefined, (delta) => deltas.push(delta))
+      callChatModel(config, '系统提示', '材料正文')
     );
-    expect(collected.result).toBe('流式回答');
-    expect(deltas.join('')).toBe('流式回答');
+    // 缓存命中是输入的一部分：输入总数不变，只是多一个可展示的明细。
     expect(collected.usage).toMatchObject({
-      input_tokens: 88,
-      output_tokens: 12,
-      total_tokens: 100,
-      calls: 1,
-      estimated: false
+      input_tokens: 1000,
+      cached_tokens: 800,
+      output_tokens: 20
     });
+  });
+
+  it('非流式：也认 OpenAI 风格的 cached_tokens 明细', async () => {
+    vi.stubGlobal('fetch', async () =>
+      jsonResponse({
+        choices: [{ message: { content: '回答正文' } }],
+        usage: {
+          prompt_tokens: 500,
+          completion_tokens: 10,
+          prompt_tokens_details: { cached_tokens: 320 }
+        }
+      })
+    );
+    const collected = await collectModelUsage(() =>
+      callChatModel(config, '系统提示', '材料正文')
+    );
+    expect(collected.usage).toMatchObject({ input_tokens: 500, cached_tokens: 320 });
+  });
+
+  it('供应商没有缓存字段时不写 cached_tokens（界面不会显示“缓存命中 0”）', async () => {
+    vi.stubGlobal('fetch', async () =>
+      jsonResponse({
+        choices: [{ message: { content: '回答正文' } }],
+        usage: { prompt_tokens: 120, completion_tokens: 30 }
+      })
+    );
+    const collected = await collectModelUsage(() =>
+      callChatModel(config, '系统提示', '材料正文')
+    );
+    expect(collected.usage).not.toHaveProperty('cached_tokens');
   });
 
   it('没有模型调用时没有 usage', async () => {

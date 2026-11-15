@@ -16,7 +16,9 @@ export const PROVIDERS: ProviderPreset[] = [
     id: 'deepseek',
     name: 'DeepSeek',
     baseUrl: 'https://api.deepseek.com/v1',
-    models: ['deepseek-chat', 'deepseek-reasoner'],
+    // 官方 Chat Completions 的 model 枚举只有这两个（deepseek-chat / deepseek-reasoner
+    // 已不在当前文档里，写进预设会让新用户选中后直接 404）。
+    models: ['deepseek-flash', 'deepseek-v4-pro'],
     requiresKey: true
   },
   {

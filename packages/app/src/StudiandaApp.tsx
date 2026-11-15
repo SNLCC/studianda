@@ -8,6 +8,7 @@ import {
   API_ERROR_CODES,
   DOCUMENT_CATEGORY_LABELS,
   DOCUMENT_TYPE_OPTIONS,
+  FAILED_ANSWER_PREFIX,
   REFERENCE_GRAPH_ALL_NODE_LIMIT,
   documentCategoryOf,
   documentTypeLabel,
@@ -6948,7 +6949,6 @@ function ReaderView({
     });
   };
   const [askProgress, setAskProgress] = useState<{ done: number; total: number } | null>(null);
-  const [draftAnswer, setDraftAnswer] = useState('');
   const [askStage, setAskStage] = useState('');
   const [auditDraft, setAuditDraft] = useState<
     Array<{ claim: number; verdict: string; text?: string }>
@@ -7033,7 +7033,6 @@ function ReaderView({
     setLastSearchToken(undefined);
     setLastAskExtras({});
     setBudgetWarning(null);
-    setDraftAnswer('');
     setAskStage('');
     setAuditDraft([]);
     setAskProgress(null);
@@ -7468,8 +7467,6 @@ function ReaderView({
           {
             signal: controller.signal,
             onProgress: (done, total) => setAskProgress({ done, total }),
-            onDraft: (text) => setDraftAnswer((current) => current + text),
-            onDraftReset: () => setDraftAnswer(''),
             onStage: (text) => setAskStage(text),
             onAudit: (claims) =>
               setAuditDraft(
@@ -7502,7 +7499,6 @@ function ReaderView({
       if (response.needs_confirmation && response.budget) {
         // 预算确认不是回答：不追加空助手消息、不落库；清掉草稿/阶段/审计，等用户确认后重发。
         setBudgetWarning(response.budget);
-        setDraftAnswer('');
         setAskStage('');
         setAuditDraft([]);
         return;
@@ -7545,7 +7541,6 @@ function ReaderView({
         }
       }
       setBudgetWarning(null);
-      setDraftAnswer('');
       setAskStage('');
       setAuditDraft([]);
       // 新一轮回答后回到最新一页（用户可能正在看搜索结果对应的完整历史）。
@@ -7619,7 +7614,6 @@ function ReaderView({
         }
       }
       setBudgetWarning(null);
-      setDraftAnswer('');
       setAskStage('');
       setAuditDraft([]);
       setChatMessages((current) => [
@@ -7627,11 +7621,13 @@ function ReaderView({
         {
           id: crypto.randomUUID(),
           role: 'assistant',
-          content: `回答未完成：${error.message}`
+          // 前缀来自 @studianda/shared：core 靠它把这条识别成失败占位，在历史里换成
+          // 中性说明。两端共用同一常量，改文案不会出现「UI 改了、core 认不出来」。
+          content: `${FAILED_ANSWER_PREFIX}${error.message}`
         }
       ]);
       // 失败提示同样排队落库，但**不**刷新消息列表：DB 里可能没有这条，刷新会把本地历史清短。
-      void persistMessage('assistant', `回答未完成：${error.message}`).catch(reportPersistFailure);
+      void persistMessage('assistant', `${FAILED_ANSWER_PREFIX}${error.message}`).catch(reportPersistFailure);
     }
   });
 
@@ -7693,7 +7689,6 @@ function ReaderView({
         localQuestion;
       setLastQuestion(question);
       setBudgetWarning(null);
-      setDraftAnswer('');
       setAskStage('');
       setAuditDraft([]);
       // 先截断本地（丢弃旧回答/失败占位），再重发：请求失败时 onError 会追加错误占位，
@@ -7727,7 +7722,7 @@ function ReaderView({
    */
   const saveAnswerAsNote = async (message: ChatMessageView): Promise<void> => {
     // 失败占位不是有效回答，存成笔记只会留下一条无意义的错误文本。
-    if (message.content.trim().startsWith('回答未完成：')) {
+    if (message.content.trim().startsWith(FAILED_ANSWER_PREFIX)) {
       throw new Error('这条回答没有完成，无法存为笔记');
     }
     const markdown = chatAnswerAsMarkdown(message);
@@ -7855,7 +7850,6 @@ function ReaderView({
       // 编辑后问题变了，旧的搜索审批凭证不再适用。
       setLastSearchToken(undefined);
       setBudgetWarning(null);
-      setDraftAnswer('');
       setAskStage('');
       setAuditDraft([]);
       setLastAnswerDurationMs(null);
@@ -7912,7 +7906,6 @@ function ReaderView({
       setChatMessages(remaining);
       setLastAnswerDurationMs(null);
       setBudgetWarning(null);
-      setDraftAnswer('');
       setAskStage('');
       setAuditDraft([]);
       // 同步「上一问」状态，避免之后的重新生成/重发用到已删除的轮次。
@@ -7932,9 +7925,68 @@ function ReaderView({
     }
   };
 
+  const speechConfigQuery = useQuery({
+    queryKey: ['speech-config'],
+    queryFn: () => api.getSpeechConfig()
+  });
+
+  /**
+   * 边合成边播：把 PCM 帧按顺序排进 Web Audio 队列。
+   *
+   * 只有当前语音服务支持流式合成（`tts_streaming`）时才尝试；一个字节都没收到就失败时
+   * 返回 false，由调用方回退到整段合成；已经开始出声后失败则直接报错，避免同一段念两遍。
+   */
+  const playStreamingSpeech = async (text: string): Promise<boolean> => {
+    if (!speechConfigQuery.data?.tts_streaming) return false;
+    const scope = window as typeof window & { webkitAudioContext?: typeof AudioContext };
+    const AudioContextCtor = scope.AudioContext ?? scope.webkitAudioContext;
+    if (!AudioContextCtor) return false;
+    const context = new AudioContextCtor();
+    let received = 0;
+    let scheduledUntil = 0;
+    try {
+      // 自动朗读不一定由点击触发：上下文可能是 suspended，先恢复再排音频，否则没声音。
+      if (context.state === 'suspended') await context.resume();
+      await api.speakStream(text, (chunk) => {
+        received += chunk.byteLength;
+        const samples = Math.floor(chunk.byteLength / 2);
+        if (samples <= 0) return;
+        const buffer = context.createBuffer(1, samples, 24_000);
+        const data = buffer.getChannelData(0);
+        const view = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+        for (let index = 0; index < samples; index += 1) {
+          data[index] = view.getInt16(index * 2, true) / 0x8000;
+        }
+        const source = context.createBufferSource();
+        source.buffer = buffer;
+        source.connect(context.destination);
+        const startAt = Math.max(context.currentTime, scheduledUntil);
+        source.start(startAt);
+        scheduledUntil = startAt + buffer.duration;
+      });
+      if (received === 0) {
+        await context.close();
+        return false;
+      }
+      // 等已排队的音频播完再关闭上下文，避免最后一帧被截断。
+      const remainingMs = Math.max(0, (scheduledUntil - context.currentTime) * 1000) + 200;
+      await new Promise((resolve) => setTimeout(resolve, remainingMs));
+      await context.close();
+      return true;
+    } catch (error) {
+      await context.close().catch(() => undefined);
+      if (received > 0) throw error;
+      return false;
+    }
+  };
+
   const speakMutation = useMutation({
-    mutationFn: (text: string) => api.speak(text),
+    mutationFn: async (text: string): Promise<Blob | null> => {
+      if (await playStreamingSpeech(text)) return null;
+      return api.speak(text);
+    },
     onSuccess: (blob) => {
+      if (!blob) return;
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
       let reported = false;
@@ -7960,10 +8012,6 @@ function ReaderView({
     }
   });
 
-  const speechConfigQuery = useQuery({
-    queryKey: ['speech-config'],
-    queryFn: () => api.getSpeechConfig()
-  });
   // 语音按钮是否可用：环境能力 + 设置里的语音输入开关 + 识别服务是否配好。
   // 不可用时按钮保持可见但禁用，并把原因显示在输入框旁。
   const speechRecordingSupport = mediaRecordingSupport();
@@ -10008,7 +10056,6 @@ function ReaderView({
               hasEarlier={hasEarlierMessages}
               loadingEarlier={loadingEarlierMessages}
               onLoadEarlier={() => void loadEarlierMessages()}
-              draftAnswer={draftAnswer}
               stage={askStage}
               auditDraft={auditDraft}
               pendingTasks={(readingTasksQuery.data ?? []).filter(
@@ -10028,7 +10075,6 @@ function ReaderView({
                 });
                 setLastQuestion(task.question);
                 setBudgetWarning(null);
-                setDraftAnswer('');
       setAskStage('');
       setAuditDraft([]);
                 askMutation.mutate({
@@ -10309,7 +10355,6 @@ function ReaderView({
                 // 新提问开始时清掉上一条回答的耗时，避免旧耗时显示在本轮上。
                 setLastAnswerDurationMs(null);
                 setBudgetWarning(null);
-                setDraftAnswer('');
       setAskStage('');
       setAuditDraft([]);
                 setChatMessages((current) => [
@@ -10494,7 +10539,6 @@ function ReaderView({
                 if (!data) return;
                 setLastQuestion('（语音直接输入）');
                 setBudgetWarning(null);
-                setDraftAnswer('');
                 setAskStage('');
                 setAuditDraft([]);
                 const localMessageId = crypto.randomUUID();

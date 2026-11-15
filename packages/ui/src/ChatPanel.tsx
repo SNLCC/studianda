@@ -58,7 +58,10 @@ const ANSWER_MODE_LABELS: Record<string, string> = {
   direct: '直接回复'
 };
 
-/** 本轮 token 用量：有输入/输出就分别列，否则列总数；供应商没返回 usage 时明确标“估算”。 */
+/**
+ * 本轮 token 用量：有输入/输出就分别列，否则列总数；供应商没返回 usage 时明确标“估算”。
+ * 有缓存命中时挂在输入后面（它是输入的一部分，不单列成一项，避免看起来像额外开销）。
+ */
 function formatUsage(usage: NonNullable<ChatResponse['usage']>): string | null {
   const count = (value?: number): string =>
     typeof value === 'number' && Number.isFinite(value)
@@ -67,8 +70,9 @@ function formatUsage(usage: NonNullable<ChatResponse['usage']>): string | null {
   const input = count(usage.input_tokens);
   const output = count(usage.output_tokens);
   const total = count(usage.total_tokens);
+  const cached = count(usage.cached_tokens);
   const parts: string[] = [];
-  if (input) parts.push(`输入 ${input}`);
+  if (input) parts.push(cached ? `输入 ${input}（缓存命中 ${cached}）` : `输入 ${input}`);
   if (output) parts.push(`输出 ${output}`);
   const body = parts.length > 0 ? parts.join(' · ') : total ? `合计 ${total}` : '';
   if (!body) return null;
@@ -189,7 +193,6 @@ function readComposerHeight(): number {
 
 export interface ChatPanelProps {
   messages: ChatMessageView[];
-  draftAnswer?: string;
   stage?: string;
   auditDraft?: Array<{ claim: number; verdict: string; text?: string }>;
   /** 消息流顶部「加载更早的消息」：独立会话分页用；不传就不显示。 */
@@ -334,7 +337,6 @@ export interface ChatPanelProps {
 
 export function ChatPanel({
   messages,
-  draftAnswer = '',
   stage = '',
   auditDraft = [],
   hasEarlier = false,
@@ -1940,9 +1942,7 @@ export function ChatPanel({
             <div className="kr-chat__bubble kr-chat__bubble--pending">
               <span className="kr-chat__role">阅读伙伴</span>
               <p className="kr-chat__ai-note">AI 生成 · 内容可能出错，请核实</p>
-              {draftAnswer ? (
-                <div className="kr-chat__draft">{draftAnswer}</div>
-              ) : auditDraft.length > 0 ? (
+              {auditDraft.length > 0 ? (
                 <div className="kr-chat__audit-draft">
                   <p className="kr-chat__meta">审计草稿</p>
                   <ul>

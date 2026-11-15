@@ -4,7 +4,8 @@ import type { Store } from './store.js';
 import { modelPlanToReadingPlan } from './planning.js';
 import { getSearchConfig } from './web-search.js';
 import { resolveModelService } from './model-services.js';
-import { chatOutputOptions } from './model-protocol.js';
+import { chatOutputOptions, thinkingOptions } from './model-protocol.js';
+import { isFailedAnswerPlaceholder } from './reading-chat.js';
 
 const ROUTE_INSTRUCTION =
   'QUESTION_ROUTE：判断用户本轮需要什么。只返回 JSON {"document":true,"search":false,"reason":"简短理由","reply":""}。' +
@@ -115,7 +116,7 @@ export function clearRouteCache(): void {
   routeCache.clear();
 }
 
-/** 模型看到的对话历史：最近 3 轮，答案截断到 2000 字。 */
+/** 模型看到的对话历史：最近 3 轮，答案截断到 2000 字；失败占位不作为模型发言。 */
 function historyForModel(
   input: ChatRequest
 ): Array<{ role: 'user' | 'assistant'; content: string }> {
@@ -124,7 +125,9 @@ function historyForModel(
     const question = String(item.question ?? '').trim();
     if (question) rows.push({ role: 'user', content: question });
     const answer = String(item.answer ?? '').slice(0, 2000);
-    if (answer) rows.push({ role: 'assistant', content: answer });
+    if (answer && !isFailedAnswerPlaceholder(answer)) {
+      rows.push({ role: 'assistant', content: answer });
+    }
   }
   return rows;
 }
@@ -312,6 +315,8 @@ export async function routeQuestion(
         model: config.model,
         temperature: 0,
         ...chatOutputOptions(config.baseUrl, 1024),
+        // 只回一个简短路由 JSON：官方地址显式关闭思考，1024 的预算不够思维链消耗。
+        ...thinkingOptions(config.baseUrl, false),
         messages: [
           { role: 'system', content: ROUTE_INSTRUCTION },
           {

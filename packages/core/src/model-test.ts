@@ -1,6 +1,6 @@
 import type { SecretStore } from './secrets.js';
 import { resolveModelService } from './model-services.js';
-import { chatOutputOptions } from './model-protocol.js';
+import { chatOutputOptions, thinkingOptions } from './model-protocol.js';
 import type { Store } from './store.js';
 
 export interface ModelTestResult {
@@ -52,6 +52,8 @@ export async function testModelConnection(
       body: JSON.stringify({
         model,
         ...chatOutputOptions(baseUrl, 32),
+        // 连通性测试只回一个 "OK"：官方地址关闭思考，否则 32 token 全被思维链吃掉。
+        ...thinkingOptions(baseUrl, false),
         messages: [{ role: 'user', content: '只回复 OK' }]
       }),
       signal: signal ?? AbortSignal.timeout(30_000)

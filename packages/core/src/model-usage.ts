@@ -12,6 +12,8 @@ import type { ChatUsage } from '@studianda/shared';
 interface UsageTotals {
   input: number;
   output: number;
+  /** 输入中命中上下文缓存的部分（已包含在 input 里）。 */
+  cached: number;
   calls: number;
   estimatedCalls: number;
 }
@@ -27,7 +29,7 @@ export function estimateTokens(text: string): number {
 export function recordModelUsage(
   inputText: string,
   outputText: string,
-  actual: { input: number; output: number } | null
+  actual: { input: number; output: number; cached?: number } | null
 ): void {
   const totals = usageStorage.getStore();
   if (!totals) return;
@@ -37,6 +39,8 @@ export function recordModelUsage(
   if (actual && (actual.input > 0 || actual.output > 0)) {
     totals.input += actual.input > 0 ? actual.input : estimatedInput;
     totals.output += actual.output > 0 ? actual.output : estimatedOutput;
+    // 缓存命中只可能来自供应商返回的真实 usage；缺 usage 的调用不计入。
+    totals.cached += Math.max(0, actual.cached ?? 0);
     // 只有“有 usage 的调用”与“缺 usage 的调用”混在一起时才标记估算。
     if (actual.input <= 0 || actual.output <= 0) totals.estimatedCalls += 1;
   } else {
@@ -50,7 +54,7 @@ export function recordModelUsage(
 export async function collectModelUsage<T>(
   fn: () => Promise<T>
 ): Promise<{ result: T; usage?: ChatUsage }> {
-  const totals: UsageTotals = { input: 0, output: 0, calls: 0, estimatedCalls: 0 };
+  const totals: UsageTotals = { input: 0, output: 0, cached: 0, calls: 0, estimatedCalls: 0 };
   const result = await usageStorage.run(totals, fn);
   if (totals.calls === 0) return { result };
   return {
@@ -59,6 +63,8 @@ export async function collectModelUsage<T>(
       input_tokens: totals.input,
       output_tokens: totals.output,
       total_tokens: totals.input + totals.output,
+      // 0 命中时不写该字段：没有缓存字段的供应商，界面不该多一行“缓存命中 0”。
+      ...(totals.cached > 0 ? { cached_tokens: totals.cached } : {}),
       calls: totals.calls,
       estimated: totals.estimatedCalls > 0
     }

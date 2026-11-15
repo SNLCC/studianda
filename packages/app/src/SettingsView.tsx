@@ -303,6 +303,8 @@ function SettingsViewContent({
   >('keywords-only');
   const [searchPlanner, setSearchPlanner] = useState(true);
   const [searchFollowup, setSearchFollowup] = useState(true);
+  const [searchFetchContent, setSearchFetchContent] = useState(false);
+  const [searchSendQuestion, setSearchSendQuestion] = useState(false);
   const [searchAllow, setSearchAllow] = useState({
     question: true,
     history: true,
@@ -568,6 +570,14 @@ function SettingsViewContent({
       .filter((model) => model.capabilities.includes('chat'))
       .map((model) => ({ connection, model }))
   );
+  // DeepSeek OCR 只需要一个 DeepSeek 官方连接：复用它的地址与密钥。
+  const deepseekConnections = (speechServicesQuery.data?.connections ?? []).filter((connection) => {
+    try {
+      return new URL(connection.baseUrl).hostname.toLowerCase() === 'api.deepseek.com';
+    } catch {
+      return false;
+    }
+  });
   // 视觉读页可选的模型：显式「视觉」或「全模态」能力；全模态同时承担会话/视觉/音频。
   const visualModelOptions = (speechServicesQuery.data?.connections ?? []).flatMap(
     (connection) =>
@@ -687,6 +697,8 @@ function SettingsViewContent({
     setSearchPlanner(searchQueryConfig.data.planner);
     setSearchPrivacyMode(searchQueryConfig.data.privacy_mode);
     setSearchFollowup(searchQueryConfig.data.followup);
+    setSearchFetchContent(searchQueryConfig.data.fetch_content);
+    setSearchSendQuestion(searchQueryConfig.data.send_question);
     setSearchAllow({
       question: searchQueryConfig.data.allow_question,
       history: searchQueryConfig.data.allow_history,
@@ -720,6 +732,8 @@ function SettingsViewContent({
         allow_current_page: searchAllow.currentPage,
         allow_surrounding: searchAllow.surrounding,
         allow_title: searchAllow.title,
+        fetch_content: searchFetchContent,
+        send_question: searchSendQuestion,
         ...(searchKey.trim() ? { api_key: searchKey.trim() } : {})
       }),
     onSuccess: () => {
@@ -1695,6 +1709,7 @@ function SettingsViewContent({
           >
             <option value="local">本机 Tesseract OCR（默认）</option>
             <option value="vision">视觉模型（/chat/completions）</option>
+            <option value="deepseek_ocr">DeepSeek OCR（官方，逐页文本 + 坐标）</option>
             <option value="custom">自定义解析服务（/parse）</option>
             <option value="mineru_online">MinerU 在线 · 精准解析（官方）</option>
             <option value="mineru_agent">MinerU 在线 · 轻量解析（官方）</option>
@@ -1748,7 +1763,30 @@ function SettingsViewContent({
             Token 只保存在本机并加密。
           </p>
         ) : null}
-        {parsingMode !== 'local' && parsingMode !== 'vision' ? (
+        {parsingMode === 'deepseek_ocr' ? (
+          <>
+            <label>
+              <span>DeepSeek 连接（复用其地址与密钥）</span>
+              <select
+                value={parsingConnectionId}
+                onChange={(event) => setParsingConnectionId(event.target.value)}
+              >
+                <option value="">从模型服务中选择 DeepSeek 官方连接</option>
+                {deepseekConnections.map((connection) => (
+                  <option key={connection.id} value={connection.id}>
+                    {connection.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="kr-muted">
+              DeepSeek OCR 使用官方 <code>POST /v1/tools/ocr</code>，按页返回文本与坐标；
+              识别时会把<strong>单页 PDF</strong>上传到 DeepSeek，按成功页数计费（价格以服务方为准）。
+              客户端断开不会取消已提交的识别。
+            </p>
+          </>
+        ) : null}
+        {parsingMode !== 'local' && parsingMode !== 'vision' && parsingMode !== 'deepseek_ocr' ? (
           <label>
             <span>识别服务地址</span>
             <input
@@ -1762,6 +1800,7 @@ function SettingsViewContent({
         ) : null}
         {parsingMode !== 'local' &&
         parsingMode !== 'vision' &&
+        parsingMode !== 'deepseek_ocr' &&
         parsingMode !== 'mineru_agent' ? (
           <label>
             <span>
@@ -1779,6 +1818,7 @@ function SettingsViewContent({
         ) : null}
         {parsingMode !== 'local' &&
         parsingMode !== 'vision' &&
+        parsingMode !== 'deepseek_ocr' &&
         parsingMode !== 'mineru_agent' ? (
           <label className="kr-settings__check">
             <input
@@ -2514,7 +2554,35 @@ function SettingsViewContent({
             />
             回答过程中允许提出补充搜索（最多两轮）
           </label>
+          {searchProvider === 'deepseek' ? (
+            <>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={searchSendQuestion}
+                  onChange={(event) => setSearchSendQuestion(event.target.checked)}
+                />
+                把当前问题原文发给搜索服务（≤128 字符，改善搜索意图）
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={searchFetchContent}
+                  onChange={(event) => setSearchFetchContent(event.target.checked)}
+                />
+                抓取前 2 条网页正文（第三方内容，仅本轮使用）
+              </label>
+            </>
+          ) : null}
         </div>
+        {searchProvider === 'deepseek' && searchFetchContent ? (
+          <p className="kr-muted">
+            开启后，搜索结果里的链接会发送给搜索服务换取正文，正文只用于本轮回答：
+            <strong>不写入资料目录、不随来源保存、不导出</strong>。
+            第三方网页可能包含错误信息、个人信息或受版权保护的内容，请勿据此整段复制或对外传播；
+            单页抓取失败会自动回退到摘要。
+          </p>
+        ) : null}
         <p className="kr-settings__group-label">
           搜索规划可发送的内容
           <HintMark text="仅在「按下方范围发送」策略下生效；默认仅本地关键词。" />
@@ -2784,6 +2852,11 @@ function SettingsViewContent({
         <SectionHeading title="语音播报" />
         <p className="kr-muted">配置朗读方式、语音服务与播放行为。</p>
         <SendingNotice text="使用外部语音服务时，待朗读文字会发送到所选服务。" />
+        <p className="kr-muted">
+          选择 DeepSeek 官方语音服务时：识别会自动判断语种（「识别语言」对它不生效）；
+          朗读只有 stella（女声）与 tide（男声）两个音色，且不支持调节语速；
+          支持时会在播报过程中边合成边播放，失败会自动回退到整段合成。
+        </p>
         <label>
           <span>播报方式</span>
           <select

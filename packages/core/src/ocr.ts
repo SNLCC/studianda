@@ -13,8 +13,8 @@ import {
   parsingConfigForUse,
   resolveVisionProfile
 } from './parsing-config.js';
-import { resolveVisualService } from './model-services.js';
-import { chatOutputOptions } from './model-protocol.js';
+import { resolveVisualService, resolveModelConnection } from './model-services.js';
+import { chatOutputOptions, thinkingOptions, isDeepSeekHost } from './model-protocol.js';
 import { appendErrorLog } from './error-log.js';
 import type { SecretStore } from './secrets.js';
 import type { Store } from './store.js';
@@ -290,6 +290,8 @@ async function recognizeVision(
     body: JSON.stringify({
       model,
       ...chatOutputOptions(baseUrl, maxTokens),
+      // 转录是过程性任务：DeepSeek 官方默认会思考，开着既慢又可能把 8192 花在思维链上。
+      ...thinkingOptions(baseUrl, false),
       messages: [
         {
           role: 'user',
@@ -312,8 +314,15 @@ async function recognizeVision(
   });
   if (!response.ok) throw new Error(`视觉模型返回 HTTP ${response.status}`);
   const payload = (await response.json()) as {
-    choices?: Array<{ message?: { content?: unknown } }>;
+    choices?: Array<{ message?: { content?: unknown }; finish_reason?: unknown }>;
   };
+  // finish_reason=length 表示这页的输出被截断了：不能把半页文字当完整原文入库，
+  // 否则后续的逐字核验与引用都会建立在残缺文本上。
+  if (payload.choices?.[0]?.finish_reason === 'length') {
+    throw new Error(
+      `第 ${page} 页视觉识别达到输出上限（文本不完整），未写入；请提高输出预留或改用其它识别方式。`
+    );
+  }
   const content = payload.choices?.[0]?.message?.content;
   const text = typeof content === 'string' ? content : '';
   if (!text.trim()) throw new Error('视觉模型没有返回可用文字');
@@ -335,6 +344,144 @@ async function singlePagePdf(
   const sheet = pdf.addPage([rendered.width, rendered.height]);
   sheet.drawImage(image, { x: 0, y: 0, width: rendered.width, height: rendered.height });
   return pdf.save();
+}
+
+/** DeepSeek OCR 的 HTTP 错误 → 可执行中文提示（不回显上游响应体）。 */
+function deepSeekOcrErrorMessage(status: number): string {
+  const known: Record<number, string> = {
+    400: 'DeepSeek OCR 不接受这次请求（表单/用途不合法，或文件无法处理）。',
+    402: 'DeepSeek 账号余额不足，请充值后重试。',
+    408: '上传过慢或识别超时；请重试，或改用其它识别方式。',
+    413: '文件过大（DeepSeek OCR 上限 100 MiB）。',
+    429: 'DeepSeek OCR 并发已满，请稍后重试。',
+    500: 'DeepSeek OCR 提交失败，请稍后重试。',
+    503: 'DeepSeek OCR 服务繁忙，请稍后重试。',
+    504: '上传与识别超过总时长（180 秒），请重试或改用其它识别方式。'
+  };
+  return known[status] ?? `DeepSeek OCR 返回 HTTP ${status}。`;
+}
+
+/** 去掉 DeepSeek OCR 输出里的 `<｜ref｜>`/`<｜box｜>` 标记。 */
+function stripDeepSeekMarks(text: string): string {
+  return text.replace(/<｜[^｜]*｜>/g, '');
+}
+
+/** 取第一个坐标框并换算成页面像素（官方坐标按页宽高归一化到 0–1000）。 */
+function deepSeekBoxToPixels(
+  raw: string | undefined,
+  image: { width: number; height: number }
+): [number, number, number, number] | null {
+  if (!raw) return null;
+  const match = /\[\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\]/.exec(
+    raw
+  );
+  if (!match) return null;
+  const numbers = match.slice(1, 5).map((value) => Number(value));
+  if (numbers.some((value) => !Number.isFinite(value))) return null;
+  const [x1, y1, x2, y2] = numbers as [number, number, number, number];
+  const clamp = (value: number, max: number): number => Math.min(Math.max(value, 0), max);
+  return [
+    clamp(Math.round((x1 * image.width) / 1000), image.width),
+    clamp(Math.round((y1 * image.height) / 1000), image.height),
+    clamp(Math.round((x2 * image.width) / 1000), image.width),
+    clamp(Math.round((y2 * image.height) / 1000), image.height)
+  ];
+}
+
+/**
+ * 解析 DeepSeek OCR 的单页输出。
+ *
+ * `rich_layout_recognition` 会在文字里带
+ * `<｜ref｜>…<｜/ref｜><｜box｜>[[x1,y1,x2,y2]]<｜/box｜>`；普通文本提取不带标记。
+ * 两种都返回纯文本，带坐标的额外生成行框（用于把引用定位到扫描页的具体行）。
+ */
+export function parseDeepSeekOcrPage(
+  raw: string,
+  image: { width: number; height: number }
+): { text: string; lines: OcrLine[] } {
+  const source = String(raw ?? '');
+  const segments: string[] = [];
+  const lines: OcrLine[] = [];
+  const pattern = /<｜ref｜>([\s\S]*?)<｜\/ref｜>\s*(?:<｜box｜>([\s\S]*?)<｜\/box｜>)?/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(source)) !== null) {
+    const text = stripDeepSeekMarks(match[1] ?? '').trim();
+    if (!text) continue;
+    segments.push(text);
+    const bbox = deepSeekBoxToPixels(match[2], image);
+    if (bbox) lines.push({ text, confidence: 1, bbox });
+  }
+  if (segments.length === 0) {
+    return { text: stripDeepSeekMarks(source).trim(), lines: [] };
+  }
+  return { text: segments.join('\n'), lines };
+}
+
+/** 从 OCR 响应里取第一页；识别失败或被截断时如实报错，绝不把不完整文本当原文。 */
+export function deepSeekOcrPageText(
+  payload: unknown,
+  page: number,
+  image: { width: number; height: number }
+): { text: string; lines: OcrLine[] } {
+  const record = (payload ?? {}) as {
+    error?: { message?: unknown };
+    pages?: Array<{ text?: unknown; finish_reason?: unknown }>;
+  };
+  if (record.error) {
+    const detail = typeof record.error.message === 'string' ? record.error.message : '未知错误';
+    throw new Error(`DeepSeek OCR 识别失败：${detail}`);
+  }
+  const first = record.pages?.[0];
+  if (!first) throw new Error('DeepSeek OCR 没有返回页面结果');
+  if (first.finish_reason === 'length') {
+    throw new Error(
+      `第 ${page} 页识别达到输出上限（文本不完整），未写入；请重试或改用其它识别方式。`
+    );
+  }
+  const parsed = parseDeepSeekOcrPage(typeof first.text === 'string' ? first.text : '', image);
+  if (!parsed.text.trim()) throw new Error('DeepSeek OCR 返回的页面文本为空');
+  return parsed;
+}
+
+/** DeepSeek OCR：单页 PDF → /v1/tools/ocr → 逐页文本（+ 坐标）。 */
+async function recognizeDeepSeekOcr(
+  store: Store,
+  secrets: SecretStore,
+  documentId: string,
+  page: number,
+  rendered: Awaited<ReturnType<typeof renderPdfPage>>,
+  config: ParsingConfigRecord
+): Promise<OcrPageResult> {
+  // 只用用户选中的那条连接：不回退到会话模型，避免“选了 A 却用了 B”的意外外发。
+  const profile = resolveModelConnection(store, secrets, config.connection_id);
+  if (!profile?.baseUrl || !isDeepSeekHost(profile.baseUrl)) {
+    throw new Error(
+      'DeepSeek OCR 只支持官方端点 https://api.deepseek.com；请在识别设置里选择对应的模型连接。'
+    );
+  }
+  const single = await singlePagePdf(rendered);
+  const form = new FormData();
+  // 字段顺序有要求：purpose 必须在 file 之前（官方文档明确）。
+  form.append('purpose', 'rich_layout_recognition');
+  form.append('file', new Blob([new Uint8Array(single)], { type: 'application/pdf' }), 'page.pdf');
+  const response = await fetch(`${profile.baseUrl.replace(/\/+$/, '')}/v1/tools/ocr`, {
+    method: 'POST',
+    headers: profile.apiKey ? { Authorization: `Bearer ${profile.apiKey}` } : {},
+    body: form,
+    // 官方总时长 180 秒（含上传与识别）。
+    signal: AbortSignal.timeout(180_000)
+  });
+  if (!response.ok) throw new Error(deepSeekOcrErrorMessage(response.status));
+  const payload = (await response.json()) as unknown;
+  const { text, lines } = deepSeekOcrPageText(payload, page, rendered);
+  store.cacheOcrPage(documentId, page, text, lines);
+  return {
+    page,
+    text,
+    lines,
+    image: { width: rendered.width, height: rendered.height },
+    engine: 'deepseek_ocr'
+  };
 }
 
 /** MinerU 单步请求超时（与既有 120 秒一致）。 */
@@ -711,6 +858,9 @@ export async function recognizePage(
   if (config.mode === 'vision') {
     return recognizeVision(store, secrets, documentId, page, rendered, config);
   }
+  if (config.mode === 'deepseek_ocr') {
+    return recognizeDeepSeekOcr(store, secrets, documentId, page, rendered, config);
+  }
   if (config.mode === 'mineru_agent') {
     return runMineruPage(store, 'mineru_agent', page, () =>
       recognizeMineruAgent(store, secrets, documentId, page, rendered, config.service_url)
@@ -730,7 +880,9 @@ export async function recognizePage(
     );
   }
   if (config.mode !== 'local') {
-    throw new Error('当前识别方式暂未接入；本机识别支持 local/vision/custom/mineru_online/mineru_agent。');
+    throw new Error(
+      '当前识别方式暂未接入；本机识别支持 local/vision/deepseek_ocr/custom/mineru_online/mineru_agent。'
+    );
   }
   let result: Awaited<ReturnType<Awaited<ReturnType<typeof ocrEngine>>['recognize']>>;
   try {
@@ -811,6 +963,7 @@ export interface RegionRecognition {
 export function parsingModeLabel(mode: string): string {
   if (mode === 'local') return '本机 Tesseract';
   if (mode === 'vision') return '视觉模型';
+  if (mode === 'deepseek_ocr') return 'DeepSeek OCR';
   if (mode === 'custom') return '自定义解析服务';
   if (mode === 'mineru_online') return 'MinerU 在线精准解析';
   if (mode === 'mineru_agent') return 'MinerU 轻量解析（Agent）';
@@ -974,6 +1127,8 @@ async function regionVisionText(target: RegionVisionTarget, crop: Buffer): Promi
     body: JSON.stringify({
       model: target.model,
       ...chatOutputOptions(baseUrl, regionMaxTokens),
+      // 区域识别同样是过程性任务：官方地址显式关闭思考，避免思维链占用输出预算。
+      ...thinkingOptions(baseUrl, false),
       messages: [
         {
           role: 'user',
@@ -993,8 +1148,12 @@ async function regionVisionText(target: RegionVisionTarget, crop: Buffer): Promi
   });
   if (!response.ok) throw new Error(`视觉模型返回 HTTP ${response.status}`);
   const payload = (await response.json()) as {
-    choices?: Array<{ message?: { content?: unknown } }>;
+    choices?: Array<{ message?: { content?: unknown }; finish_reason?: unknown }>;
   };
+  // 区域识别同样不接受被截断的文本：半句话会让引用与核验对不上。
+  if (payload.choices?.[0]?.finish_reason === 'length') {
+    throw new Error('区域识别达到输出上限（文本不完整），请缩小选区或改用其它识别方式。');
+  }
   const content = payload.choices?.[0]?.message?.content;
   return typeof content === 'string' ? content : '';
 }

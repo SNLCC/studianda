@@ -481,9 +481,20 @@ export interface ResolvedModelCapacity {
   contextWindow?: number;
   capacityMode?: 'auto' | 'manual';
   taskThinking?: boolean;
+  /** 思考强度；未设置时省略，由平台决定（DeepSeek 官方默认 high）。 */
+  reasoningEffort?: 'low' | 'high' | 'max';
+  /** 服务方内容安全审核；缺省视为开启，只有显式 false 才关闭。 */
+  safetyCheck?: boolean;
   source?: string;
   /** 官方登记的大输出模型：输出预留至少抬到 16384。 */
   outputReserve?: number;
+}
+
+/** 思考强度只认官方枚举，坏值当作没设置。 */
+function validReasoningEffort(
+  value: unknown
+): 'low' | 'high' | 'max' | undefined {
+  return value === 'low' || value === 'high' || value === 'max' ? value : undefined;
 }
 
 /**
@@ -534,10 +545,13 @@ export function resolveModelCapacity(
       }
     }
   }
+  const effort = validReasoningEffort(model.reasoning_effort);
   return {
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(capacityMode ? { capacityMode } : {}),
     ...(typeof model.task_thinking === 'boolean' ? { taskThinking: model.task_thinking } : {}),
+    ...(effort ? { reasoningEffort: effort } : {}),
+    ...(typeof model.safety_check === 'boolean' ? { safetyCheck: model.safety_check } : {}),
     ...(source ? { source } : {}),
     ...(outputReserve !== undefined ? { outputReserve } : {})
   };

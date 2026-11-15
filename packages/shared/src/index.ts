@@ -747,7 +747,7 @@ export interface TranslationServiceSummary {
 }
 
 export interface ParsingConfigRecord {
-  mode: 'local' | 'vision' | 'mineru_online' | 'mineru_agent' | 'custom';
+  mode: 'local' | 'vision' | 'mineru_online' | 'mineru_agent' | 'deepseek_ocr' | 'custom';
   connection_id: string;
   model: string;
   service_url: string;
@@ -951,6 +951,11 @@ export interface SpeechConfigRecord {
   voice: string;
   has_asr_key: boolean;
   has_tts_key: boolean;
+  /**
+   * 当前语音服务是否支持「边合成边播」（DeepSeek 官方 WebSocket）。
+   * 只读、由 core 按连接地址计算，不落库。
+   */
+  tts_streaming: boolean;
 }
 
 export interface SpeechTranscription {
@@ -992,12 +997,34 @@ export interface SearchConfigRecord {
   allow_current_page: boolean;
   allow_surrounding: boolean;
   allow_title: boolean;
+  /**
+   * 是否把当前问题原文发给搜索服务（DeepSeek `ori_question`，≤128 字符）。
+   *
+   * 与「允许用于搜索规划」是两件事：后者发给会话模型，这个发给搜索引擎。
+   * 默认关闭——问题原文可能含个人信息或未公开的研究思路。
+   */
+  send_question: boolean;
+  /**
+   * 是否抓取网页正文（DeepSeek Fetch 接口，仅前几条）。
+   *
+   * 默认关闭：正文是第三方内容，可能含个人信息、版权材料或提示注入，
+   * 只在用户明确开启时抓取，且只用于**本轮**模型上下文，不写入资料目录。
+   */
+  fetch_content: boolean;
 }
 
 export interface SearchResult {
   title: string;
   url: string;
+  /** 短摘要（约 100–200 字）：给界面展示，也会随来源一起落库。 */
   snippet: string;
+  /** 长摘要（约 600–800 字）：只给模型阅读，不展示、不落库。 */
+  summary?: string;
+  /**
+   * 抓取到的网页正文（已截断）：**仅本次请求**用于模型上下文，
+   * 不写入会话/来源/笔记，界面上也不展示全文。
+   */
+  content?: string;
   retrieved_at: string;
   kind: 'web';
   tier?: string;
@@ -1235,10 +1262,23 @@ export interface ModelServiceModel {
   capacity_mode?: 'auto' | 'manual';
   /**
    * 用户显式要求「任务型调用关闭深度思考」。
-   * 说明：仅对支持思考开关的平台有意义；当前版本只保存设置并在界面展示，
-   * **不会**向平台发送猜测出来的私有参数（默认行为不变）。
+   * 说明：DeepSeek 官方地址上任务型调用始终关闭思考（该开关不影响官方地址的默认行为）；
+   * 其它平台只有勾选后才会收到 `thinking: { type: 'disabled' }`。
    */
   task_thinking?: boolean;
+  /**
+   * 思考强度（low / high / max）。
+   * 只对支持该参数的平台发送（当前为 DeepSeek 官方地址）；未设置时沿用平台默认（high）。
+   */
+  reasoning_effort?: 'low' | 'high' | 'max';
+  /**
+   * 内容安全审核增强（DeepSeek `safety_check: high`）。
+   *
+   * 关闭时仍有平台默认的低档检查；开启只在此基础上增加审核层。
+   * **默认开启**（缺省即视为 true）；只有用户显式关闭才不发。只对 DeepSeek 官方地址生效，
+   * 且只用于面向用户的回答请求（内部批次/审计/压缩/翻译不发，避免拖慢与误拒原文）。
+   */
+  safety_check?: boolean;
   /** 容量来源说明（平台元数据 / 官方文档快照 / 手动指定）。 */
   capacity_source?: string;
   /**
@@ -1432,11 +1472,24 @@ export interface DocumentChatSessionRecord {
   transcriptVersion?: number;
 }
 
+/**
+ * 失败的助手轮次在界面上的固定前缀：`回答未完成：<错误信息>`。
+ *
+ * UI 写入、core 识别共用这一个常量：core 见到该前缀就认定这一轮没有产生内容，
+ * 换成中性说明再作为历史回传，绝不把错误文案当成模型上一轮的发言。
+ */
+export const FAILED_ANSWER_PREFIX = '回答未完成：';
+
 /** 单轮回答的模型 token 用量（供应商不返回时按字符估算，estimated=true）。 */
 export interface ChatUsage {
   input_tokens?: number;
   output_tokens?: number;
   total_tokens?: number;
+  /**
+   * 输入中命中上下文缓存（前缀缓存）的 token 数，**已包含在 `input_tokens` 里**。
+   * 只用于展示“重复的长前缀有没有被复用”；供应商不返回缓存字段时不设。
+   */
+  cached_tokens?: number;
   /** 本轮实际发生的模型调用次数（阅读链路可能多次）。 */
   calls?: number;
   /** true = 至少有一次调用没有拿到供应商 usage，按字符估算。 */

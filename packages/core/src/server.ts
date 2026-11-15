@@ -89,6 +89,8 @@ import {
   listSystemVoices,
   mimoVoiceList,
   saveSpeechConfig,
+  speechStreamingAvailable,
+  streamSpeech,
   synthesizeSpeech,
   systemSpeechStatus,
   transcribeAudio,
@@ -1669,6 +1671,34 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       return reply.header('content-type', result.contentType).send(Buffer.from(result.bytes));
     } catch (error) {
       return badRequest(reply, error instanceof Error ? error.message : '语音播报失败');
+    }
+  });
+
+  // 流式朗读：只对 DeepSeek 官方连接开放；以裸 PCM 帧持续返回，供界面边收边播。
+  // 先确认能力再写响应头：不支持时仍按普通 JSON 错误返回，客户端可回退到整段合成。
+  app.post(`${API_PREFIX}/speech/stream`, async (request, reply) => {
+    const body = (request.body ?? {}) as { text?: unknown };
+    if (typeof body.text !== 'string' || !body.text.trim()) {
+      return badRequest(reply, '需要 text');
+    }
+    if (!speechStreamingAvailable(options.store, options.secrets)) {
+      return badRequest(reply, '当前语音服务不支持流式朗读');
+    }
+    reply.hijack();
+    const raw = reply.raw;
+    raw.writeHead(200, {
+      'content-type': 'audio/L16;rate=24000;channels=1',
+      'cache-control': 'no-store',
+      'x-accel-buffering': 'no'
+    });
+    try {
+      await streamSpeech(options.store, options.secrets, body.text, (chunk) => {
+        if (!raw.writableEnded) raw.write(Buffer.from(chunk));
+      });
+      raw.end();
+    } catch {
+      // 已经开始发送音频：只能中断连接，让客户端知道这一轮不完整。
+      if (!raw.writableEnded) raw.destroy();
     }
   });
 
@@ -4513,8 +4543,9 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         },
         controller.signal,
         (done, total) => send('progress', { done, total }),
-        (text) => send('draft', { text }),
-        () => send('draft_reset', {}),
+        // 回答已改为整段返回：草稿通道停用，两个形参位保留占位。
+        undefined,
+        undefined,
         (text) => send('stage', { text }),
         (claims) => send('audit', { claims })
       );

@@ -41,11 +41,8 @@ export function responseText(payload: unknown): string {
       .map((part) => (typeof part.text === 'string' ? part.text : ''))
       .join('');
   }
-  if (row.finish_reason === 'length') {
-    throw new ModelResponseFormatError(
-      '模型达到输出上限，正文或结构化结果可能被截断；请提高输出预留，或使用非推理模式。'
-    );
-  }
+  const finishMessage = finishReasonMessage(row.finish_reason);
+  if (finishMessage) throw new ModelResponseFormatError(finishMessage);
   if (message.refusal) {
     throw new ModelResponseFormatError('模型拒绝处理本次请求。');
   }
@@ -83,6 +80,22 @@ export function networkErrorMessage(error: unknown): string | null {
 }
 
 /**
+ * 是否 DeepSeek 官方接口。
+ *
+ * 只有官方端点支持 `thinking` / `reasoning_effort` 这两个字段；其它 OpenAI 兼容服务
+ * 字段不统一，猜着发会把无关服务打挂，所以所有思考参数都只对官方地址发。
+ */
+export function isDeepSeekHost(baseUrl: string): boolean {
+  let host = '';
+  try {
+    host = new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    host = '';
+  }
+  return host === 'api.deepseek.com';
+}
+
+/**
  * 是否 MiniMax 官方接口（国内站/国际站）。
  *
  * MiniMax 的 M3.1 Flash 强制开启思考且不可关闭，思考 token 也计入 `max_tokens`；
@@ -98,25 +111,69 @@ export function isMiniMaxHost(baseUrl: string): boolean {
   return host === 'api.minimax.cn' || host === 'api.minimaxi.com' || host === 'api.minimax.io';
 }
 
+/** DeepSeek 官方地址上的思考开关；其它平台返回空对象（见 isDeepSeekHost 的说明）。 */
+export function thinkingOptions(baseUrl: string, enabled: boolean): Record<string, unknown> {
+  return isDeepSeekHost(baseUrl)
+    ? { thinking: { type: enabled ? 'enabled' : 'disabled' } }
+    : {};
+}
+
+/** 思考强度：官方支持 none/low/high/max，这里只暴露一档「省时」到「最强」的集合。 */
+export type ReasoningEffort = 'low' | 'high' | 'max';
+
+/**
+ * DeepSeek 官方的思考强度参数。
+ *
+ * 不配置时不发该字段（沿用平台默认 high）；非官方地址不发（见 isDeepSeekHost）。
+ * 注意：`thinking` 对象优先于 `reasoning_effort`，关闭思考时强度没有意义，调用方应先判断。
+ * 字段语义以官方文档为准（本模块按公开协议独立实现，不复制其示例代码）：
+ * https://api-docs.deepseek.com/zh-cn/guides/thinking_mode
+ */
+export function reasoningEffortOptions(
+  baseUrl: string,
+  effort?: ReasoningEffort
+): Record<string, unknown> {
+  if (!effort || !isDeepSeekHost(baseUrl)) return {};
+  return { reasoning_effort: effort };
+}
+
 /** MiniMax 思考预留：M3.1 Flash 默认 effort=max，给正文留出足够空间。 */
 export const MINIMAX_THINKING_RESERVE = 8192;
 
 /**
+ * DeepSeek 思考预留：思维链 token 计入 `completion_tokens`（usage 里有
+ * `completion_tokens_details.reasoning_tokens`），而 `max_tokens` 限制的是 completion
+ * 生成量——所以开着思考时，原先只按正文长度给的预算会被思维链吃掉，出现「只返回推理」
+ * 或 finish_reason=length。开启思考的请求至少多留这么多空间。
+ */
+export const DEEPSEEK_THINKING_RESERVE = 4096;
+
+/**
  * 单个模型请求里的输出上限/思考参数。
  *
- * 只对 MiniMax 做协议适配：增加思考预留，并要求把思考拆到 `reasoning_content`，
- * 避免 `<think>` 标签混进正文。其它平台保持原来的 `max_tokens` 行为。
+ * - MiniMax：增加思考预留，并要求把思考拆到 `reasoning_content`，避免 `<think>` 标签混进正文；
+ * - DeepSeek 官方且开启思考：增加思维链预留（MiniMax 同因，方向一致）；
+ * - 其它情况（含 DeepSeek 非思考模式）：原样使用 `max_tokens`，与改动前一致。
+ *
+ * `thinking` 为调用方算好的「本次请求确实会思考」；不传时按不会思考处理，
+ * 保持 OCR/翻译/纠错这些过程性链路的请求体不变。
  */
 export function chatOutputOptions(
   baseUrl: string,
-  maxTokens: number
+  maxTokens: number,
+  thinking = false
 ): Record<string, unknown> {
-  if (!isMiniMaxHost(baseUrl)) return { max_tokens: maxTokens };
   const budget = Math.max(1, Math.trunc(maxTokens));
-  return {
-    max_tokens: Math.min(budget + MINIMAX_THINKING_RESERVE, 131_072),
-    reasoning_split: true
-  };
+  if (isMiniMaxHost(baseUrl)) {
+    return {
+      max_tokens: Math.min(budget + MINIMAX_THINKING_RESERVE, 131_072),
+      reasoning_split: true
+    };
+  }
+  if (thinking && isDeepSeekHost(baseUrl)) {
+    return { max_tokens: Math.min(budget + DEEPSEEK_THINKING_RESERVE, 131_072) };
+  }
+  return { max_tokens: budget };
 }
 
 /**
@@ -132,13 +189,7 @@ export function taskThinkingOptions(
   task: boolean,
   taskThinking: boolean
 ): Record<string, unknown> {
-  let host = '';
-  try {
-    host = new URL(baseUrl).hostname.toLowerCase();
-  } catch {
-    host = '';
-  }
-  if (host === 'api.deepseek.com') {
+  if (isDeepSeekHost(baseUrl)) {
     return { thinking: { type: task ? 'disabled' : 'enabled' } };
   }
   if (isMiniMaxHost(baseUrl)) return {};
@@ -146,4 +197,43 @@ export function taskThinkingOptions(
     return { thinking: { type: 'disabled' } };
   }
   return {};
+}
+
+/**
+ * 内容安全审核增强（DeepSeek `safety_check: high`）。
+ *
+ * 不传/关闭时仍有平台默认的低档检查；`high` 是在其之上的增强层。
+ * 只对官方地址发送；其它平台没有这个字段，猜着发会打挂请求。
+ * 增强层会增加审核 token 与收尾延迟，且可能误拒学术材料——
+ * 因此只用在面向用户的回答请求里，内部过程性调用不发。
+ */
+export function safetyCheckOptions(
+  baseUrl: string,
+  enabled: boolean
+): Record<string, unknown> {
+  return enabled && isDeepSeekHost(baseUrl) ? { safety_check: { level: 'high' } } : {};
+}
+
+/**
+ * finish_reason → 可执行中文提示；`stop` / `tool_calls` 等正常结束返回 null。
+ *
+ * 官方定义里除了 `length`，还有三个会让正文为空或不完整、但原因完全不同的结束状态：
+ * `insufficient_system_resource`（服务端推理资源不足，可重试）、`content_filter`（内容
+ * 安全过滤）与 `aborted`。不区分会把它们都显示成"模型没有返回可显示的正文"。
+ * 取值与含义见官方 Chat Completions 参考：
+ * https://api-docs.deepseek.com/zh-cn/api/create-chat-completion
+ */
+export function finishReasonMessage(reason: unknown): string | null {
+  switch (reason) {
+    case 'length':
+      return '模型达到输出上限，正文或结构化结果可能被截断；请提高输出预留，或使用非推理模式。';
+    case 'insufficient_system_resource':
+      return '模型服务端推理资源不足，本次生成被中断（与你的配置无关）；请稍后重试。';
+    case 'content_filter':
+      return '模型服务因内容安全策略过滤了本次输出；请调整问题或材料后重试。';
+    case 'aborted':
+      return '模型生成被中断（服务端中止）；请重试。';
+    default:
+      return null;
+  }
 }

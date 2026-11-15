@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cost } from '../src/reading.js';
 import { messages, PER_MESSAGE_COST } from '../src/request-budget.js';
 import {
+  FAILED_ANSWER_HISTORY,
+  HISTORY_MAX_CHARS,
+  HISTORY_TRUNCATED_MARK,
   callChatModel,
   historyCitationRule,
   historyContextRules,
@@ -55,7 +58,7 @@ describe('prepareHistory 过滤与格式', () => {
     ]);
   });
 
-  it('单条内容截到 4000 字；非对象/非法输入忽略', () => {
+  it('单条内容截到 4000 字并留截断标记；非对象/非法输入忽略', () => {
     const prepared = prepareHistory([
       null,
       '字符串',
@@ -64,9 +67,27 @@ describe('prepareHistory 过滤与格式', () => {
     ]);
     expect(prepared.prior).toHaveLength(1);
     expect(prepared.prior[0]!.role).toBe('user');
-    expect(prepared.prior[0]!.content).toHaveLength(4000);
+    expect(prepared.prior[0]!.content).toBe(
+      `${'长'.repeat(HISTORY_MAX_CHARS)}${HISTORY_TRUNCATED_MARK}`
+    );
     expect(prepareHistory(undefined).prior).toEqual([]);
     expect(prepareHistory('not-array').prior).toEqual([]);
+  });
+
+  it('失败占位不当作模型发言：换成中性替身，原始错误文案不进历史', () => {
+    const prepared = prepareHistory([
+      { question: '上一问', answer: '回答未完成：模型服务返回 HTTP 429，请稍后重试' },
+      { role: 'assistant', content: '回答未完成：连接超时' }
+    ]);
+    expect(prepared.prior).toEqual([
+      { role: 'user', content: '上一问' },
+      { role: 'assistant', content: FAILED_ANSWER_HISTORY },
+      { role: 'assistant', content: FAILED_ANSWER_HISTORY }
+    ]);
+    expect(prepared.prior.map((row) => row.content).join('\n')).not.toContain('HTTP 429');
+    // 用户提问即使长得像失败文案也不改写（只有 assistant 才会被写成那样）。
+    const asked = prepareHistory([{ role: 'user', content: '回答未完成：是什么意思？' }]);
+    expect(asked.prior).toEqual([{ role: 'user', content: '回答未完成：是什么意思？' }]);
   });
 
   it('最多保留最近 20 条；被条数上限裁掉的部分按轮计入 dropped', () => {

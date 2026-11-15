@@ -4,6 +4,7 @@ import type {
   ParsingConfigUpdate
 } from '@studianda/shared';
 import { resolveModelConnection, resolveModelService } from './model-services.js';
+import { isDeepSeekHost } from './model-protocol.js';
 import { isOcrLanguageCode, OCR_LANGUAGE_CATALOG } from './ocr-languages.js';
 import type { SecretStore } from './secrets.js';
 import type { Store } from './store.js';
@@ -16,6 +17,7 @@ const MODES = new Set([
   'vision',
   'mineru_online',
   'mineru_agent',
+  'deepseek_ocr',
   'custom'
 ]);
 const ONLINE_MODELS = new Set(['vlm', 'pipeline']);
@@ -104,6 +106,17 @@ export function saveParsingConfig(
   let serviceUrl = (input.service_url ?? current.service_url).trim().replace(/\/+$/, '');
   if (mode === 'mineru_online') serviceUrl = MINERU_ONLINE_BASE;
   if (mode === 'mineru_agent') serviceUrl = MINERU_AGENT_BASE;
+  // DeepSeek OCR 走官方固定端点 + 模型连接的地址/密钥，不需要单独的解析服务地址。
+  if (mode === 'deepseek_ocr') {
+    serviceUrl = '';
+    const connectionId = (input.connection_id ?? current.connection_id).trim();
+    if (!connectionId) {
+      throw new ParsingConfigError(
+        400,
+        'DeepSeek OCR 需要在「识别方式」里选择一个 DeepSeek 官方连接（复用该连接的地址与密钥）。'
+      );
+    }
+  }
   if (mode === 'custom' && !serviceUrl) {
     throw new ParsingConfigError(
       400,
@@ -127,8 +140,9 @@ export function saveParsingConfig(
     secrets.clear('parsing.service_key');
   } else if (key) {
     secrets.set('parsing.service_key', key);
-  } else if (current.service_url !== serviceUrl) {
-    // 地址变了且没有重新提供密钥：旧密钥不再适用。
+  } else if (current.service_url !== serviceUrl && mode !== 'deepseek_ocr') {
+    // 地址变了且没有重新提供密钥：旧密钥不再适用。切到 DeepSeek OCR 时不清，
+    // 因为它用的是模型连接的密钥，清掉会误伤用户已保存的 MinerU Token。
     secrets.clear('parsing.service_key');
   }
 
@@ -224,6 +238,25 @@ export function parsingConfigForUse(
     const profile = resolveVisionProfile(store, secrets, config);
     if (!profile?.baseUrl) {
       throw new ParsingConfigError(400, 'vision 模式需要先配置模型服务地址。');
+    }
+    if (!config.allow_remote && !isLoopback(profile.baseUrl)) {
+      throw new ParsingConfigError(403, '请先在识别设置中允许向所选远程服务发送页面图像。');
+    }
+    return config;
+  }
+  if (config.mode === 'deepseek_ocr') {
+    if (!config.connection_id) {
+      throw new ParsingConfigError(
+        400,
+        'DeepSeek OCR 需要在识别设置里选择一个 DeepSeek 官方连接。'
+      );
+    }
+    const profile = resolveModelConnection(store, secrets, config.connection_id);
+    if (!profile?.baseUrl || !isDeepSeekHost(profile.baseUrl)) {
+      throw new ParsingConfigError(
+        400,
+        'DeepSeek OCR 只支持官方端点 https://api.deepseek.com；请在「模型服务」里添加 DeepSeek 官方连接并在识别设置中选择它。'
+      );
     }
     if (!config.allow_remote && !isLoopback(profile.baseUrl)) {
       throw new ParsingConfigError(403, '请先在识别设置中允许向所选远程服务发送页面图像。');

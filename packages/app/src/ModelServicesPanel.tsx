@@ -888,14 +888,49 @@ export function ModelServicesPanel({
                           />
                           任务型调用关闭深度思考
                         </label>
+                        <label className="kr-model-added__thinking">
+                          思考强度
+                          <select
+                            value={model.reasoning_effort ?? ''}
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              updateModel(model.id, {
+                                reasoning_effort:
+                                  value === 'low' || value === 'high' || value === 'max'
+                                    ? value
+                                    : undefined
+                              });
+                            }}
+                          >
+                            <option value="">平台默认</option>
+                            <option value="low">低（更快、更省）</option>
+                            <option value="high">高（官方默认）</option>
+                            <option value="max">最高（最慢）</option>
+                          </select>
+                        </label>
+                        <label className="kr-model-added__thinking">
+                          <input
+                            type="checkbox"
+                            checked={model.safety_check !== false}
+                            onChange={(event) =>
+                              updateModel(model.id, {
+                                safety_check: event.target.checked
+                              })
+                            }
+                          />
+                          审核增强（仅 DeepSeek 生效）
+                        </label>
+                        <p className="kr-muted kr-model-added__capacity-hint">
+                          关闭时仍会进行平台默认检查；开启只在此基础上增加一层审核。
+                        </p>
                         <p className="kr-muted kr-model-added__capacity-hint">
                           来源：
                           {model.capacity_source ||
                             (model.capacity_mode === 'manual'
                               ? CAPACITY_MANUAL_SOURCE
                               : '平台未提供容量，使用全局设置（可手动指定）')}
-                          。「任务型调用关闭深度思考」仅对支持思考开关的平台生效；本版本只保存设置并在此展示，
-                          不会向平台发送猜测的私有参数。
+                          。思考开关与思考强度只向支持对应参数的平台发送（当前为 DeepSeek 官方地址）；
+                          其它平台会保存设置但不发送，避免字段不兼容把请求打挂。
                         </p>
                         <p className="kr-muted kr-model-added__capacity-hint">
                           最大输出：

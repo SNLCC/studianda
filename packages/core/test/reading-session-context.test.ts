@@ -10,6 +10,7 @@ import {
   READING_CONTEXT_KEEP_PAIRS
 } from '../src/reading-session-context.js';
 import type { ReadingChatConfig } from '../src/reading-chat.js';
+import { FAILED_ANSWER_HISTORY } from '../src/reading-chat.js';
 import { Store } from '../src/store.js';
 
 /**
@@ -86,6 +87,45 @@ describe('阅读会话上下文压缩', () => {
     expect(
       readDocumentChatSessions(store, documentId).find((s) => s.id === sessionId)?.contextSummary
     ).toBeUndefined();
+  });
+
+  it('失败占位不当作模型发言：中性替身进历史，重答后以真实回答为准', async () => {
+    const sessionId = 'failed-turn';
+    store.addMessage({ documentId, role: 'user', content: '第一问', metadata: { sessionId } });
+    store.addMessage({
+      documentId,
+      role: 'assistant',
+      content: '回答未完成：模型服务返回 HTTP 429，请稍后重试',
+      metadata: { sessionId }
+    });
+    store.addMessage({ documentId, role: 'user', content: '第二问', metadata: { sessionId } });
+    store.addMessage({
+      documentId,
+      role: 'assistant',
+      content: '回答未完成：连接超时',
+      metadata: { sessionId }
+    });
+    // 同一轮先失败、后重新生成成功：真实回答应替换掉替身。
+    store.addMessage({
+      documentId,
+      role: 'assistant',
+      content: '重答成功的真实回答',
+      metadata: { sessionId }
+    });
+    writeDocumentChatSessions(store, documentId, [
+      { id: sessionId, title: '失败轮次', created: 'x', updated: 'x' }
+    ]);
+    const prepared = await prepareReadingSessionContext({
+      store,
+      config,
+      documentId,
+      sessionId
+    });
+    expect(prepared.history).toEqual([
+      { question: '第一问', answer: FAILED_ANSWER_HISTORY },
+      { question: '第二问', answer: '重答成功的真实回答' }
+    ]);
+    expect(JSON.stringify(prepared.history)).not.toContain('HTTP 429');
   });
 
   it('超预算：压缩较早轮次，摘要写回会话记录，后续不重复压缩', async () => {

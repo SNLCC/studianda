@@ -603,6 +603,11 @@ export interface ApiClient {
     clear_tts?: boolean;
   }): Promise<SpeechConfigRecord>;
   speak(text: string): Promise<Blob>;
+  /**
+   * 流式朗读：音频以裸 PCM 帧（24 kHz、16 位、单声道）持续回调。
+   * 只在该语音服务支持流式合成时可用；失败时调用方应回退到 `speak`。
+   */
+  speakStream(text: string, onChunk: (chunk: Uint8Array) => void): Promise<void>;
   transcribeAudio(audio: Blob, filename?: string): Promise<SpeechTranscription>;
   /** 语音转写纠错：只校正转写（同音字/断句/术语），失败时保留原文并 needs_review。 */
   correctSpeech(input: {
@@ -766,8 +771,6 @@ export interface ApiClient {
     options?: {
       signal?: AbortSignal;
       onProgress?(done: number, total: number): void;
-      onDraft?(text: string): void;
-      onDraftReset?(): void;
       onStage?(text: string): void;
       onAudit?(claims: unknown[]): void;
     }
@@ -1807,6 +1810,31 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       }
       return response.blob();
     },
+    async speakStream(text, onChunk) {
+      const response = await fetch(`${base}/speech/stream`, {
+        method: 'POST',
+        headers: { ...headers, 'content-type': 'application/json' },
+        body: JSON.stringify({ text })
+      });
+      if (!response.ok || !response.body) {
+        const payload = (await response.json().catch(() => null)) as
+          | { message?: string; error?: string }
+          | null;
+        throw new Error(
+          payload?.message ?? payload?.error ?? `流式朗读失败：HTTP ${response.status}`
+        );
+      }
+      const reader = response.body.getReader();
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value && value.byteLength > 0) onChunk(value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    },
     async transcribeAudio(audio, filename = 'speech.webm') {
       const form = new FormData();
       form.append('file', audio, filename);
@@ -2190,11 +2218,6 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
           if (event === 'progress') {
             const progress = JSON.parse(dataLine) as { done: number; total: number };
             options.onProgress?.(progress.done, progress.total);
-          } else if (event === 'draft') {
-            const draft = JSON.parse(dataLine) as { text?: string };
-            if (draft.text) options.onDraft?.(draft.text);
-          } else if (event === 'draft_reset') {
-            options.onDraftReset?.();
           } else if (event === 'stage') {
             const stage = JSON.parse(dataLine) as { text?: string };
             if (stage.text) options.onStage?.(stage.text);

@@ -6,8 +6,10 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import { SecretStore } from '../src/secrets.js';
 import { saveModelServices } from '../src/model-services.js';
 import {
+  deepseekVoiceList,
   getSpeechConfig,
   saveSpeechConfig,
+  speechBillableChars,
   synthesizeSpeech,
   transcribeAudio
 } from '../src/speech.js';
@@ -247,5 +249,92 @@ describe('speech', () => {
       voice: ''
     });
     await expect(synthesizeSpeech(store, secrets, 'hello')).rejects.toThrow('必须指定音色 ID');
+  });
+});
+
+describe('DeepSeek 语音（ASR / TTS / 流式可用性）', () => {
+  const deepseek = 'https://api.deepseek.com';
+
+  function useDeepseekSpeech(voice = 'stella'): void {
+    saveSpeechConfig(store, secrets, {
+      asr_mode: 'custom',
+      asr_url: deepseek,
+      asr_model: 'deepseek-asr',
+      asr_key: 'k',
+      tts_mode: 'custom',
+      tts_url: deepseek,
+      tts_model: 'deepseek-tts',
+      tts_key: 'k',
+      voice
+    });
+  }
+
+  it('识别：multipart 打到 /v1/tools/asr，返回文本', async () => {
+    useDeepseekSpeech();
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (input: unknown, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(JSON.stringify({ text: '  你好  ', duration_ms: 1200 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      });
+    });
+    try {
+      const result = await transcribeAudio(
+        store,
+        secrets,
+        new Uint8Array([1, 2, 3]),
+        'a.wav',
+        'audio/wav'
+      );
+      expect(result.text).toBe('你好');
+      expect(result.source).toBe('deepseek');
+      expect(calls[0]!.url).toBe('https://api.deepseek.com/v1/tools/asr');
+      expect(calls[0]!.init!.method).toBe('POST');
+      expect(calls[0]!.init!.body).toBeInstanceOf(FormData);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('合成：voice_id/format/filter_markdown 正确，超长按计费字符截断', async () => {
+    useDeepseekSpeech('tide');
+    const bodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal('fetch', async (_input: unknown, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(new Uint8Array([82, 73, 70, 70]), {
+        status: 200,
+        headers: { 'content-type': 'audio/wav' }
+      });
+    });
+    try {
+      await synthesizeSpeech(store, secrets, '正'.repeat(6000));
+      expect(bodies[0]).toMatchObject({
+        voice_id: 'tide',
+        format: 'wav',
+        filter_markdown: true
+      });
+      // 汉字算 2 个计费字符：10,000 上限 → 最多 5,000 个汉字。
+      expect((bodies[0]!.text as string).length).toBe(5000);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('只接受两个预置音色', async () => {
+    useDeepseekSpeech('alloy');
+    await expect(synthesizeSpeech(store, secrets, 'hello')).rejects.toThrow('stella');
+  });
+
+  it('计费字符按官方口径计算；流式可用性只对官方连接为真', () => {
+    expect(speechBillableChars('中文abc')).toBe(7);
+    useDeepseekSpeech();
+    expect(getSpeechConfig(store, secrets).tts_streaming).toBe(true);
+    saveSpeechConfig(store, secrets, {
+      tts_mode: 'custom',
+      tts_url: 'https://api.example.com/v1'
+    });
+    expect(getSpeechConfig(store, secrets).tts_streaming).toBe(false);
+    expect(deepseekVoiceList().voices.map((voice) => voice.id)).toEqual(['stella', 'tide']);
   });
 });

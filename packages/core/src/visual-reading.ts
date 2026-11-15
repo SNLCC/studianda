@@ -2,7 +2,7 @@ import type { SecretStore } from './secrets.js';
 import type { Store } from './store.js';
 import { getParsingConfig, resolveVisionProfile } from './parsing-config.js';
 import { resolveVisualService } from './model-services.js';
-import { chatOutputOptions } from './model-protocol.js';
+import { chatOutputOptions, thinkingOptions } from './model-protocol.js';
 import { requestMaxTokensFor, TASK_MAX_TOKENS } from './output-limit.js';
 import { renderPdfPage } from './ocr.js';
 
@@ -261,6 +261,8 @@ async function readVisualPage(
           model: profile.model,
           temperature: 0,
           ...chatOutputOptions(profile.baseUrl, profile.maxTokens),
+          // 只要一段 JSON 的派生解读：官方地址显式关闭思考，2048 的预算经不起思维链消耗。
+          ...thinkingOptions(profile.baseUrl, false),
           messages: [
             { role: 'system', content: VISUAL_INSTRUCTION },
             {

@@ -18,6 +18,13 @@ describe('provider catalog', () => {
     }
   });
 
+  it('DeepSeek 预设使用官方现役模型名', () => {
+    // 官方 Chat Completions 的 model 枚举只认这两个；写成已下线的
+    // deepseek-chat / deepseek-reasoner 会让新用户选中后直接 404。
+    const deepseek = listProviders().find((provider) => provider.id === 'deepseek');
+    expect(deepseek?.models).toEqual(['deepseek-flash', 'deepseek-v4-pro']);
+  });
+
   it('returns a copy so callers cannot mutate the catalog', () => {
     const first = listProviders();
     first[0]!.models.push('mutated');
