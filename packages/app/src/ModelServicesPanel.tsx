@@ -36,7 +36,9 @@ const KIND_LABELS: Record<ModelServiceKind, string> = {
   asr: '语音识别',
   tts: '语音生成',
   vision: '视觉读页',
-  omni: '全模态'
+  omni: '全模态',
+  analysis: '分析模型',
+  writing: '写作模型'
 };
 
 const DEFAULT_CAPABILITIES: Record<ModelServiceKind, string[]> = {
@@ -47,7 +49,9 @@ const DEFAULT_CAPABILITIES: Record<ModelServiceKind, string[]> = {
   asr: ['asr'],
   tts: ['tts'],
   vision: ['vision'],
-  omni: ['omni']
+  omni: ['omni'],
+  analysis: ['chat'],
+  writing: ['chat']
 };
 
 /** 手动上下文窗口的允许范围。 */

@@ -168,9 +168,9 @@ describe('输出预算与结束原因', () => {
     });
     expect(chatOutputOptions(DEEPSEEK, 1200, false)).toEqual({ max_tokens: 1200 });
     expect(chatOutputOptions(LOCAL, 1200, true)).toEqual({ max_tokens: 1200 });
-    // MiniMax 恒为开启思考，预留规则保持不变。
+    // MiniMax 恒为开启思考，预留规则保持不变；但输出上限用官方推荐的 max_completion_tokens。
     expect(chatOutputOptions('https://api.minimax.cn/v1', 1200, false)).toMatchObject({
-      max_tokens: 1200 + MINIMAX_THINKING_RESERVE
+      max_completion_tokens: 1200 + MINIMAX_THINKING_RESERVE
     });
   });
 

@@ -1224,6 +1224,72 @@ export interface DocumentChapters {
   source?: 'navigation' | 'structure';
 }
 
+/** 全书摘要的一个分块：通常是章；没有目录时按固定页区间切。 */
+export interface BookSummaryBlock {
+  index: number;
+  title: string;
+  page: number;
+  end_page: number;
+  pages: number;
+  /** 是否已有与当前文档内容版本一致的缓存摘要。 */
+  cached: boolean;
+  /** 已缓存的摘要（仅用于展示，不是逐字原文）。 */
+  summary?: string;
+}
+
+/** 生成全书摘要前的成本估算（按字符口径，仅用于确认，不是账单）。 */
+export interface BookSummaryEstimate {
+  /** 需要新生成的分块数（已缓存的分块不重算）。 */
+  pending_blocks: number;
+  /** 预计模型调用次数：分块摘要 + 合并层。 */
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  model: string;
+}
+
+export interface BookSummaryPlan {
+  document_id: string;
+  document_name: string;
+  total_pages: number;
+  blocks: BookSummaryBlock[];
+  /** 已缓存（当前内容版本）的分块数 / 总分块数。 */
+  cached: number;
+  total: number;
+  /** 分块来源：本地目录 / 结构树 / 固定页区间。 */
+  source: 'navigation' | 'structure' | 'range';
+  /** 文档内容版本：内容没变时缓存可复用。 */
+  content_version: string;
+  estimate: BookSummaryEstimate;
+  /** 是否已有与当前内容版本一致的全书摘要。 */
+  book_available: boolean;
+}
+
+export interface BookSummaryJob {
+  document_id: string;
+  status: 'idle' | 'running' | 'done' | 'error' | 'cancelled';
+  done: number;
+  total: number;
+  /** 当前阶段（开始生成第 N 章 / 正在合并第 N 层 / 已完成）。 */
+  phase: string;
+  error?: string;
+  started_at?: string;
+  finished_at?: string;
+}
+
+export interface BookSummaryResult {
+  document_id: string;
+  /** book = 分层摘要合并出的全书摘要；overview = 仅目录/分块的轻量概览。 */
+  kind: 'book' | 'overview';
+  content: string;
+  model: string;
+  created: string;
+  content_version: string;
+  /** 合并层数（0 表示只有一个分块，没有合并调用）。 */
+  merge_levels: number;
+  blocks: BookSummaryBlock[];
+}
+
 export interface BudgetEstimate {
   pages: number;
   tokens: number;
@@ -1267,7 +1333,16 @@ export type ModelServiceKind =
   /** 视觉读页：图表/公式/结构的派生解读，不是逐字原文。 */
   | 'vision'
   /** 全模态：一个模型同时承担会话、视觉与音频。 */
-  | 'omni';
+  | 'omni'
+  /**
+   * 分析模型：批次阅读、证据审计、回读规划等任务型调用使用的模型（可深度思考）。
+   *
+   * 未单独配置时回退到会话模型；配置后「思考」集中在这里，最终回答交给 writing，
+   * 避免强制思考的平台把回答的输出预算烧在思维链上。
+   */
+  | 'analysis'
+  /** 写作模型：面向用户的最终回答（综合/改写）使用的模型；建议选可关闭深度思考的模型。 */
+  | 'writing';
 
 export interface ModelServiceModel {
   id: string;
@@ -1339,6 +1414,16 @@ export interface ModelServiceRouting {
   vision?: ModelServiceAssignment;
   /** 全模态模型（同时可承担会话、视觉读页与音频）。 */
   omni?: ModelServiceAssignment;
+  /**
+   * 分析模型（可选）：批次阅读/审计/回读规划等任务型调用使用；未选时回退会话模型。
+   * 「思考」集中在这里，最终回答交给 writing。
+   */
+  analysis?: ModelServiceAssignment;
+  /**
+   * 写作模型（可选）：最终回答的综合与改写使用；未选时回退会话模型。
+   * 选一个可关闭深度思考的模型时，这次调用不会把输出预算花在思维链上。
+   */
+  writing?: ModelServiceAssignment;
 }
 
 export interface ModelServicesConfig {

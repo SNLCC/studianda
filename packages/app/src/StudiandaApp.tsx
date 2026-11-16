@@ -64,6 +64,7 @@ import {
   IconTranslate
 } from './reader-icons.js';
 import { DocumentInfoDialog, type DocumentInfoDraft } from './DocumentInfoDialog.js';
+import { registerReaderJump } from './reader-jump.js';
 import {
   AnnotationPanel,
   Backlinks,
@@ -2566,6 +2567,8 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
   // 阅读页「文献信息」弹窗：文献库分支也渲染，避免切换视图时状态丢失。
   const documentInfoDialog = documentInfo ? (
     <DocumentInfoDialog
+      api={api}
+      adapter={adapter}
       document={documentInfo}
       folders={folders}
       saving={documentInfoMutation.isPending}
@@ -5924,6 +5927,15 @@ function ReaderView({
   const shortcut = (name: string, fallback: string): string =>
     shortcutSettings.data?.[`shortcut.${name}`] || fallback;
   const [page, setPage] = useState(Math.max(1, initialPage ?? document.currentPage));
+  // 文献信息弹窗里的「全书摘要」章节要跳到原文页：登记当前阅读页的跳页处理器。
+  useEffect(() => {
+    registerReaderJump((target) => {
+      const bounded = Math.min(Math.max(1, Math.trunc(target)), document.pages);
+      setPage(bounded);
+      return true;
+    });
+    return () => registerReaderJump(null);
+  }, [document.id, document.pages]);
   const restoredPageRef = useRef(false);
   /**
    * 键盘快捷键用 ref 保存"最新一次渲染的 handler"再注册一次监听：

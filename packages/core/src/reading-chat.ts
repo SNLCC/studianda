@@ -58,12 +58,23 @@ import {
 import { semanticReversePages, type SemanticReverseResult } from './semantic-reverse.js';
 import { cosine, vectorsFor } from './embeddings.js';
 import { pickPages } from './semantic.js';
-import { gotoWorkers, inputBudgetFor, readCapacity } from './capacity.js';
+import {
+  gotoWorkers,
+  inputBudgetFor,
+  MAX_OUTPUT_RESERVE,
+  readCapacity
+} from './capacity.js';
 import { resolveModelCapacity } from './model-services.js';
 import {
   chatOutputOptions,
   isDeepSeekHost,
+  isMiniMaxHost,
+  miniMaxEffort,
+  miniMaxSupportsThinkingOff,
+  ModelResponseFormatError,
   networkErrorMessage,
+  nextOutputBudget,
+  OUTPUT_LIMIT_MAX_ATTEMPTS,
   reasoningEffortOptions,
   responseText,
   safetyCheckOptions,
@@ -119,6 +130,21 @@ export interface ReadingChatConfig {
    * 规则固定、可复现，不做开放式二次创作；用户可在设置中显式切回 `annotate`。
    */
   auditRewrite?: 'annotate' | 'rewrite';
+  /**
+   * 任务型调用（批次阅读/审计/回读规划/修订）使用的「分析模型」；缺省 = 本模型。
+   *
+   * 由 chat.ts 按「平台与模型」里的分析模型路由填入：`callChatModel(task=true)` 会整体
+   * 切换到这份配置（地址、密钥、模型、思考开关），最终回答仍用本配置。
+   */
+  taskConfig?: ReadingChatConfig;
+  /**
+   * 本次调用是「写作模型」：面向用户的最终回答不思考。
+   *
+   * - DeepSeek 官方：发 `thinking: disabled`，思维链 0 token；
+   * - MiniMax：不能关，但把 `reasoning_effort` 压到 low；
+   * - 其它平台：不新增未知字段（请求体与改动前一致）。
+   */
+  answerNoThinking?: boolean;
 }
 
 // 单机桌面端同时只处理一个阅读任务；审计包用这个回调把阶段进度送回界面。
@@ -191,6 +217,35 @@ export function chatInputLimit(store: Store): number {
     modelCapacity?.contextWindow,
     modelCapacity?.outputReserve
   );
+}
+
+/**
+ * 最终回答（以及依据回读证据的改写）的正文输出预算。
+ *
+ * 旧实现固定 1200：在「强制思考、思维链计入 max_tokens」的平台（MiniMax M3.1 Flash）
+ * 上，一次全文概括就可能把预算全部烧在推理里，`finish_reason=length` 且正文为空，
+ * 整轮阅读直接变成「这一轮没有产生文字回答」（实测 8 页文献一次概括即耗尽预算）。
+ * 这里跟随会话模型的输出预留：官方大输出模型 16384、全局默认 4096，至少 1200；
+ * 输入上限本来已经扣过这份预留，所以不会挤占材料。
+ */
+export function answerOutputTokens(store: Store): number {
+  const capacity = readCapacity(store.getSettings());
+  const modelCapacity = resolveModelCapacity(store, 'chat');
+  const reserve = modelCapacity?.outputReserve ?? capacity.outputReserve;
+  return Math.max(1200, Math.min(reserve, MAX_OUTPUT_RESERVE));
+}
+
+/**
+ * 单批阅读 / 审计的正文输出预算：跟随模型容量，但不超过 8192。
+ *
+ * 单批材料只有 1–3 页，结构化分析用不到上万 token；但 MiniMax 这类强制思考的平台会把
+ * 思维链算进 `max_tokens`，批次原来的 3000 预算在个别批次上会被推理吃光
+ * （实测 8 页文献的一次概括就有一批 `finish_reason=length`）。按回答预算的一半给批次：
+ * 默认仍是 3000（行为不变），官方大输出模型抬到 8192；配合 `callChatModel` 的
+ * 输出上限重试，个别批次烧穿预算时还有一次翻倍机会。
+ */
+export function batchOutputTokens(store: Store): number {
+  return Math.max(3000, Math.min(Math.floor(answerOutputTokens(store) / 2), 8192));
 }
 
 /**
@@ -457,10 +512,27 @@ export async function callChatModel(
    */
   task = false
 ): Promise<string> {
+  // 任务型调用切到「分析模型」；最终回答仍用本配置（写作模型）。
+  const target = task && config.taskConfig ? config.taskConfig : config;
+  // 写作模型：最终回答不思考（把整个输出预算留给正文）。任务型调用不适用。
+  const noThinking = !task && config.answerNoThinking === true;
   // 本次请求是否真的会思考：决定要不要为思维链加输出预留、要不要发思考强度。
   // DeepSeek 官方只有非任务型（最终回答）会开启思考；MiniMax 恒为开启，
   // 但它的预留已经在 chatOutputOptions 里按平台固定处理。
-  const thinking = isDeepSeekHost(config.baseUrl) && !task;
+  const thinking = isDeepSeekHost(target.baseUrl) && !task && !noThinking;
+  // 思考强度：
+  // - MiniMax 不能关闭思考，但能调深度（官方默认 max 最费 token）——任务型调用固定 low，
+  //   最终回答跟随配置（默认 high）；写作模型同样压到 low。不发送就等于按平台默认 max 烧预算。
+  // - DeepSeek 官方只在真的会思考（最终回答）时发送强度；任务型调用已关闭思考。
+  // - 其它平台字段不统一，猜着发会把无关服务打挂：一个字都不发。
+  const effortOptions = isMiniMaxHost(target.baseUrl)
+    ? reasoningEffortOptions(
+        target.baseUrl,
+        miniMaxEffort(task || noThinking, target.reasoningEffort)
+      )
+    : thinking
+      ? reasoningEffortOptions(target.baseUrl, target.reasoningEffort)
+      : {};
   // 请求消息与容量检查用同一份数组：历史作为 prior 夹在系统指令与材料之间。
   const requestMessages = messages(system, user, prior);
   const inputText = requestMessages.map((message) => message.content).join('\n');
@@ -474,52 +546,96 @@ export async function callChatModel(
       );
     }
   }
-  let response: Response;
-  try {
-    response = await fetch(`${config.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${config.apiKey}`
-      },
-      body: JSON.stringify({
-        model: config.model,
-        // 思考模式下官方会忽略 temperature（不报错、也不生效）：这里保留是为了
-        // 非思考/任务型调用仍然按低温度采样，不要因为看到它"好像没起作用"就删掉。
-        temperature: 0.2,
-        // 开启思考时给思维链留出输出空间，否则 1200 的正文预算会被推理吃掉。
-        ...chatOutputOptions(config.baseUrl, maxTokens, thinking),
-        // 始终整段返回：不再请求流式响应。
-        stream: false,
-        messages: requestMessages,
-        // DeepSeek 官方地址：任务型关闭思考、最终回答显式开启；其它平台只在用户明确
-        // 打开 task_thinking 时对任务型调用发 disabled（MiniMax 由协议层跳过）。
-        ...taskThinkingOptions(config.baseUrl, task, config.taskThinking === true),
-        // 思考强度只在真的会思考时才有意义（关闭思考时官方会忽略强度）。
-        ...(thinking ? reasoningEffortOptions(config.baseUrl, config.reasoningEffort) : {}),
-        // 内容审核只挂在面向用户的回答上：过程性调用（task=true）不发，
-        // 既避免每批都付审核 token/收尾延迟，也不让审核误拒原文。
-        ...(task ? {} : safetyCheckOptions(config.baseUrl, config.safetyCheck !== false))
-      }),
-      signal: signal ?? AbortSignal.timeout(120_000)
-    });
-  } catch (error) {
-    if ((error as { name?: string } | null)?.name === 'AbortError') throw error;
-    const message = networkErrorMessage(error);
-    if (message) throw new Error(`${phase ? `${phase}：` : ''}${message}`);
-    throw error;
+  const post = async (outputBudget: number): Promise<unknown> => {
+    let response: Response;
+    try {
+      response = await fetch(`${target.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${target.apiKey}`
+        },
+        body: JSON.stringify({
+          model: target.model,
+          // 思考模式下官方会忽略 temperature（不报错、也不生效）：这里保留是为了
+          // 非思考/任务型调用仍然按低温度采样，不要因为看到它"好像没起作用"就删掉。
+          temperature: 0.2,
+          // 开启思考时给思维链留出输出空间，否则正文预算会被推理吃掉。
+          ...chatOutputOptions(target.baseUrl, outputBudget, thinking),
+          // 始终整段返回：不再请求流式响应。
+          stream: false,
+          messages: requestMessages,
+          // DeepSeek 官方地址：任务型关闭思考、最终回答显式开启；其它平台只在用户明确
+          // 打开 task_thinking 时对任务型调用发 disabled（MiniMax 由协议层跳过）。
+          // 写作模型（answerNoThinking）也按"任务型"处理：最终回答不思考。
+          // MiniMax-M3 支持关闭思考（M3.1-Flash 不支持，传了会 400），写作模型选它时
+          // 同样把 thinking 关掉，最终回答的思维链为 0 token。
+          ...(isMiniMaxHost(target.baseUrl) &&
+          (task || noThinking) &&
+          miniMaxSupportsThinkingOff(target.model)
+            ? { thinking: { type: 'disabled' } }
+            : taskThinkingOptions(target.baseUrl, task || noThinking, target.taskThinking === true)),
+          // 思考强度只在真的会思考时才有意义（关闭思考时官方会忽略强度）。
+          ...effortOptions,
+          // 内容审核只挂在面向用户的回答上：过程性调用（task=true）不发，
+          // 既避免每批都付审核 token/收尾延迟，也不让审核误拒原文。
+          ...(task ? {} : safetyCheckOptions(target.baseUrl, target.safetyCheck !== false))
+        }),
+        signal: signal ?? AbortSignal.timeout(120_000)
+      });
+    } catch (error) {
+      if ((error as { name?: string } | null)?.name === 'AbortError') throw error;
+      const message = networkErrorMessage(error);
+      if (message) throw new Error(`${phase ? `${phase}：` : ''}${message}`);
+      throw error;
+    }
+    if (!response.ok) {
+      throw new Error(`${phase ? `${phase}：` : ''}${serviceErrorMessage(response.status)}`);
+    }
+    return (await response.json()) as unknown;
+  };
+
+  // 输出上限不是「请求失败」，而是「预算不够」：放大正文预算重试一次再报错。
+  // 只认 `finish_reason=length`（服务端明确说被输出上限截断）；其它格式问题（例如
+  // 只返回推理）重试不会变好，照原样抛出可执行提示。
+  let budget = Math.max(1, Math.trunc(maxTokens));
+  let truncated: Error | null = null;
+  for (let attempt = 0; attempt < OUTPUT_LIMIT_MAX_ATTEMPTS; attempt += 1) {
+    let payload: unknown;
+    try {
+      payload = await post(budget);
+    } catch (error) {
+      // 放大预算后的请求本身失败（例如平台不认更大的 max_tokens）：保留首次的
+      // 「输出上限」可执行提示，用户知道该调哪里，而不是只看到一条 HTTP 报错。
+      if (truncated) throw truncated;
+      throw error;
+    }
+    const choice = (
+      payload as { choices?: Array<{ finish_reason?: string }> }
+    ).choices?.[0];
+    onMeta?.({ finishReason: choice?.finish_reason });
+    const usage = usageFromPayload(payload);
+    try {
+      const content = responseText(payload);
+      recordModelUsage(inputText, content, usage);
+      return content;
+    } catch (error) {
+      // 被截断的请求同样消耗 token（思维链也计费）：照实计入本轮用量，
+      // 否则界面的「本轮 tokens」会少报一整段被截断的生成。
+      recordModelUsage(inputText, '', usage);
+      if (choice?.finish_reason !== 'length') throw error;
+      truncated = error instanceof Error ? error : new ModelResponseFormatError('模型达到输出上限。');
+      const next = nextOutputBudget(budget);
+      if (attempt + 1 >= OUTPUT_LIMIT_MAX_ATTEMPTS || next <= budget) {
+        throw new ModelResponseFormatError(
+          `${truncated.message}（已自动放大输出预算并重试一次，仍被截断）`
+        );
+      }
+      budget = next;
+    }
   }
-  if (!response.ok) {
-    throw new Error(`${phase ? `${phase}：` : ''}${serviceErrorMessage(response.status)}`);
-  }
-  const payload = (await response.json()) as unknown;
-  const choice = (
-    payload as { choices?: Array<{ finish_reason?: string }> }
-  ).choices?.[0];
-  onMeta?.({ finishReason: choice?.finish_reason });
-  const content = responseText(payload);
-  recordModelUsage(inputText, content, usageFromPayload(payload));
-  return content;
+  // 上面的循环只会 return 或 throw；这里只为类型收口。
+  throw truncated ?? new ModelResponseFormatError('模型没有返回可显示的正文。');
 }
 
 async function synthesize(
@@ -603,7 +719,7 @@ async function synthesize(
     config,
     instruction,
     material,
-    1200,
+    answerOutputTokens(store),
     signal,
     onDelta,
     undefined,
@@ -1028,7 +1144,7 @@ export async function auditGeneratedAnswer(
         config,
         instruction,
         material,
-        3000,
+        activeAuditStore ? batchOutputTokens(activeAuditStore) : 3000,
         signal,
         undefined,
         undefined,
@@ -1639,7 +1755,7 @@ export async function answerWithCorpus(
       config,
       instruction,
       batchReadingPrompt(material, question, selection),
-      3000,
+      batchOutputTokens(store),
       signal,
       undefined,
       undefined,
@@ -2300,7 +2416,7 @@ export async function answerWithReading(
             config,
             instruction,
             batchReadingPrompt(material, question, selection),
-            3000,
+            batchOutputTokens(store),
             signal,
             undefined,
             undefined,
@@ -2797,7 +2913,7 @@ export async function answerWithReading(
       config,
       singleInstruction,
       singleMaterial,
-      1200,
+      answerOutputTokens(store),
       signal,
       streamDraft,
       undefined,
@@ -2893,7 +3009,7 @@ export async function answerWithReading(
         config,
         revisedInstruction,
         revisedMaterial,
-        1200,
+        answerOutputTokens(store),
         signal,
         onDraft,
         undefined,
@@ -3028,7 +3144,7 @@ export async function answerWithReading(
       config,
       instruction,
       batchReadingPrompt(material, question, selection),
-      3000,
+      batchOutputTokens(store),
       signal,
       undefined,
       undefined,
@@ -3276,7 +3392,7 @@ export async function answerWithReading(
       config,
       revisedInstruction,
       revisedMaterial,
-      1200,
+      answerOutputTokens(store),
       signal,
       onDraft,
       undefined,

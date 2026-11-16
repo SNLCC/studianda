@@ -39,9 +39,17 @@ import {
   type ReferenceNodeKind,
   type SearchRequest,
   type SettingsMap,
-  type TranslationConfigRecord
+  type TranslationConfigRecord,
+  type BookSummaryJob
 } from '@studianda/shared';
-import { answerQuestion } from './chat.js';
+import { answerQuestion, resolveReadingChatConfig } from './chat.js';
+import {
+  bookSummaryPlan,
+  outlineOverview,
+  readCachedBookSummary,
+  resetBookSummary,
+  runBookSummary
+} from './book-summary.js';
 import { planQuestion } from './planning.js';
 import { planReading } from './reading-plan.js';
 import {
@@ -489,6 +497,28 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   const app = Fastify({ logger: false, bodyLimit: 2 * 1024 * 1024 });
   // 导入任务（进程内、按 Core 实例隔离）：解析 PDF 在后台跑，前端轮询状态并可请求取消。
   const importJobs = new Map<string, ImportJobRecord>();
+  // 全书摘要任务（进程内、按文献隔离）：后台跑，前端轮询进度；摘要缓存本身落库，重启后仍可复用。
+  interface BookSummaryRunJob extends BookSummaryJob {
+    controller: AbortController;
+    content?: string;
+  }
+  const bookSummaryJobs = new Map<string, BookSummaryRunJob>();
+  const bookSummaryJobView = (documentId: string): BookSummaryJob => {
+    const job = bookSummaryJobs.get(documentId);
+    if (!job) {
+      return { document_id: documentId, status: 'idle', done: 0, total: 0, phase: '' };
+    }
+    return {
+      document_id: job.document_id,
+      status: job.status,
+      done: job.done,
+      total: job.total,
+      phase: job.phase,
+      ...(job.error ? { error: job.error } : {}),
+      ...(job.started_at ? { started_at: job.started_at } : {}),
+      ...(job.finished_at ? { finished_at: job.finished_at } : {})
+    };
+  };
   // 维护状态里的运行时长：进程启动即记录，只用于展示，不持久化。
   const startedAt = Date.now();
   // 已导入的本地 tokenizer：启动即生效；文件缺失/损坏时停在保守估算，不影响启动。
@@ -3141,6 +3171,106 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   app.get(`${API_PREFIX}/documents/:id/reading-tasks`, async (request) => {
     const { id } = request.params as { id: string };
     return options.store.listReadingTasks(id);
+  });
+
+  // 全书摘要：分层生成 + 缓存复用。plan 只读本地目录与缓存，不调用模型；
+  // overview 是纯本地目录/页区间概览（T1，不调用模型）；start 在后台跑。
+  app.get(`${API_PREFIX}/documents/:id/book-summary`, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    if (!options.store.getDocument(id)) return notFound(reply, '文档不存在');
+    const config = resolveReadingChatConfig(options.store, options.secrets);
+    const plan = await bookSummaryPlan(options.store, id, config?.model ?? '');
+    const result = readCachedBookSummary(options.store, id);
+    const document = options.store.getDocument(id)!;
+    return {
+      plan,
+      job: bookSummaryJobView(id),
+      result,
+      overview: outlineOverview(document.name, plan.blocks)
+    };
+  });
+
+  app.post(`${API_PREFIX}/documents/:id/book-summary/start`, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    if (!options.store.getDocument(id)) return notFound(reply, '文档不存在');
+    const running = bookSummaryJobs.get(id);
+    if (running?.status === 'running') return { job: bookSummaryJobView(id) };
+    const config = resolveReadingChatConfig(options.store, options.secrets);
+    if (!config) {
+      return badRequest(reply, '请先在「平台与模型」里配置会话模型，再生成全书摘要');
+    }
+    const plan = await bookSummaryPlan(options.store, id, config.model);
+    const controller = new AbortController();
+    const job: BookSummaryRunJob = {
+      document_id: id,
+      status: 'running',
+      done: 0,
+      total: plan.total,
+      phase: '准备中',
+      started_at: new Date().toISOString(),
+      controller
+    };
+    bookSummaryJobs.set(id, job);
+    const untrack = trackDocumentRequests([id], controller);
+    void (async () => {
+      try {
+        const result = await runBookSummary({
+          store: options.store,
+          config,
+          documentId: id,
+          signal: controller.signal,
+          onProgress: (done, total, phase) => {
+            const current = bookSummaryJobs.get(id);
+            if (!current || current.status !== 'running') return;
+            current.done = done;
+            current.total = total;
+            current.phase = phase;
+          }
+        });
+        const current = bookSummaryJobs.get(id);
+        if (current) {
+          current.status = 'done';
+          current.done = plan.total;
+          current.total = plan.total;
+          current.phase = '已完成';
+          current.content = result.content;
+          current.finished_at = new Date().toISOString();
+        }
+      } catch (error) {
+        const current = bookSummaryJobs.get(id);
+        if (current) {
+          const aborted =
+            controller.signal.aborted || (error as { name?: string } | null)?.name === 'AbortError';
+          current.status = aborted ? 'cancelled' : 'error';
+          current.phase = aborted ? '已取消' : '生成失败';
+          current.error = aborted ? undefined : error instanceof Error ? error.message : '生成失败';
+          current.finished_at = new Date().toISOString();
+        }
+      } finally {
+        untrack();
+      }
+    })();
+    return { job: bookSummaryJobView(id), plan };
+  });
+
+  app.post(`${API_PREFIX}/documents/:id/book-summary/cancel`, async (request) => {
+    const { id } = request.params as { id: string };
+    const job = bookSummaryJobs.get(id);
+    if (job?.status === 'running') {
+      job.controller.abort();
+      job.phase = '正在取消';
+    }
+    return bookSummaryJobView(id);
+  });
+
+  app.delete(`${API_PREFIX}/documents/:id/book-summary`, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    if (!options.store.getDocument(id)) return notFound(reply, '文档不存在');
+    const job = bookSummaryJobs.get(id);
+    if (job?.status === 'running') job.controller.abort();
+    bookSummaryJobs.delete(id);
+    resetBookSummary(options.store, id);
+    return { ok: true };
   });
 
   // 阅读页「重新生成」：删除最后一轮助手回答（DB 内），保留用户问题；返回最后用户问题正文。

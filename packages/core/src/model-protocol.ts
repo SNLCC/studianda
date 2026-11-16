@@ -122,23 +122,60 @@ export function thinkingOptions(baseUrl: string, enabled: boolean): Record<strin
 export type ReasoningEffort = 'low' | 'high' | 'max';
 
 /**
- * DeepSeek 官方的思考强度参数。
+ * DeepSeek 官方的思考强度参数；MiniMax 官方同样支持 `reasoning_effort`
+ * （low/medium/high/xhigh/max，默认 max），也在这里一并发送。
  *
- * 不配置时不发该字段（沿用平台默认 high）；非官方地址不发（见 isDeepSeekHost）。
  * 注意：`thinking` 对象优先于 `reasoning_effort`，关闭思考时强度没有意义，调用方应先判断。
  * 字段语义以官方文档为准（本模块按公开协议独立实现，不复制其示例代码）：
  * https://api-docs.deepseek.com/zh-cn/guides/thinking_mode
+ * https://platform.minimax.cn/docs/guides/text-generation
  */
 export function reasoningEffortOptions(
   baseUrl: string,
   effort?: ReasoningEffort
 ): Record<string, unknown> {
-  if (!effort || !isDeepSeekHost(baseUrl)) return {};
-  return { reasoning_effort: effort };
+  if (!effort) return {};
+  return isDeepSeekHost(baseUrl) || isMiniMaxHost(baseUrl)
+    ? { reasoning_effort: effort }
+    : {};
 }
 
-/** MiniMax 思考预留：M3.1 Flash 默认 effort=max，给正文留出足够空间。 */
+/**
+ * MiniMax 思考预留：M3.1 Flash 默认 effort=max，给正文留出足够空间。
+ */
 export const MINIMAX_THINKING_RESERVE = 8192;
+
+/**
+ * MiniMax 的思考深度：任务型调用固定 low，最终回答跟随配置（默认 high）。
+ *
+ * 官方文档（2026-11 版，`/docs/guides/text-generation`）：
+ * - 深度思考默认开启、**不可关闭**（`thinking: {"type":"disabled"}` 或 `effort:"none"`
+ *   会返回 400 `requires adaptive thinking`）；
+ * - 但可以用 `reasoning_effort` 调低思考深度：low / medium / high / xhigh / max，
+ *   **省略时默认 max**（最费 token）。档位越高，耗时与输出 token 越多。
+ *
+ * 结构化批次阅读、审计、修订这类任务型调用不需要最深思考，固定 low；面向用户的
+ * 最终回答用 high（用户显式配置强度时按配置）。这样不需要一直为默认 max 买单，
+ * 也不会因为思维链吃掉整个 `max_completion_tokens` 而出现空正文。
+ */
+export function miniMaxEffort(
+  task: boolean,
+  configured?: ReasoningEffort
+): ReasoningEffort {
+  return task ? 'low' : configured ?? 'high';
+}
+
+/**
+ * MiniMax 哪些模型允许「关闭思考」。
+ *
+ * 官方文档：`MiniMax-M3` 传入 `thinking: {"type":"disabled"}` 会跳过 thinking；
+ * `MiniMax-M3.1-Flash` 强制开启，传 disabled 返回 400 `requires adaptive thinking`。
+ * 写作模型优先选可关闭思考的模型——这时最终回答的思维链是 0 token，输出预算全部给正文。
+ */
+export function miniMaxSupportsThinkingOff(model: string): boolean {
+  const name = (model ?? '').trim().toLowerCase();
+  return name.startsWith('minimax-m3') && !name.includes('m3.1');
+}
 
 /**
  * DeepSeek 思考预留：思维链 token 计入 `completion_tokens`（usage 里有
@@ -152,11 +189,15 @@ export const DEEPSEEK_THINKING_RESERVE = 4096;
  * 单个模型请求里的输出上限/思考参数。
  *
  * - MiniMax：增加思考预留，并要求把思考拆到 `reasoning_content`，避免 `<think>` 标签混进正文；
+ *   输出上限用官方推荐的 `max_completion_tokens`（文档明确 `max_tokens` 已弃用）；
  * - DeepSeek 官方且开启思考：增加思维链预留（MiniMax 同因，方向一致）；
  * - 其它情况（含 DeepSeek 非思考模式）：原样使用 `max_tokens`，与改动前一致。
  *
  * `thinking` 为调用方算好的「本次请求确实会思考」；不传时按不会思考处理，
  * 保持 OCR/翻译/纠错这些过程性链路的请求体不变。
+ *
+ * 注意：官方没有「思考不计入输出上限」的开关——思考 token 计入 `completion_tokens`，
+ * 只能通过关闭思考（DeepSeek 支持；MiniMax 不支持）或调低 `reasoning_effort` 控制。
  */
 export function chatOutputOptions(
   baseUrl: string,
@@ -166,7 +207,7 @@ export function chatOutputOptions(
   const budget = Math.max(1, Math.trunc(maxTokens));
   if (isMiniMaxHost(baseUrl)) {
     return {
-      max_tokens: Math.min(budget + MINIMAX_THINKING_RESERVE, 131_072),
+      max_completion_tokens: Math.min(budget + MINIMAX_THINKING_RESERVE, 131_072),
       reasoning_split: true
     };
   }
@@ -174,6 +215,24 @@ export function chatOutputOptions(
     return { max_tokens: Math.min(budget + DEEPSEEK_THINKING_RESERVE, 131_072) };
   }
   return { max_tokens: budget };
+}
+
+/**
+ * 命中输出上限后，放大正文预算重试一次。
+ *
+ * `finish_reason=length` 不是请求失败，而是「预算不够」：MiniMax 这类强制思考的平台
+ * 会把思维链算进 `max_tokens`，一次长文概括就可能把整个预算烧在推理里（正文为空）。
+ * 翻倍后平台还会按 `chatOutputOptions` 再叠加思考预留，所以这里只限制正文预算的增长，
+ * 仍远小于官方 131072 的输出上限；只重试一次，避免为同一段内容反复付费。
+ */
+export const OUTPUT_LIMIT_MAX_ATTEMPTS = 2;
+/** 放大重试时正文预算的硬顶（思考预留另行叠加）。 */
+export const OUTPUT_LIMIT_RETRY_CEILING = 65536;
+
+/** 命中输出上限后，下一次请求的正文预算：翻倍，封顶 `OUTPUT_LIMIT_RETRY_CEILING`。 */
+export function nextOutputBudget(current: number): number {
+  const budget = Math.max(1, Math.trunc(current));
+  return Math.min(budget * 2, OUTPUT_LIMIT_RETRY_CEILING);
 }
 
 /**

@@ -291,6 +291,26 @@ export const SCHEMA_SQL = `      CREATE TABLE IF NOT EXISTS schema_meta(
         PRIMARY KEY(task, stage)
       );
 
+      -- schema_version 20：全书摘要缓存（分层：章节块摘要 → 合并后的全书摘要）。
+      -- 按内容版本 + 提示词版本复用：文档没变就不重算，旧版本记录直接视为过期。
+      CREATE TABLE IF NOT EXISTS book_summaries(
+        document_id TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        block_key TEXT NOT NULL,
+        title TEXT NOT NULL DEFAULT '',
+        pages_from INTEGER NOT NULL DEFAULT 0,
+        pages_to INTEGER NOT NULL DEFAULT 0,
+        content TEXT NOT NULL DEFAULT '',
+        model TEXT NOT NULL DEFAULT '',
+        content_version TEXT NOT NULL DEFAULT '',
+        prompt_version INTEGER NOT NULL DEFAULT 0,
+        level INTEGER NOT NULL DEFAULT 0,
+        created TEXT NOT NULL,
+        updated TEXT NOT NULL,
+        PRIMARY KEY(document_id, scope, block_key)
+      );
+      CREATE INDEX IF NOT EXISTS book_summaries_document ON book_summaries(document_id);
+
       CREATE TABLE IF NOT EXISTS structure_pages(
         path TEXT,
         page INTEGER,

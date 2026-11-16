@@ -590,6 +590,26 @@ export interface NoteImageLimits {
   maxPixels: number;
 }
 
+/** 全书摘要缓存行：分块摘要（scope=block）或合并后的全书摘要（scope=book）。 */
+export interface BookSummaryRow {
+  documentId: string;
+  scope: 'block' | 'book';
+  /** 分块键：章/页区间的稳定标识；全书摘要为空串。 */
+  blockKey: string;
+  title: string;
+  pagesFrom: number;
+  pagesTo: number;
+  content: string;
+  model: string;
+  /** 生成时的文档内容版本（文档变了旧摘要视为过期）。 */
+  contentVersion: string;
+  promptVersion: number;
+  /** 合并层级：0=章摘要，>0=合并层。 */
+  level: number;
+  created: string;
+  updated: string;
+}
+
 /** 宽高是否超出解压炸弹防护上限（单边 20000，总像素由设置决定）。 */
 function imageDimensionsTooLarge(
   width: number,
@@ -1491,6 +1511,91 @@ export class Store {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * 全书摘要缓存（分层：`scope='block'` 是章/页区间摘要，`scope='book'` 是合并后的全书摘要）。
+   *
+   * 只存摘要与页码范围，不存原文；内容版本不匹配的记录由调用方视为过期（仍保留，便于诊断）。
+   */
+  listBookSummaries(documentId: string): BookSummaryRow[] {
+    const rows = this.db
+      .prepare(
+        `SELECT document_id, scope, block_key, title, pages_from, pages_to, content, model,
+                content_version, prompt_version, level, created, updated
+           FROM book_summaries
+          WHERE document_id = ?
+          ORDER BY scope, level, pages_from`
+      )
+      .all(documentId) as unknown as Array<{
+      document_id: string;
+      scope: string;
+      block_key: string;
+      title: string;
+      pages_from: number;
+      pages_to: number;
+      content: string;
+      model: string;
+      content_version: string;
+      prompt_version: number;
+      level: number;
+      created: string;
+      updated: string;
+    }>;
+    return rows.map((row) => ({
+      documentId: row.document_id,
+      scope: row.scope === 'book' ? 'book' : 'block',
+      blockKey: row.block_key,
+      title: row.title,
+      pagesFrom: row.pages_from,
+      pagesTo: row.pages_to,
+      content: row.content,
+      model: row.model,
+      contentVersion: row.content_version,
+      promptVersion: row.prompt_version,
+      level: row.level,
+      created: row.created,
+      updated: row.updated
+    }));
+  }
+
+  saveBookSummary(row: BookSummaryRow): void {
+    this.db
+      .prepare(
+        `INSERT INTO book_summaries(
+           document_id, scope, block_key, title, pages_from, pages_to, content, model,
+           content_version, prompt_version, level, created, updated
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(document_id, scope, block_key) DO UPDATE SET
+           title = excluded.title,
+           pages_from = excluded.pages_from,
+           pages_to = excluded.pages_to,
+           content = excluded.content,
+           model = excluded.model,
+           content_version = excluded.content_version,
+           prompt_version = excluded.prompt_version,
+           level = excluded.level,
+           updated = excluded.updated`
+      )
+      .run(
+        row.documentId,
+        row.scope,
+        row.blockKey,
+        row.title,
+        row.pagesFrom,
+        row.pagesTo,
+        row.content,
+        row.model,
+        row.contentVersion,
+        row.promptVersion,
+        row.level,
+        row.created,
+        row.updated
+      );
+  }
+
+  deleteBookSummaries(documentId: string): void {
+    this.db.prepare('DELETE FROM book_summaries WHERE document_id = ?').run(documentId);
   }
 
   listMessages(

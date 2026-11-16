@@ -4,6 +4,9 @@ import { officialModelMetadata, speechModels } from '../src/model-metadata.js';
 import {
   chatOutputOptions,
   isMiniMaxHost,
+  miniMaxEffort,
+  miniMaxSupportsThinkingOff,
+  reasoningEffortOptions,
   taskThinkingOptions,
   MINIMAX_THINKING_RESERVE
 } from '../src/model-protocol.js';
@@ -65,9 +68,25 @@ describe('MiniMax request compatibility', () => {
   });
 
   it('adds a thinking reserve and splits reasoning for MiniMax', () => {
+    // 官方文档：max_tokens 已弃用，输出上限用 max_completion_tokens。
     const options = chatOutputOptions(CN_BASE, 1200);
-    expect(options.max_tokens).toBe(1200 + MINIMAX_THINKING_RESERVE);
+    expect(options.max_completion_tokens).toBe(1200 + MINIMAX_THINKING_RESERVE);
     expect(options.reasoning_split).toBe(true);
+  });
+
+  it('sends reasoning_effort to MiniMax: task calls low, answers high by default', () => {
+    // 官方默认 effort=max（最费 token）；不给平台发这个字段，任务型调用会一直按 max 烧预算。
+    expect(miniMaxEffort(true)).toBe('low');
+    expect(miniMaxEffort(false)).toBe('high');
+    expect(miniMaxEffort(false, 'low')).toBe('low');
+    expect(reasoningEffortOptions(CN_BASE, 'low')).toEqual({ reasoning_effort: 'low' });
+  });
+
+  it('only MiniMax-M3 allows disabling thinking (M3.1-Flash rejects disabled)', () => {
+    expect(miniMaxSupportsThinkingOff('MiniMax-M3')).toBe(true);
+    expect(miniMaxSupportsThinkingOff('minimax-m3')).toBe(true);
+    expect(miniMaxSupportsThinkingOff('MiniMax-M3.1-Flash')).toBe(false);
+    expect(miniMaxSupportsThinkingOff('MiniMax-M3.1')).toBe(false);
   });
 
   it('keeps the platform output limit unchanged for other hosts', () => {

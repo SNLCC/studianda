@@ -15,11 +15,14 @@ import { planQuestion, withDefaultDimensions } from './planning.js';
 import {
   answerWithCorpus,
   answerWithReading,
+  answerOutputTokens,
   callChatModel,
   chatInputLimit,
   prepareHistory,
-  type HistoryMessage
+  type HistoryMessage,
+  type ReadingChatConfig
 } from './reading-chat.js';
+import { readCachedBookSummary } from './book-summary.js';
 import { collectModelUsage } from './model-usage.js';
 import { resolveModelCapacity, resolveModelService, resolveOmniService } from './model-services.js';
 import { prepareReadingSessionContext } from './reading-session-context.js';
@@ -65,6 +68,10 @@ interface ChatConfig {
   safetyCheck?: boolean;
   /** 证据审计输出模式（见 ReadingChatConfig.auditRewrite）：默认 rewrite（确定性按证据改写）。 */
   auditRewrite?: 'annotate' | 'rewrite';
+  /** 任务型调用使用的分析模型（callChatModel task=true 时整体切换过去）。 */
+  taskConfig?: ReadingChatConfig;
+  /** 写作模型：最终回答不思考。 */
+  answerNoThinking?: boolean;
 }
 
 function getConfig(store: Store, secrets: SecretStore): ChatConfig | null {
@@ -95,6 +102,58 @@ function getConfig(store: Store, secrets: SecretStore): ChatConfig | null {
     apiKey: process.env.STUDIANDA_MODEL_API_KEY?.trim() ?? '',
     model,
     auditRewrite: store.getSettings()['audit.rewrite_mode'] === 'annotate' ? 'annotate' : 'rewrite'
+  };
+}
+
+/**
+ * 按用途解析「分析模型 / 写作模型」。
+ *
+ * 未单独配置时返回 null，由调用方回退会话模型（老用户行为不变）。
+ * 写作模型标记 `answerNoThinking`：最终回答不再把输出预算花在思维链上；
+ * 分析模型用于 task=true 的调用（批次阅读/审计/回读/会话压缩）。
+ */
+function getRoleConfig(
+  store: Store,
+  secrets: SecretStore,
+  kind: 'analysis' | 'writing'
+): ChatConfig | null {
+  const routed = resolveModelService(store, secrets, kind);
+  if (!routed) return null;
+  const capacity = resolveModelCapacity(store, kind);
+  return {
+    baseUrl: routed.baseUrl,
+    apiKey: routed.apiKey,
+    model: routed.model,
+    ...(capacity?.taskThinking !== undefined ? { taskThinking: capacity.taskThinking } : {}),
+    ...(capacity?.reasoningEffort !== undefined
+      ? { reasoningEffort: capacity.reasoningEffort }
+      : {}),
+    ...(capacity?.safetyCheck !== undefined ? { safetyCheck: capacity.safetyCheck } : {}),
+    auditRewrite: store.getSettings()['audit.rewrite_mode'] === 'annotate' ? 'annotate' : 'rewrite',
+    ...(kind === 'writing' ? { answerNoThinking: true } : {})
+  };
+}
+
+/**
+ * 阅读链路的完整模型配置：写作模型（最终回答）+ 分析模型（任务型调用）。
+ *
+ * 未配置写作/分析模型时逐项回退会话模型，老配置行为不变。导出供测试。
+ */
+export function resolveReadingChatConfig(
+  store: Store,
+  secrets: SecretStore
+): ChatConfig | null {
+  const chatConfig = getConfig(store, secrets);
+  const analysisConfig = getRoleConfig(store, secrets, 'analysis');
+  const writingConfig = getRoleConfig(store, secrets, 'writing');
+  const base = writingConfig ?? chatConfig;
+  if (!base) return null;
+  return {
+    ...base,
+    // 任务型调用（批次/审计/回读/会话压缩）切到分析模型。
+    ...(analysisConfig ? { taskConfig: analysisConfig } : {}),
+    // 写作模型：最终回答不思考，输出预算全部留给正文。
+    ...(writingConfig ? { answerNoThinking: true } : {})
   };
 }
 
@@ -377,7 +436,8 @@ async function answerQuestionInner(
         reason: '继续阅读：恢复上次未读的页',
         reply: '',
         modelPlan: false,
-        plan: null
+        plan: null,
+        summaryIntent: false
       }
     : await routeQuestion(store, secrets, { ...input, question, selection });
   onStage?.('正在判断阅读范围');
@@ -472,7 +532,9 @@ async function answerQuestionInner(
   const chapterFields = chapterInfo
     ? { chapter: chapterInfo, chapter_total: chapterTotal }
     : {};
-  const readingConfig = getConfig(store, secrets);
+  // 「思考」与「回答」分模型：分析模型承接批次阅读/审计，写作模型只负责最终回答。
+  // 任一用途未单独配置就回退会话模型，老配置行为完全不变。
+  const readingConfig = resolveReadingChatConfig(store, secrets);
   const searchConfig = getSearchConfig(store, secrets);
   const plannedSearch = Boolean(input.search_token && input.search_token.trim());
   if (plannedSearch) {
@@ -496,6 +558,56 @@ async function answerQuestionInner(
   // 跨文献精读（corpus）的范围解析：显式 scope_documents 优先；否则按 scope_tags 圈；
   // 都没有 = 全部文献。放在联网判断之前：corpus 没有「当前文献」上下文，不能按文献优先。
   const corpusScope = input.reading_scope === 'corpus' || Boolean(corpusResume);
+
+  // 问「全书/整本书」时优先用已生成的分层摘要：缓存命中就不再把整本书重读一遍。
+  // 是否"在要整篇概述"交给路由模型判断（summaryIntent），不按固定问法正则匹配：
+  // 换一种说法也能覆盖；模型判断不可用时退回正常阅读。
+  // 摘要不存在时保持原来的按章/整篇阅读路径，不假装能一次概括全书。
+  if (
+    readingConfig &&
+    input.documentId &&
+    !corpusScope &&
+    route.summaryIntent === true
+  ) {
+    const cached = readCachedBookSummary(store, input.documentId);
+    if (cached && cached.content.trim()) {
+      try {
+        const document = store.getDocument(input.documentId);
+        const answer = await callChatModel(
+          readingConfig,
+          '你是学术文献助手。下面给出这本书的「全书摘要」（由分层章节摘要合并而来，属于摘要层，不是逐字原文）。' +
+            '请据此回答用户的问题：只使用摘要里出现的信息与页码范围，不要编造；' +
+            '摘要没有覆盖的内容要明确说明“摘要里没有提到”，并建议用户到对应章节核对。',
+          `书目：${document?.name ?? ''}\n\n全书摘要：\n${cached.content}\n\n用户问题：${question}`,
+          answerOutputTokens(store),
+          signal
+        );
+        return {
+          answer,
+          sources: cached.blocks.map((block) => ({
+            documentId: input.documentId!,
+            documentName: document?.name ?? '',
+            page: block.page,
+            snippet: `${block.title}（第 ${block.page}–${block.end_page} 页）`,
+            quotes: []
+          })),
+          plan,
+          routing,
+          route_note: routeNote,
+          answer_mode: 'reading',
+          reading_scope: 'auto',
+          reading_rigor: input.reading_rigor ?? 'auto',
+          model_knowledge: input.source_policy !== 'document_only',
+          web_search: false,
+          notice:
+            '本轮基于已生成的全书摘要回答（摘要层，不是逐字原文）；具体论断请回到对应章节核对。'
+        };
+      } catch (error) {
+        if ((error as { name?: string } | null)?.name === 'AbortError') throw error;
+        // 摘要问答失败就退回正常阅读，不阻断本轮。
+      }
+    }
+  }
   // 有明确文献、且路由判定要读文献时，不能让任何联网近路把回答整体改成「仅联网结果」：
   // 客户端在提问前会先生成搜索计划，计划里的查询词并不等于「本轮不要读文献」。
   // 先读文献，网页只在读后审计按论断缺口补充；否则「概括本文」会被搜索摘要顶替，

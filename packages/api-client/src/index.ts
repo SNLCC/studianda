@@ -82,6 +82,9 @@ import type {
   ReadingPlanRecord,
   ReadingTaskSummary,
   PlannedReadingPreview,
+  BookSummaryJob,
+  BookSummaryPlan,
+  BookSummaryResult,
   SearchHit,
   SearchRequest,
   SettingsMap,
@@ -401,6 +404,18 @@ export interface ApiClient {
     sessionId?: string
   ): Promise<{ ok: boolean; removed: number }>;
   listReadingTasks(documentId: string): Promise<ReadingTaskSummary[]>;
+  /** 全书摘要：计划 + 缓存状态 + 已生成结果（不调用模型）。 */
+  getBookSummary(documentId: string): Promise<{
+    plan: BookSummaryPlan;
+    job: BookSummaryJob;
+    result: BookSummaryResult | null;
+    overview?: string;
+  }>;
+  /** 开始/继续生成全书摘要（后台任务；已缓存分块直接复用）。 */
+  startBookSummary(documentId: string): Promise<{ job: BookSummaryJob; plan: BookSummaryPlan }>;
+  cancelBookSummary(documentId: string): Promise<BookSummaryJob>;
+  /** 清空某篇文献的全书摘要缓存。 */
+  resetBookSummary(documentId: string): Promise<{ ok: boolean }>;
   createNote(input: CreateNoteInput): Promise<NoteRecord>;
   updateNote(id: string, input: UpdateNoteInput): Promise<NoteRecord>;
   deleteNote(id: string): Promise<void>;
@@ -1429,6 +1444,31 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       request<ReadingTaskSummary[]>(
         `/documents/${encodeURIComponent(documentId)}/reading-tasks`
       ),
+
+    getBookSummary: (documentId) =>
+      request<{
+        plan: BookSummaryPlan;
+        job: BookSummaryJob;
+        result: BookSummaryResult | null;
+        overview?: string;
+      }>(`/documents/${encodeURIComponent(documentId)}/book-summary`),
+
+    startBookSummary: (documentId) =>
+      request<{ job: BookSummaryJob; plan: BookSummaryPlan }>(
+        `/documents/${encodeURIComponent(documentId)}/book-summary/start`,
+        { method: 'POST', body: '{}' }
+      ),
+
+    cancelBookSummary: (documentId) =>
+      request<BookSummaryJob>(
+        `/documents/${encodeURIComponent(documentId)}/book-summary/cancel`,
+        { method: 'POST', body: '{}' }
+      ),
+
+    resetBookSummary: (documentId) =>
+      request<{ ok: boolean }>(`/documents/${encodeURIComponent(documentId)}/book-summary`, {
+        method: 'DELETE'
+      }),
 
     createNote: (input) =>
       request<NoteRecord>('/notes', {

@@ -13,7 +13,9 @@ const LABELS: Record<ModelServiceKind, string> = {
   asr: '语音识别',
   tts: '语音生成',
   vision: '视觉读页',
-  omni: '全模态'
+  omni: '全模态',
+  analysis: '分析模型',
+  writing: '写作模型'
 };
 
 /**
@@ -32,6 +34,10 @@ function modelSupportsKind(
       model.capabilities.includes('translation')
     );
   }
+  // 分析/写作模型就是会话模型的两种用途，不需要单独标注的能力。
+  if (kind === 'analysis' || kind === 'writing') {
+    return model.capabilities.includes('chat') || model.capabilities.includes('omni');
+  }
   if (model.capabilities.includes(kind)) return true;
   if (!model.capabilities.includes('omni')) return false;
   // 全模态包含会话/视觉/语音识别（音频输入）；语音合成仍是独立能力。
@@ -44,7 +50,8 @@ export function ModelUsagePanel({
   description,
   inlineDescription,
   hint,
-  notice
+  notice,
+  emptyLabel
 }: {
   api: ApiClient;
   kind: ModelServiceKind;
@@ -56,6 +63,8 @@ export function ModelUsagePanel({
   hint?: string;
   /** 触发外部服务时的提示。 */
   notice?: string;
+  /** 平台下拉里"空值"的文案；分析/写作模型未选时是"跟随会话模型"，不是禁用。 */
+  emptyLabel?: string;
 }): JSX.Element {
   const queryClient = useQueryClient();
   const { notify } = useSettingsFeedback();
@@ -115,7 +124,7 @@ export function ModelUsagePanel({
             });
           }}
         >
-          <option value="">不启用外部服务</option>
+          <option value="">{emptyLabel ?? '不启用外部服务'}</option>
           {connections
             .filter((connection) =>
               connection.models.some((model) => modelSupportsKind(kind, model))

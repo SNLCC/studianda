@@ -103,6 +103,8 @@ const SETTINGS_NAV: Array<{
     group: '会话与检索',
     items: [
       { label: '会话模型', target: '会话模型' },
+      { label: '分析模型', target: '分析模型' },
+      { label: '写作模型', target: '写作模型' },
       { label: 'Embedding / Rerank', target: 'Embedding 与 Rerank' },
       { label: '联网搜索', target: '联网搜索' }
     ]
@@ -1671,6 +1673,22 @@ function SettingsViewContent({
         api={api}
         kind="chat"
         inlineDescription="会话、阅读对话，以及选择交给模型规划时的联网搜索规划使用的模型。"
+      />
+
+      <ModelUsagePanel
+        api={api}
+        kind="analysis"
+        inlineDescription="读文献时的分析模型（批次阅读、证据审计、回读规划、会话压缩）。"
+        hint="可深度思考的模型放在这里：它负责“读”和“核对”，输出的是中间材料（批次记录/审计），不是给用户看的最终回答。未选择时使用会话模型。"
+        emptyLabel="跟随会话模型（不单独配置）"
+      />
+
+      <ModelUsagePanel
+        api={api}
+        kind="writing"
+        inlineDescription="写出最终回答的写作模型（综合与依据证据的改写）。"
+        hint="建议选可关闭深度思考的模型（如 DeepSeek 官方、MiniMax-M3）：写入时不会把输出预算花在思维链上，回答长度和稳定性都更好。强制思考的平台（如 MiniMax-M3.1-Flash）会自动压到最低思考深度。未选择时使用会话模型。"
+        emptyLabel="跟随会话模型（不单独配置）"
       />
 
       <section className="kr-settings__section">

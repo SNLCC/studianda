@@ -182,6 +182,8 @@ const UNBOUND_LABELS: Record<string, string> = {
   tts: '语音生成',
   vision: '视觉读页',
   omni: '全模态',
+  analysis: '分析模型',
+  writing: '写作模型',
   'speech:asr': '语音识别',
   'speech:tts': '语音播报',
   parsing: 'PDF 与文字识别'
@@ -276,6 +278,15 @@ export function saveModelServices(
       for (const assignment of removedAssignments) {
         if (assignment.connectionId !== removedId) continue;
         const kind = assignment.kind;
+        // 分析/写作模型没有自己的模型能力：解绑后自动回退会话模型，不是"未配置"。
+        if (kind === 'analysis' || kind === 'writing') {
+          unbound.push({
+            kind,
+            label: UNBOUND_LABELS[kind] ?? kind,
+            result: '已改回会话模型'
+          });
+          continue;
+        }
         if (kind !== 'chat' && kind !== 'embedding' && kind !== 'rerank') continue;
         unbound.push({
           kind,
@@ -343,7 +354,10 @@ export function saveModelServices(
       unbound.push({
         kind,
         label: UNBOUND_LABELS[kind] ?? kind,
-        result: `模型「${assignment.model}」已删除，已自动解绑，需要重新选择模型`
+        result:
+          kind === 'analysis' || kind === 'writing'
+            ? `模型「${assignment.model}」已删除，已改回会话模型`
+            : `模型「${assignment.model}」已删除，已自动解绑，需要重新选择模型`
       });
     }
     // 语音设置里选中的该模型：改回本机 Windows（与删除平台时的降级一致）。
@@ -396,7 +410,9 @@ export function saveModelServices(
       (item) => item.name === assignment.model || item.id === assignment.model
     );
     if (!model || model.capabilities.length === 0) continue;
-    const required = kind === 'translation' ? 'chat' : kind;
+    // 分析/写作模型是会话模型的两种用途，不需要单独标注能力。
+    const required =
+      kind === 'translation' || kind === 'analysis' || kind === 'writing' ? 'chat' : kind;
     // 旧配置里可能还留着历史「翻译」能力标注；翻译实际使用会话模型，两者都接受。
     const supported =
       kind === 'translation' && model.capabilities.includes('translation')

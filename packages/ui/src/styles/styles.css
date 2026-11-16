@@ -12772,3 +12772,52 @@ details.kr-outline2__card > summary::-webkit-details-marker {
 .kr-standalone__editor > .kr-standalone__tag-error {
   flex: none;
 }
+
+/* ȫ��ժҪ��������Ϣ�����ڣ���Ԥ������� */
+.kr-book-summary {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(120, 110, 90, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.kr-book-summary__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.kr-book-summary__result summary {
+  cursor: pointer;
+  font-size: 13px;
+}
+.kr-book-summary__content {
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.7;
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  background: rgba(120, 110, 90, 0.06);
+  border-radius: 8px;
+}
+.kr-book-summary__actions {
+  display: flex;
+  gap: 8px;
+}
+.kr-book-summary__chapters {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.kr-book-summary__chapters .kr-link-button {
+  text-align: left;
+  font-size: 13px;
+}
