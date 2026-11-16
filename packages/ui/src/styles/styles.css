@@ -6501,6 +6501,23 @@ font-weight: 500;
   /* 选择框优先保宽度：宁可整组换行，也不把「跨文献精读」压成省略号。 */
   flex: 0 0 auto;
 }
+.kr-chat__reading-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--kr-ink-faint);
+  white-space: nowrap;
+}
+.kr-chat__reading-field > span {
+  flex: none;
+  font-size: var(--kr-fs-micro);
+}
+.kr-chat__reading-field > select {
+  flex: 0 1 auto;
+  min-width: 0;
+}
 .kr-chat__reading-options > span {
   display: none;
 }
@@ -7912,33 +7929,33 @@ font-size: var(--kr-fs-body);
   align-items: center;
   gap: 1px;
   flex: none;
-  opacity: 0;
-  pointer-events: none;
+  /* 重命名/删除常显但降低存在感：只靠 :hover 才出现时，用户尤其触控/高分屏
+     很容易完全找不到这两个入口，只能看着文件夹没法管理。 */
+  opacity: 0.62;
   transition: opacity 120ms ease;
 }
 .kr-folder:hover .kr-folder__tools,
 .kr-folder:focus-within .kr-folder__tools {
   opacity: 1;
-  pointer-events: auto;
 }
 .kr-folder__tool {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  min-width: 22px;
-  height: 22px;
-  min-height: 22px;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
   padding: 0;
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: var(--kr-ink-faint);
+  color: var(--kr-ink-soft);
 }
 .kr-folder__tool svg {
   display: block;
-  width: 13px;
-  height: 13px;
+  width: 14px;
+  height: 14px;
 }
 .kr-folder__tool:hover {
   background: var(--kr-paper-raised);
@@ -10456,13 +10473,11 @@ font-size: var(--kr-fs-body);
 
 /* ---- 会话：笔记/批注作为补充材料（本轮新增；append-only，不改既有规则） ---- */
 .kr-chat__memory-toggle {
-  grid-column: 1 / -1;
-  /* 阅读选项容器是 flex（见 .kr-chat__reading-options）：笔记/批注仍单独占一行。 */
-  flex: 1 0 100%;
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  margin-top: 2px;
+  flex: 0 0 auto;
+  margin-top: 0;
   color: var(--kr-ink-faint);
   font-size: var(--kr-fs-micro);
   line-height: 1.4;

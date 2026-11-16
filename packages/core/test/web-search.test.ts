@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { SecretStore } from '../src/secrets.js';
+import { saveModelServices } from '../src/model-services.js';
 import { Store } from '../src/store.js';
 import {
   getSearchConfig,
@@ -221,12 +222,15 @@ describe('web search', () => {
   it('requires a key for deepseek and rejects search when permission is off', async () => {
     saveSearchConfig(store, secrets, {
       provider: 'deepseek',
+      connection_id: '',
       permission: 'review',
       clear_key: true,
       send_question: false,
       fetch_content: false
     });
-    await expect(searchWeb(store, secrets, 'query')).rejects.toThrow('请先配置搜索平台密钥');
+    await expect(searchWeb(store, secrets, 'query')).rejects.toThrow(
+      '请先在设置里选择已配置的 DeepSeek 服务'
+    );
 
     saveSearchConfig(store, secrets, { provider: 'deepseek', permission: 'off', api_key: 'key' });
     await expect(searchWeb(store, secrets, 'query')).rejects.toThrow('联网搜索已在隐私权限中关闭');
@@ -348,5 +352,54 @@ describe('web search', () => {
     const results = await searchWebQueries(store, secrets, ['a', 'b']);
     expect(results).toHaveLength(1);
     expect(results[0]!.url).toBe('https://example.com/a');
+  });
+
+  it('DeepSeek 复用模型服务连接：地址与 API Key 都取自连接', async () => {
+    saveModelServices(store, {
+      connections: [
+        {
+          id: 'conn-deepseek-search',
+          name: 'DeepSeek 搜索服务',
+          platform: 'deepseek',
+          baseUrl: 'https://search-from-connection.test/',
+          models: []
+        }
+      ]
+    });
+    secrets.set('platform.conn-deepseek-search.api_key', 'connection-key');
+    const saved = saveSearchConfig(store, secrets, {
+      provider: 'deepseek',
+      connection_id: 'conn-deepseek-search',
+      permission: 'review'
+    });
+    expect(saved).toMatchObject({
+      provider: 'deepseek',
+      connection_id: 'conn-deepseek-search',
+      base_url: 'https://search-from-connection.test',
+      has_key: true
+    });
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (input: unknown, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return ok({ results: [] });
+    });
+    try {
+      await searchWeb(store, secrets, 'query');
+      expect(calls[0]!.url).toBe('https://search-from-connection.test/v1/tools/search');
+      expect((calls[0]!.init!.headers as Record<string, string>).Authorization).toBe(
+        'Bearer connection-key'
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('选择了不存在的模型服务连接时拒绝保存', () => {
+    expect(() =>
+      saveSearchConfig(store, secrets, {
+        provider: 'deepseek',
+        connection_id: 'missing-connection'
+      })
+    ).toThrow('所选的 DeepSeek 服务不存在');
   });
 });

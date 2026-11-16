@@ -5,7 +5,7 @@ import type {
   SearchPlanRequest,
   SearchResult
 } from '@studianda/shared';
-import { resolveModelService } from './model-services.js';
+import { resolveModelConnection, resolveModelService } from './model-services.js';
 import { chatOutputOptions, thinkingOptions } from './model-protocol.js';
 import { assertEndpointTransport } from './net-policy.js';
 import type { SecretStore } from './secrets.js';
@@ -34,13 +34,30 @@ export function getSearchConfig(
   const settings = store.getSettings();
   const storedProvider = settings['search.provider'];
   const provider = readSearchProvider(storedProvider);
+  const storedConnectionId =
+    provider === 'deepseek' ? (settings['search.connection_id'] ?? '').trim() : '';
+  // DeepSeek 搜索复用「模型服务」里已配置的连接：地址与密钥都从连接取，
+  // 不再要求用户为搜索单独保存一份 API Key。
+  const connection = storedConnectionId
+    ? resolveModelConnection(store, secrets, storedConnectionId)
+    : null;
   let baseUrl = (settings['search.base_url'] ?? '').trim().replace(/\/+$/, '');
   if (provider === 'tavily') baseUrl = '';
+  else if (connection) baseUrl = connection.baseUrl;
   else if (storedProvider !== 'deepseek' || !baseUrl) baseUrl = DEEPSEEK_BASE_URL;
+  const legacyKey = secrets.get('search.api_key')?.trim() ?? '';
+  // 选了连接就以连接为准：连接没有密钥时不要把旧搜索密钥拿来顶替（可能属于别的地址）。
+  const key =
+    provider === 'deepseek'
+      ? storedConnectionId
+        ? connection?.apiKey ?? ''
+        : legacyKey
+      : legacyKey;
   return {
     provider,
     base_url: baseUrl,
-    has_key: Boolean(secrets.get('search.api_key')?.trim()),
+    connection_id: storedConnectionId,
+    has_key: Boolean(key),
     permission:
       settings['search.permission'] === 'off' || settings['search.permission'] === 'auto'
         ? settings['search.permission']
@@ -76,10 +93,20 @@ export function saveSearchConfig(
   const current = getSearchConfig(store, secrets);
   const provider = input.provider ?? current.provider;
   if (provider !== 'deepseek' && provider !== 'tavily') throw new Error('不支持的搜索平台');
+  // DeepSeek 可以指定一条已配置的「模型服务」连接：地址与 API Key 直接复用它。
+  // Tavily 没有对应的模型服务，固定使用自己的密钥。
+  const connectionId =
+    provider === 'deepseek' ? (input.connection_id ?? current.connection_id).trim() : '';
+  let connectedBaseUrl = '';
+  if (connectionId) {
+    const connection = resolveModelConnection(store, secrets, connectionId);
+    if (!connection) throw new Error('所选的 DeepSeek 服务不存在，请重新选择');
+    connectedBaseUrl = connection.baseUrl;
+  }
   // DeepSeek 允许覆盖服务地址（默认官方端点，便于走代理）；Tavily 使用固定端点。
   let baseUrl = '';
   if (provider === 'deepseek') {
-    baseUrl = (input.base_url ?? current.base_url).trim().replace(/\/+$/, '');
+    baseUrl = connectedBaseUrl || (input.base_url ?? current.base_url).trim().replace(/\/+$/, '');
     if (!baseUrl) baseUrl = DEEPSEEK_BASE_URL;
     let parsed: URL;
     try {
@@ -96,6 +123,7 @@ export function saveSearchConfig(
   else if (input.api_key?.trim()) secrets.set('search.api_key', input.api_key.trim());
   store.updateSettings({
     'search.provider': provider,
+    'search.connection_id': connectionId,
     'search.base_url': baseUrl,
     'search.permission': input.permission ?? current.permission,
     'search.followup': String(input.followup ?? current.followup),
@@ -244,13 +272,30 @@ export async function searchWeb(
 ): Promise<SearchResult[]> {
   const config = getSearchConfig(store, secrets);
   if (config.permission === 'off') throw new Error('联网搜索已在隐私权限中关闭');
-  const key = secrets.get('search.api_key')?.trim() ?? '';
-  if (!key) throw new Error('请先配置搜索平台密钥');
+  // DeepSeek：优先用所选模型服务连接的密钥与地址；没有连接时兼容旧配置的单独密钥。
+  const connection =
+    config.provider === 'deepseek' && config.connection_id
+      ? resolveModelConnection(store, secrets, config.connection_id)
+      : null;
+  const key =
+    config.provider === 'deepseek'
+      ? config.connection_id
+        ? connection?.apiKey ?? ''
+        : secrets.get('search.api_key')?.trim() ?? ''
+      : secrets.get('search.api_key')?.trim() ?? '';
+  if (!key) {
+    throw new Error(
+      config.provider === 'deepseek'
+        ? '请先在设置里选择已配置的 DeepSeek 服务'
+        : '请先配置搜索平台密钥'
+    );
+  }
+  const baseUrl = connection?.baseUrl || config.base_url;
   // 问题原文外发是一个独立开关（和“允许交给会话模型规划”不是一回事）。
   const oriQuestion = config.send_question ? clean(options.question) : '';
   const response =
     config.provider === 'deepseek'
-      ? await fetchDeepSeek(key, config.base_url, query, oriQuestion || undefined)
+      ? await fetchDeepSeek(key, baseUrl, query, oriQuestion || undefined)
       : await fetchTavily(key, query);
   const payload = await response.json();
   const rows = rowsOf(payload);

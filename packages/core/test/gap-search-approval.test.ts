@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { answerQuestion } from '../src/chat.js';
 import { SecretStore } from '../src/secrets.js';
 import { Store } from '../src/store.js';
+import { createSearchPlan } from '../src/web-search.js';
 
 /**
  * 联网补查：review 档“回答后确认再补查”、followup 两轮、联网补充审计与 merge。
@@ -113,6 +114,8 @@ function mockNetwork(): Counts {
         queries: [],
         dimensions: [{ code: 'D1', label: '概念界定' }]
       });
+    } else if (system.includes('搜索规划器')) {
+      content = JSON.stringify({ queries: ['概括本文 方法'] });
     } else if (system.includes('READING_BATCH')) {
       content = JSON.stringify({
         analysis: '本批要点：文献给出了一条需要外部依据的论断。',
@@ -322,5 +325,26 @@ describe('review 档回答后确认补查', () => {
     expect(searchCalls).toBeGreaterThan(0);
     expect(response.answer ?? '').toContain('网页补充回答');
     expect(response.notice ?? '').toContain('联网补充未完成复核');
+  });
+});
+
+describe('有文献时联网不顶替文献', () => {
+  it('路由判定不联网时，已确认的搜索计划也不走「仅联网回答」', async () => {
+    configureSearch('auto');
+    store.updateSettings({ 'search.planner': 'true' });
+    mockNetwork();
+    const question = '概括本文';
+    const plan = await createSearchPlan(store, secrets, { question });
+    expect(plan.token).toBeTruthy();
+    const response = (await answerQuestion(store, secrets, {
+      ...baseInput(),
+      question,
+      confirmSearch: true,
+      search_token: plan.token
+    })) as ChatResponse;
+    // 不能因为带上了搜索计划就返回「只根据网页摘要」的答案：先读文献。
+    expect(response.answer_mode).not.toBe('web');
+    expect(response.answer ?? '').not.toBe('联网答案');
+    expect(response.notice ?? '').not.toContain('已按确认的搜索计划');
   });
 });

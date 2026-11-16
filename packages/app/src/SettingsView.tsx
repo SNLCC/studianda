@@ -297,6 +297,7 @@ function SettingsViewContent({
   const [webdavPassword, setWebdavPassword] = useState('');
   const [searchProvider, setSearchProvider] = useState<'deepseek' | 'tavily'>('deepseek');
   const [searchBaseUrl, setSearchBaseUrl] = useState('');
+  const [searchConnectionId, setSearchConnectionId] = useState('');
   const [searchPermission, setSearchPermission] = useState<'off' | 'review' | 'auto'>('review');
   const [searchPrivacyMode, setSearchPrivacyMode] = useState<
     'keywords-only' | 'question' | 'scope'
@@ -694,10 +695,26 @@ function SettingsViewContent({
     queryFn: () => api.getSearchConfig()
   });
 
+  // 联网搜索复用「模型服务」里的 DeepSeek 连接：地址与 API Key 都取那条连接，
+  // 不再要求用户为搜索单独保存一份密钥。
+  const searchDeepseekConnections = (speechServicesQuery.data?.connections ?? []).filter(
+    (connection) => {
+      if ((connection.platform ?? '').toLowerCase() === 'deepseek') return true;
+      try {
+        return new URL(connection.baseUrl).hostname.toLowerCase() === 'api.deepseek.com';
+      } catch {
+        return false;
+      }
+    }
+  );
+  const searchConnection =
+    searchDeepseekConnections.find((connection) => connection.id === searchConnectionId) ?? null;
+
   useEffect(() => {
     if (!searchQueryConfig.data) return;
     setSearchProvider(searchQueryConfig.data.provider);
     setSearchBaseUrl(searchQueryConfig.data.base_url);
+    setSearchConnectionId(searchQueryConfig.data.connection_id);
     setSearchPermission(searchQueryConfig.data.permission);
     setSearchPlanner(searchQueryConfig.data.planner);
     setSearchPrivacyMode(searchQueryConfig.data.privacy_mode);
@@ -723,6 +740,7 @@ function SettingsViewContent({
       api.updateSearchConfig({
         provider: searchProvider,
         base_url: searchBaseUrl,
+        connection_id: searchConnectionId,
         permission: searchPermission,
         privacy_mode: searchPrivacyMode,
         planner: searchPlanner,
@@ -1647,10 +1665,6 @@ function SettingsViewContent({
       </nav>
 
       <div className="kr-settings__content">
-      <p className="kr-muted">
-        提示：模型、解析、翻译、联网搜索、语音、OCR 语言包以及 Zotero/WebDAV 等由对应外部服务提供；
-        使用这些功能时相关内容会发送到对应服务，并需遵守其服务条款与隐私政策。
-      </p>
       <ModelServicesPanel api={api} adapter={adapter} />
 
       <ModelUsagePanel
@@ -2489,32 +2503,54 @@ function SettingsViewContent({
         {searchProvider === 'deepseek' ? (
           <>
             <label>
-              <span>DeepSeek 搜索服务地址（默认官方入口）</span>
-              <input
-                value={searchBaseUrl}
-                onChange={(event) => setSearchBaseUrl(event.target.value)}
-                placeholder="https://api.deepseek.com"
-              />
+              <span>DeepSeek 服务</span>
+              <select
+                value={searchConnectionId}
+                onChange={(event) => setSearchConnectionId(event.target.value)}
+              >
+                <option value="">选择已配置的 DeepSeek 服务</option>
+                {searchConnectionId &&
+                !searchDeepseekConnections.some(
+                  (connection) => connection.id === searchConnectionId
+                ) ? (
+                  <option value={searchConnectionId}>已保存的服务（可能已删除）</option>
+                ) : null}
+                {searchDeepseekConnections.map((connection) => (
+                  <option key={connection.id} value={connection.id}>
+                    {connection.name}
+                    {connection.hasKey === false ? '（未保存密钥）' : ''}
+                  </option>
+                ))}
+              </select>
             </label>
             <p className="kr-muted">
-              使用 DeepSeek 官方 Search API（<code>POST /v1/tools/search</code>），
-              需要填写 DeepSeek API Key；可在{' '}
-              <a href="https://api-docs.deepseek.com/zh-cn/guides/search" target="_blank" rel="noreferrer">
-                官方文档
-              </a>{' '}
-              查看搜索语法与计费说明。
+              联网搜索复用所选服务的地址与 API Key（在「平台与模型」里配置），不需要再次填写。
             </p>
+            {searchDeepseekConnections.length === 0 ? (
+              <p className="kr-muted">
+                还没有可用的 DeepSeek 服务：请先在「平台与模型」里添加 DeepSeek 平台并保存 API Key。
+              </p>
+            ) : null}
+            {searchConnection && searchConnection.hasKey === false ? (
+              <p className="kr-page-error">所选服务还没有保存 API Key，联网搜索会失败。</p>
+            ) : null}
+            {!searchConnectionId && searchQueryConfig.data?.has_key ? (
+              <p className="kr-muted">
+                当前仍在使用单独保存的搜索密钥（旧配置）；选择上面的服务后会改用它。
+              </p>
+            ) : null}
           </>
-        ) : null}
-        <label>
-          <span>API Key</span>
-          <input
-            type="password"
-            value={searchKey}
-            onChange={(event) => setSearchKey(event.target.value)}
-            placeholder={searchQueryConfig.data?.has_key ? '已保存，留空保留' : '必填，只存本机'}
-          />
-        </label>
+        ) : (
+          <label>
+            <span>Tavily API Key</span>
+            <input
+              type="password"
+              value={searchKey}
+              onChange={(event) => setSearchKey(event.target.value)}
+              placeholder={searchQueryConfig.data?.has_key ? '已保存，留空保留' : '必填，只存本机'}
+            />
+          </label>
+        )}
         <label>
           <span>权限</span>
           <select

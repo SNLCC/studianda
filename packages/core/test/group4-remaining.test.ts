@@ -94,10 +94,10 @@ describe('语音音色按连接获取', () => {
     expect(list.source).toBe('官方接口');
   });
 
-  it('其它平台如实说明没有音色列表接口', async () => {
+  it('其它平台返回空音色列表，不再附加音色列表接口说明', async () => {
     const list = await voicesForSpeechConnection('https://api.example.com/v1', 'k', 'm');
     expect(list.voices).toHaveLength(0);
-    expect(list.note).toContain('没有公开的音色列表');
+    expect(list.note).toBe('');
   });
 
   it('模型模式只按选中的平台连接取音色，不回退到旧 MiMo 地址', async () => {

@@ -493,9 +493,18 @@ async function answerQuestionInner(
   // 用户改写过的联网查询词优先（web_query）；没有时用问题本身。
   const webQuery = input.web_query?.trim() || question;
   const keywordQuery = keywordOnly ? extractKeywords(webQuery) : question;
+  // 跨文献精读（corpus）的范围解析：显式 scope_documents 优先；否则按 scope_tags 圈；
+  // 都没有 = 全部文献。放在联网判断之前：corpus 没有「当前文献」上下文，不能按文献优先。
+  const corpusScope = input.reading_scope === 'corpus' || Boolean(corpusResume);
+  // 有明确文献、且路由判定要读文献时，不能让任何联网近路把回答整体改成「仅联网结果」：
+  // 客户端在提问前会先生成搜索计划，计划里的查询词并不等于「本轮不要读文献」。
+  // 先读文献，网页只在读后审计按论断缺口补充；否则「概括本文」会被搜索摘要顶替，
+  // 看起来就像阅读伙伴完全没看文献。
+  const documentFirst = Boolean(input.documentId) && route.document && !corpusScope;
   const shouldSearch =
     readingConfig &&
     !forcedByDocumentTerms &&
+    !documentFirst &&
     (plannedSearch
       ? input.source_policy !== 'document_only'
       : searchConfig.permission !== 'off' &&
@@ -605,7 +614,6 @@ async function answerQuestionInner(
   }
   // 跨文献精读（corpus）的范围解析：显式 scope_documents 优先；否则按 scope_tags 圈；
   // 都没有 = 全部文献。
-  const corpusScope = input.reading_scope === 'corpus' || Boolean(corpusResume);
   const allDocumentsScope =
     !corpusResume &&
     !(input.scope_documents && input.scope_documents.length > 0) &&

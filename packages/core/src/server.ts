@@ -1757,6 +1757,8 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       return saveSearchConfig(options.store, options.secrets, {
         provider: body.provider as never,
         base_url: typeof body.base_url === 'string' ? body.base_url : undefined,
+        connection_id:
+          typeof body.connection_id === 'string' ? body.connection_id : undefined,
         permission: body.permission as never,
         followup: typeof body.followup === 'boolean' ? body.followup : undefined,
         planner: typeof body.planner === 'boolean' ? body.planner : undefined,

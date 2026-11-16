@@ -40,18 +40,16 @@ export function getSpeechConfig(
       : settings['speech.tts_mode'] === 'model'
         ? 'model'
         : 'system';
-  // 流式朗读只对 DeepSeek 官方连接开放：其它平台没有对应的 WebSocket 接口。
-  // 这里不能调用 speechStreamingAvailable（它会反过来调用本函数）。
-  const ttsStreaming = ((): boolean => {
-    if (ttsMode === 'system') return false;
-    try {
-      const config = profile(store, secrets, 'tts');
-      return Boolean(config.key) && speechProtocol(config.baseUrl) === 'deepseek';
-    } catch {
-      return false;
-    }
-  })();
-  return {
+  const asrMode: SpeechConfigRecord['asr_mode'] =
+    settings['speech.asr_mode'] === 'custom'
+      ? 'custom'
+      : settings['speech.asr_mode'] === 'model'
+        ? 'model'
+        : 'system';
+  // 先拼出「不依赖派生判断」的配置，再按它解析实际要用的服务。
+  // 不能在派生判断里调用 profile()：profile() 会重新调用本函数，tts_mode 为
+  // model/custom 时会形成递归，靠栈溢出被 catch 兜住，既慢又不可靠。
+  const base: SpeechConfigRecord = {
     input_enabled: bool('speech.input_enabled', DEFAULTS.input_enabled),
     output_enabled: bool('speech.output_enabled', DEFAULTS.output_enabled),
     auto_send: bool('speech.auto_send', DEFAULTS.auto_send),
@@ -61,12 +59,7 @@ export function getSpeechConfig(
     trigger_mode: settings['speech.trigger_mode'] === 'click' ? 'click' : 'hold',
     direct_audio: settings['speech.direct_audio'] === 'true',
     language: settings['speech.language'] ?? DEFAULTS.language,
-    asr_mode:
-      settings['speech.asr_mode'] === 'custom'
-        ? 'custom'
-        : settings['speech.asr_mode'] === 'model'
-          ? 'model'
-          : 'system',
+    asr_mode: asrMode,
     tts_mode: ttsMode,
     asr_url: settings['speech.asr_url'] ?? '',
     tts_url: settings['speech.tts_url'] ?? '',
@@ -77,8 +70,30 @@ export function getSpeechConfig(
     voice: settings['speech.voice'] ?? '',
     has_asr_key: Boolean(secrets.get('speech.asr_key')?.trim()),
     has_tts_key: Boolean(secrets.get('speech.tts_key')?.trim()),
-    tts_streaming: ttsStreaming
+    asr_ready: false,
+    tts_streaming: false
   };
+  // 流式朗读只对带密钥的 DeepSeek 官方连接开放：其它平台没有对应的 WebSocket 接口。
+  const ttsStreaming = ((): boolean => {
+    if (ttsMode === 'system') return false;
+    try {
+      const config = profileFromConfig(store, secrets, base, 'tts');
+      return Boolean(config.key) && speechProtocol(config.baseUrl) === 'deepseek';
+    } catch {
+      return false;
+    }
+  })();
+  // 语音输入是否真的可用：模型服务模式的密钥在平台连接里，has_asr_key 为空是正常的。
+  const asrReady = ((): boolean => {
+    if (asrMode === 'system') return true;
+    try {
+      const config = profileFromConfig(store, secrets, base, 'asr');
+      return Boolean(config.baseUrl && config.model);
+    } catch {
+      return false;
+    }
+  })();
+  return { ...base, asr_ready: asrReady, tts_streaming: ttsStreaming };
 }
 
 export function saveSpeechConfig(
@@ -294,7 +309,7 @@ export async function voicesForSpeechConnection(
   return {
     voices: [],
     source: '',
-    note: '该平台没有公开的音色列表接口；请按平台文档填写音色名称或音色 ID。'
+    note: ''
   };
 }
 
@@ -694,12 +709,12 @@ async function systemTranscribe(
  * 找不到连接时直接报「请选择平台」；模型名不属于当前平台时也明确报错，
  * 不能让请求悄悄回退到别的地址（那样会出现「设置成别的模型，实际还是 MiMo」）。
  */
-function profile(
+function profileFromConfig(
   store: Store,
   secrets: SecretStore,
+  config: SpeechConfigRecord,
   kind: 'asr' | 'tts'
 ): { baseUrl: string; model: string; key: string } {
-  const config = getSpeechConfig(store, secrets);
   if (config[`${kind}_mode`] === 'model') {
     const services = readModelServices(store);
     const connectionId = config[`${kind}_connection_id`];
@@ -737,6 +752,15 @@ function profile(
     model: config[`${kind}_model`],
     key: secrets.get(`speech.${kind}_key`)?.trim() ?? ''
   };
+}
+
+/** 按当前保存的配置解析识别/播报服务（调用方：识别与合成）。 */
+function profile(
+  store: Store,
+  secrets: SecretStore,
+  kind: 'asr' | 'tts'
+): { baseUrl: string; model: string; key: string } {
+  return profileFromConfig(store, secrets, getSpeechConfig(store, secrets), kind);
 }
 
 const MAX_WAV_BYTES = 8 * 1024 * 1024;

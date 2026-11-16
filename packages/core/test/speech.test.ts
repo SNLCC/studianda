@@ -338,3 +338,68 @@ describe('DeepSeek 语音（ASR / TTS / 流式可用性）', () => {
     expect(deepseekVoiceList().voices.map((voice) => voice.id)).toEqual(['stella', 'tide']);
   });
 });
+
+describe('语音输入可用性（asr_ready）', () => {
+  function useAsrConnection(): void {
+    saveModelServices(store, {
+      connections: [
+        {
+          id: 'conn-deepseek-asr',
+          name: 'DeepSeek 平台',
+          platform: 'deepseek',
+          baseUrl: 'https://api.deepseek.com',
+          models: [
+            {
+              id: 'deepseek-asr',
+              name: 'deepseek-asr',
+              capabilities: ['asr'],
+              source: 'preset',
+              enabled: true
+            }
+          ]
+        }
+      ]
+    });
+    secrets.set('platform.conn-deepseek-asr.api_key', 'platform-key');
+    saveSpeechConfig(store, secrets, { clear_asr: true });
+  }
+
+  it('模型服务模式：平台连接有密钥即可用，不要求另填识别密钥', () => {
+    useAsrConnection();
+    saveSpeechConfig(store, secrets, {
+      asr_mode: 'model',
+      asr_connection_id: 'conn-deepseek-asr',
+      asr_model: 'deepseek-asr'
+    });
+    const config = getSpeechConfig(store, secrets);
+    expect(config.has_asr_key).toBe(false);
+    expect(config.asr_ready).toBe(true);
+  });
+
+  it('模型服务模式：连接缺失或模型不存在时不可用', () => {
+    useAsrConnection();
+    saveSpeechConfig(store, secrets, {
+      asr_mode: 'model',
+      asr_connection_id: 'missing-connection',
+      asr_model: 'deepseek-asr'
+    });
+    expect(getSpeechConfig(store, secrets).asr_ready).toBe(false);
+  });
+
+  it('自定义服务：地址与模型齐全即视为可用（自建服务可以不填 Key）', () => {
+    saveSpeechConfig(store, secrets, {
+      asr_mode: 'custom',
+      asr_url: 'http://127.0.0.1:8000/v1',
+      asr_model: 'whisper-1',
+      clear_asr: true
+    });
+    const config = getSpeechConfig(store, secrets);
+    expect(config.has_asr_key).toBe(false);
+    expect(config.asr_ready).toBe(true);
+  });
+
+  it('系统语音始终可用', () => {
+    saveSpeechConfig(store, secrets, { asr_mode: 'system' });
+    expect(getSpeechConfig(store, secrets).asr_ready).toBe(true);
+  });
+});

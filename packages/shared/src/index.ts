@@ -957,6 +957,17 @@ export interface SpeechConfigRecord {
   has_asr_key: boolean;
   has_tts_key: boolean;
   /**
+   * 当前语音识别配置是否真的可用（只读、由 core 按模式解析）。
+   *
+   * - 系统语音：可用；
+   * - 模型服务：所选平台连接存在且能解析出服务地址与模型（Key 来自平台连接，不要求另填）；
+   * - 自定义服务：地址与模型齐全（部分自建服务不需要 Key）。
+   *
+   * 不能用 `has_asr_key` 判断：模型服务模式下识别密钥保存在平台连接里，
+   * 单独填写的 `speech.asr_key` 为空并不代表不可用。
+   */
+  asr_ready: boolean;
+  /**
    * 当前语音服务是否支持「边合成边播」（DeepSeek 官方 WebSocket）。
    * 只读、由 core 按连接地址计算，不落库。
    */
@@ -987,6 +998,12 @@ export interface SpeechSystemStatus {
 export interface SearchConfigRecord {
   provider: 'deepseek' | 'tavily';
   base_url: string;
+  /**
+   * DeepSeek 搜索复用的模型服务连接 id（只读解析：地址与 API Key 都取自该连接）。
+   *
+   * 空串表示沿用旧配置：单独保存的 `search.base_url` 与 `search.api_key`。
+   */
+  connection_id: string;
   has_key: boolean;
   permission: 'off' | 'review' | 'auto';
   followup: boolean;

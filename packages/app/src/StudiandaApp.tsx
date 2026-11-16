@@ -1098,6 +1098,14 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
   const folders = foldersQuery.data?.folders ?? [];
   const unfiledTotal = foldersQuery.data?.unfiled.counts.total ?? null;
 
+  // 文献集合每变一次（导入、移入回收站、恢复、彻底删除、改文件夹）就刷新侧栏文件夹计数。
+  // 只在 documents 真正更新后触发，文件夹自身的刷新不会反过来改 documents，不会成环。
+  const documentsRevision = documentsQuery.dataUpdatedAt;
+  useEffect(() => {
+    if (!documentsRevision) return;
+    void queryClient.invalidateQueries({ queryKey: ['folders'] });
+  }, [documentsRevision]);
+
   // 文件夹只收窄「文献库」的列表；回收站/Zotero 保持各自口径（回收站按分栏筛选，不按文件夹）。
   const folderScopedDocuments =
     showTrash || showZotero || folderId === null
@@ -8071,13 +8079,14 @@ function ReaderView({
     if (!speechConfig) return null;
     if (!speechConfig.input_enabled) return '语音输入未开启：请到设置 → 语音识别里开启';
     // 直接语音（全模态）由模型自己转写，不依赖本地 ASR 是否已配置；只有普通
-    // 「把语音转成文字填入输入框」才要求识别服务可用。
+    // 「把语音转成文字填入输入框」才要求识别服务可用。模型服务模式的密钥在平台
+    // 连接里，不能用 has_asr_key 判断（它只反映单独填写的识别密钥）。
     if (
       !speechConfig.direct_audio &&
       speechConfig.asr_mode !== 'system' &&
-      !speechConfig.has_asr_key
+      !speechConfig.asr_ready
     ) {
-      return '还没有可用的语音识别模型：请在设置 → 语音识别里填写识别服务与密钥';
+      return '还没有可用的语音识别服务：请在设置 → 语音识别里选择平台与模型，或填写自定义服务';
     }
     return null;
   })();

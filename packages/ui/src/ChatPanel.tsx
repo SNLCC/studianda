@@ -2167,23 +2167,26 @@ export function ChatPanel({
           <div className="kr-chat__reading-options">
             {/* 范围和「已选 N 篇」是一个不可拆分的组：窄侧栏下整组换行，不能拆成两行。 */}
             <div className="kr-chat__reading-group">
-              <select
-                value={readingScope}
-                onChange={(event) => {
-                  const value = event.target.value as typeof readingScope;
-                  setReadingScope(value);
-                  if (value === 'corpus') setScopeDialogOpen(true);
-                }}
-                aria-label="阅读范围"
-                title="阅读范围"
-              >
-                <option value="auto">{standalone ? '范围：库内检索' : '范围：自动'}</option>
-                {standalone ? null : <option value="local">范围：本页附近</option>}
-                {standalone ? null : <option value="document">范围：整篇</option>}
-                <option value="corpus">
-                  {standalone ? '范围：跨文献精读' : '范围：跨文献'}
-                </option>
-              </select>
+              <label className="kr-chat__reading-field">
+                <span>范围</span>
+                <select
+                  value={readingScope}
+                  onChange={(event) => {
+                    const value = event.target.value as typeof readingScope;
+                    setReadingScope(value);
+                    if (value === 'corpus') setScopeDialogOpen(true);
+                  }}
+                  aria-label="阅读范围"
+                  title="阅读范围"
+                >
+                  <option value="auto">{standalone ? '库内检索' : '自动'}</option>
+                  {standalone ? null : <option value="local">本页附近</option>}
+                  {standalone ? null : <option value="document">整篇</option>}
+                  <option value="corpus">
+                    {standalone ? '跨文献精读' : '跨文献'}
+                  </option>
+                </select>
+              </label>
               {readingScope === 'corpus' ? (
                 <button
                   type="button"
@@ -2198,44 +2201,53 @@ export function ChatPanel({
               ) : null}
             </div>
             {!standalone && chapters && chapters.length >= 2 ? (
-              <select
-                value={readingChapter}
-                onChange={(event) => setReadingChapter(event.target.value)}
-                aria-label="阅读章节"
-                title="著作按章阅读：自动选章，或指定读第几章"
-              >
-                <option value="">章：自动</option>
-                {chapters.map((chapter) => (
-                  <option key={chapter.index} value={String(chapter.index)}>
-                    第 {chapter.index} 章 {chapter.title.length > 14 ? `${chapter.title.slice(0, 14)}…` : chapter.title}
-                  </option>
-                ))}
-              </select>
+              <label className="kr-chat__reading-field">
+                <span>章</span>
+                <select
+                  value={readingChapter}
+                  onChange={(event) => setReadingChapter(event.target.value)}
+                  aria-label="阅读章节"
+                  title="著作按章阅读：自动选章，或指定读第几章"
+                >
+                  <option value="">自动</option>
+                  {chapters.map((chapter) => (
+                    <option key={chapter.index} value={String(chapter.index)}>
+                      第 {chapter.index} 章 {chapter.title.length > 14 ? `${chapter.title.slice(0, 14)}…` : chapter.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
             ) : null}
-            <select
-              value={readingRigor}
-              onChange={(event) =>
-                setReadingRigor(event.target.value as typeof readingRigor)
-              }
-              aria-label="阅读深度"
-              title="阅读深度"
-            >
-              <option value="auto">深度：自动</option>
-              <option value="fast">深度：快速</option>
-              <option value="standard">深度：标准</option>
-              <option value="exhaustive">深度：全面</option>
-            </select>
-            <select
-              value={sourcePolicy}
-              onChange={(event) =>
-                setSourcePolicy(event.target.value as typeof sourcePolicy)
-              }
-              aria-label="智能来源"
-              title="智能来源"
-            >
-              <option value="auto">来源：自动</option>
-              <option value="document_only">来源：仅文献</option>
-            </select>
+            <label className="kr-chat__reading-field">
+              <span>深度</span>
+              <select
+                value={readingRigor}
+                onChange={(event) =>
+                  setReadingRigor(event.target.value as typeof readingRigor)
+                }
+                aria-label="阅读深度"
+                title="阅读深度"
+              >
+                <option value="auto">自动</option>
+                <option value="fast">快速</option>
+                <option value="standard">标准</option>
+                <option value="exhaustive">全面</option>
+              </select>
+            </label>
+            <label className="kr-chat__reading-field">
+              <span>来源</span>
+              <select
+                value={sourcePolicy}
+                onChange={(event) =>
+                  setSourcePolicy(event.target.value as typeof sourcePolicy)
+                }
+                aria-label="智能来源"
+                title="智能来源"
+              >
+                <option value="auto">自动</option>
+                <option value="document_only">仅文献</option>
+              </select>
+            </label>
             {budgetSkipActive ? (
               <button
                 type="button"
@@ -2255,7 +2267,7 @@ export function ChatPanel({
                     独立会话会自动按需多步检索（只读），不需要额外开关；阅读伙伴不启用这套检索。
                   </p>
                 ) : (
-                  <p>范围：自动由问题判断；本页及相邻只读当前页附近；整篇读全文；跨文献按所选文献读。</p>
+                  <p>范围：自动由问题判断；本页及附近只读当前页附近；整篇读全文；跨文献按所选文献读。</p>
                 )}
                 <p>深度：快速不回读缺口；标准需要时回读一轮；全面核查最多三轮回读。</p>
                 <p>来源：仅文献时本轮不联网，也不补充模型知识。</p>
@@ -2328,7 +2340,7 @@ export function ChatPanel({
             ) : null}
             {speechDisabledReason ? (
               <span className="kr-chat__shortcut" title={speechDisabledReason}>
-                语音不可用：{speechDisabledReason}
+                语音未配置
               </span>
             ) : null}
             <span className="kr-chat__shortcut">
@@ -2352,9 +2364,8 @@ export function ChatPanel({
           </div>
         </form>
         <p className="kr-chat__privacy">
-          本地检索优先；启用模型服务后，问题与相关原文会发送到对应服务。
+          本地检索优先；启用模型服务后，问题与相关原文会发送到对应服务。回复内容仍需人工核对。
         </p>
-        <p className="kr-chat__privacy">回复内容仍需人工核对</p>
       </div>
 
       {scopeDialogOpen ? (
