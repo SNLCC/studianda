@@ -1,6 +1,7 @@
 import type { BudgetEstimate, DocumentCategory, ReadingPlanRecord } from '@studianda/shared';
 import { cost, sourceText, type ReadingSource } from './reading.js';
 import { planReading } from './reading-plan.js';
+import { observedThroughput } from './model-usage.js';
 import type { Store } from './store.js';
 
 /**
@@ -297,6 +298,9 @@ export function estimateTurnBudget(
   }
 
   const exceeded = pages > thresholds.pages || tokens > thresholds.tokens;
+  const sortedTurnPages = [...new Set(turnRows.map((row) => row.page))].sort(
+    (left, right) => left - right
+  );
   return {
     pages,
     tokens,
@@ -308,6 +312,26 @@ export function estimateTurnBudget(
     note: `${notes.join('；')}。`,
     scope,
     total_pages: totalPages,
-    max_batches: maxBatches
+    max_batches: maxBatches,
+    // 面向用户的两句话：读什么、要等多久。token / 批次数只留在 note 与字段里给专业用户。
+    ...(sortedTurnPages.length > 0
+      ? {
+          summary:
+            sortedTurnPages.length >= totalPages
+              ? `读全篇 · 第 1–${totalPages} 页`
+              : `读 ${sortedTurnPages.length} 页 · 第 ${sortedTurnPages[0]}–${sortedTurnPages.at(-1)} 页（共 ${totalPages} 页）`
+        }
+      : {}),
+    ...etaOf(tokens)
+  };
+}
+
+/** 由实测吞吐折算预计耗时；没有足够样本就不给（不拿常数假装估算）。 */
+function etaOf(tokens: number): { eta_seconds?: number; eta_basis?: string } {
+  const observed = observedThroughput();
+  if (!observed || observed.tokensPerSecond <= 0 || tokens <= 0) return {};
+  return {
+    eta_seconds: Math.max(1, Math.ceil(tokens / observed.tokensPerSecond)),
+    eta_basis: `按最近 ${observed.samples} 次调用的实测速度估算`
   };
 }

@@ -6,6 +6,7 @@ import { PDFDocument } from 'pdf-lib';
 import type { DocumentDetail, ReadingPlanRecord } from '@studianda/shared';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { budgetThresholds, estimateBudget, estimateBudgetForScope } from '../src/budget.js';
+import { recordModelUsage, resetThroughputSamples } from '../src/model-usage.js';
 import { SecretStore } from '../src/secrets.js';
 import { buildServer } from '../src/server.js';
 import { Store } from '../src/store.js';
@@ -386,7 +387,36 @@ describe('budget gate scope and thresholds', () => {
     expect(response.body).not.toContain('needs_confirmation');
   }, 120_000);
 
-  it('estimates this turn, not the whole book, for 整篇 scope', async () => {
+  it('estimates this turn, not the whole book, when the book does not fit one turn', async () => {
+    // 把上下文窗口压到 8k：整本 30 页装不进一轮，闸门必须按"本轮会读的页"估算而不是整本。
+    store.updateSettings({ 'reading.context_window': '8192', 'reading.output_reserve': '2048' });
+    try {
+      const response = await server.inject({
+        method: 'POST',
+        url: '/api/v1/chat/budget',
+        headers: headers(),
+        payload: { question: '这本书讲了什么？', documentId: bigDoc.id, reading_scope: 'document' }
+      });
+      expect(response.statusCode).toBe(200);
+      const body = response.json() as {
+        pages: number;
+        total_pages: number;
+        max_batches: number;
+        scope: string;
+        thresholds: { pages: number; tokens: number };
+      };
+      expect(body.scope).toBe('document');
+      expect(body.total_pages).toBe(bigDoc.pages);
+      expect(body.pages).toBeLessThan(bigDoc.pages);
+      expect(body.pages).toBeGreaterThan(0);
+      expect(body.max_batches).toBeGreaterThan(0);
+      expect(body.thresholds.pages).toBe(20);
+    } finally {
+      store.updateSettings({ 'reading.context_window': '', 'reading.output_reserve': '' });
+    }
+  }, 120_000);
+
+  it('estimates the whole book when it fits one turn (batch budget follows model capacity)', async () => {
     const response = await server.inject({
       method: 'POST',
       url: '/api/v1/chat/budget',
@@ -394,19 +424,53 @@ describe('budget gate scope and thresholds', () => {
       payload: { question: '这本书讲了什么？', documentId: bigDoc.id, reading_scope: 'document' }
     });
     expect(response.statusCode).toBe(200);
-    const body = response.json() as {
-      pages: number;
-      total_pages: number;
-      max_batches: number;
-      scope: string;
-      thresholds: { pages: number; tokens: number };
-    };
-    expect(body.scope).toBe('document');
+    const body = response.json() as { pages: number; total_pages: number; exceeded: boolean };
+    // 默认 65k 窗口下这本 30 页的书一轮就能读完：闸门如实说"整本"，不再人为截断到 12 批。
     expect(body.total_pages).toBe(bigDoc.pages);
-    expect(body.pages).toBeLessThan(bigDoc.pages);
-    expect(body.pages).toBeGreaterThan(0);
-    expect(body.max_batches).toBeGreaterThan(0);
-    expect(body.thresholds.pages).toBe(20);
+    expect(body.pages).toBe(bigDoc.pages);
+    expect(typeof body.exceeded).toBe('boolean');
+  }, 120_000);
+
+  it('成本提示：给"读什么"的一句话；没有实测样本时不给耗时', async () => {
+    resetThroughputSamples();
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/v1/chat/budget',
+      headers: headers(),
+      payload: { question: '这本书讲了什么？', documentId: bigDoc.id }
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      summary?: string;
+      eta_seconds?: number;
+      eta_basis?: string;
+    };
+    expect(body.summary).toContain('读全篇');
+    // 没有历史观测就不猜：宁可不说，也不拿常数假装是估算。
+    expect(body.eta_seconds).toBeUndefined();
+  }, 120_000);
+
+  it('成本提示：有实测吞吐时给出预计耗时与依据', async () => {
+    resetThroughputSamples();
+    for (let index = 0; index < 3; index += 1) {
+      // 三次 2000 token / 1 秒 的观测 → 中位吞吐 2000 token/秒。
+      recordModelUsage('x'.repeat(2000), '', { input: 2000, output: 0 }, 1000);
+    }
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/v1/chat/budget',
+      headers: headers(),
+      payload: { question: '这本书讲了什么？', documentId: bigDoc.id }
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      eta_seconds?: number;
+      eta_basis?: string;
+      tokens: number;
+    };
+    expect(body.eta_seconds).toBeGreaterThan(0);
+    expect(body.eta_basis).toContain('实测');
+    resetThroughputSamples();
   }, 120_000);
 
   it('asks for confirmation when the configured page threshold is lower than this turn', async () => {
@@ -491,6 +555,25 @@ describe('chapter list and explicit chapter selection', () => {
       });
       expect(response.statusCode).toBe(200);
       expect((response.json() as { available: boolean }).available).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('自动选章不再裁剪：不指定章节时按整本估，而不是按当前页所在章', async () => {
+    const spy = vi.spyOn(store, 'getStructure').mockResolvedValue(NODES as never);
+    try {
+      const response = await server.inject({
+        method: 'POST',
+        url: '/api/v1/chat/budget',
+        headers: headers(),
+        payload: { question: '这本书讲了什么？', documentId: chapterBook.id }
+      });
+      expect(response.statusCode).toBe(200);
+      const body = response.json() as { pages: number; total_pages: number; summary?: string };
+      // 结构只标注不裁剪：没有显式指定章节时，闸门按整本估。
+      expect(body.pages).toBe(chapterBook.pages);
+      expect(body.total_pages).toBe(chapterBook.pages);
     } finally {
       spy.mockRestore();
     }

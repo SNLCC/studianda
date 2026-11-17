@@ -14,12 +14,14 @@ import type {
 import { ChatMarkdown } from './ChatMarkdown.js';
 import { onHostKeyDown } from './host-scope.js';
 
-/** 预算确认提示里的范围标签（与 reading_scope 一一对应）。 */
-const BUDGET_SCOPE_LABEL: Record<string, string> = {
-  local: '本页附近',
-  document: '整篇',
-  discovery: '跨文献'
-};
+/** 秒 → "25 秒" / "2 分 10 秒"；闸门里只说人话，不显示毫秒。 */
+function formatDuration(seconds: number): string {
+  const total = Math.max(1, Math.round(seconds));
+  if (total < 60) return `${total} 秒`;
+  const minutes = Math.floor(total / 60);
+  const rest = total % 60;
+  return rest === 0 ? `${minutes} 分钟` : `${minutes} 分 ${rest} 秒`;
+}
 
 const COVERAGE_LABELS: Record<string, string> = {
   FOUND: '已找到支持',
@@ -60,7 +62,8 @@ const ANSWER_MODE_LABELS: Record<string, string> = {
 
 /**
  * 本轮 token 用量：有输入/输出就分别列，否则列总数；供应商没返回 usage 时明确标“估算”。
- * 有缓存命中时挂在输入后面（它是输入的一部分，不单列成一项，避免看起来像额外开销）。
+ * 有缓存命中时挂在输入后面（它是输入的一部分，不单列成一项，避免看起来像额外开销）；
+ * 思考 token 同理挂在输出后面（它已包含在输出里），让"思考花了多少"可见。
  */
 function formatUsage(usage: NonNullable<ChatResponse['usage']>): string | null {
   const count = (value?: number): string =>
@@ -71,9 +74,10 @@ function formatUsage(usage: NonNullable<ChatResponse['usage']>): string | null {
   const output = count(usage.output_tokens);
   const total = count(usage.total_tokens);
   const cached = count(usage.cached_tokens);
+  const reasoning = count(usage.reasoning_tokens);
   const parts: string[] = [];
   if (input) parts.push(cached ? `输入 ${input}（缓存命中 ${cached}）` : `输入 ${input}`);
-  if (output) parts.push(`输出 ${output}`);
+  if (output) parts.push(reasoning ? `输出 ${output}（其中思考 ${reasoning}）` : `输出 ${output}`);
   const body = parts.length > 0 ? parts.join(' · ') : total ? `合计 ${total}` : '';
   if (!body) return null;
   return (
@@ -85,8 +89,9 @@ function formatUsage(usage: NonNullable<ChatResponse['usage']>): string | null {
 
 export interface ChatAskOptions {
   confirmSearch?: boolean;
-  readingScope?: 'auto' | 'local' | 'document' | 'corpus';
-  readingRigor?: 'auto' | 'fast' | 'standard' | 'exhaustive';
+  readingScope?: 'auto' | 'corpus';
+  /** 闸门里用户选的阅读策略（只读相关部分 / 读完整篇）。 */
+  readingForce?: 'prune' | 'full';
   sourcePolicy?: 'auto' | 'document_only';
   /** 本轮是否把本机笔记与批注作为补充材料纳入（不算文献原文证据，不参与引用编号）。 */
   includeMemory?: boolean;
@@ -312,7 +317,8 @@ export interface ChatPanelProps {
   /** 语音输入不可用时的中文原因（按钮禁用并提示）。 */
   speechDisabledReason?: string | null;
   budget?: BudgetEstimate | null;
-  onConfirmBudget?(): void;
+  /** 确认继续读取；`force` 是用户在闸门里选的阅读策略（只读相关部分 / 读完整篇）。 */
+  onConfirmBudget?(force?: 'prune' | 'full'): void;
   /** 关闭预算确认提示（不读取、不追问）；缺省时只显示"继续读取"。 */
   onCancelBudget?(): void;
   /** 本文献在本次应用会话里已关闭预算提示。 */
@@ -408,12 +414,7 @@ export function ChatPanel({
   useEffect(() => {
     if (!budget) setBudgetSkipChecked(false);
   }, [budget]);
-  const [readingScope, setReadingScope] = useState<'auto' | 'local' | 'document' | 'corpus'>(
-    'auto'
-  );
-  const [readingRigor, setReadingRigor] = useState<
-    'auto' | 'fast' | 'standard' | 'exhaustive'
-  >('auto');
+  const [readingScope, setReadingScope] = useState<'auto' | 'corpus'>('auto');
   // 著作章节选择：'' = 自动（按问题/当前页选章）；数字 = 用户指定第几章。
   const [readingChapter, setReadingChapter] = useState('');
   // 换文献/目录变了以后，旧章号可能不存在：提交时只在列表里仍存在才生效。
@@ -824,7 +825,6 @@ export function ChatPanel({
   const scopeFilter = scopeQuery.trim().toLowerCase();
   const readingOptions = {
     readingScope,
-    readingRigor,
     readingChapterIndex:
       readingChapter !== '' &&
       chapters?.some((chapter) => String(chapter.index) === readingChapter)
@@ -1351,7 +1351,14 @@ export function ChatPanel({
                 </span>
                 <div className="kr-chat__bubble">
                   <span className="kr-chat__role">阅读伙伴</span>
-                  <p className="kr-chat__ai-note">AI 生成 · 内容可能出错，请核实</p>
+                  {/*
+                    合规口径（生成式人工智能服务管理暂行办法第十条/十二条 + 标识办法）：
+                    回答区常驻「AI 生成」标识，不随滚动或折叠消失；并引导用户回到原文核对。
+                    不能用"流式逐字"替代这一步——标识必须在生成开始前就可见。
+                  */}
+                  <p className="kr-chat__ai-note">
+                    AI 生成 · 可能出错，请以文献原文为准（引用编号可点击回溯）
+                  </p>
                   <ChatMarkdown
                     text={message.content}
                     sources={response?.sources ?? []}
@@ -1465,16 +1472,6 @@ export function ChatPanel({
                           : ''}
                       </p>
                       {response.plan.reason ? <p>{response.plan.reason}</p> : null}
-                      <p>
-                        深度：
-                        {response.reading_rigor === 'fast'
-                          ? '快速'
-                          : response.reading_rigor === 'standard'
-                            ? '标准'
-                            : response.reading_rigor === 'exhaustive'
-                              ? '全面核查'
-                              : '自动判断'}
-                      </p>
                       <p>
                         来源：{response.model_knowledge ? '文献 + 模型知识' : '仅文献'}
                       </p>
@@ -1941,7 +1938,8 @@ export function ChatPanel({
             </span>
             <div className="kr-chat__bubble kr-chat__bubble--pending">
               <span className="kr-chat__role">阅读伙伴</span>
-              <p className="kr-chat__ai-note">AI 生成 · 内容可能出错，请核实</p>
+              {/* 标识在生成**开始前**就可见：不能在回答落地后才补。 */}
+              <p className="kr-chat__ai-note">AI 生成 · 正在生成，内容需核实</p>
               {auditDraft.length > 0 ? (
                 <div className="kr-chat__audit-draft">
                   <p className="kr-chat__meta">审计草稿</p>
@@ -2057,12 +2055,13 @@ export function ChatPanel({
         {budget ? (
           <div className="kr-chat__budget" role="alert">
             <p>
-              本轮预计读取 {budget.pages} 页
-              {budget.scope ? `（范围：${BUDGET_SCOPE_LABEL[budget.scope] ?? budget.scope}）` : ''}
-              、约 {budget.tokens} token，超过确认阈值（{budget.thresholds.pages} 页 /{' '}
-              {budget.thresholds.tokens} token）。
+              {budget.summary ?? `本轮预计读取 ${budget.pages} 页`}
+              {budget.eta_seconds ? ` · 约 ${formatDuration(budget.eta_seconds)}` : ''}
             </p>
-            <p className="kr-muted">{budget.method}</p>
+            <p>
+              超过确认阈值（{budget.thresholds.pages} 页 /{' '}
+              {budget.thresholds.tokens} token），要现在读吗？
+            </p>
             <p className="kr-muted">{budget.note}</p>
             {onBudgetSkipChange ? (
               <label style={{ display: 'block', marginTop: 6 }}>
@@ -2076,16 +2075,29 @@ export function ChatPanel({
               </label>
             ) : null}
             {onConfirmBudget ? (
-              <button
-                type="button"
-                onClick={() => {
-                  if (budgetSkipChecked) onBudgetSkipChange?.(true);
-                  onConfirmBudget();
-                }}
-                disabled={asking}
-              >
-                继续读取
-              </button>
+              <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (budgetSkipChecked) onBudgetSkipChange?.(true);
+                    // 默认推荐"只读相关部分"：先把无关章节筛掉，答不上来再读全篇。
+                    onConfirmBudget('prune');
+                  }}
+                  disabled={asking}
+                >
+                  只读相关部分
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (budgetSkipChecked) onBudgetSkipChange?.(true);
+                    onConfirmBudget('full');
+                  }}
+                  disabled={asking}
+                >
+                  读完{standalone ? '这些文献' : '这篇'}
+                </button>
+              </div>
             ) : null}
             {onCancelBudget ? (
               <button
@@ -2180,8 +2192,6 @@ export function ChatPanel({
                   title="阅读范围"
                 >
                   <option value="auto">{standalone ? '库内检索' : '自动'}</option>
-                  {standalone ? null : <option value="local">本页附近</option>}
-                  {standalone ? null : <option value="document">整篇</option>}
                   <option value="corpus">
                     {standalone ? '跨文献精读' : '跨文献'}
                   </option>
@@ -2218,22 +2228,6 @@ export function ChatPanel({
                 </select>
               </label>
             ) : null}
-            <label className="kr-chat__reading-field">
-              <span>深度</span>
-              <select
-                value={readingRigor}
-                onChange={(event) =>
-                  setReadingRigor(event.target.value as typeof readingRigor)
-                }
-                aria-label="阅读深度"
-                title="阅读深度"
-              >
-                <option value="auto">自动</option>
-                <option value="fast">快速</option>
-                <option value="standard">标准</option>
-                <option value="exhaustive">全面</option>
-              </select>
-            </label>
             <label className="kr-chat__reading-field">
               <span>来源</span>
               <select

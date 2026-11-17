@@ -334,7 +334,9 @@ describe('有文献时联网不顶替文献', () => {
     store.updateSettings({ 'search.planner': 'true' });
     mockNetwork();
     const question = '概括本文';
-    const plan = await createSearchPlan(store, secrets, { question });
+    // 与真实客户端一致：搜索计划要带上 documentId（服务端就是这么建计划的），
+    // 否则计划与本轮请求的指纹不符，本来就不可用。
+    const plan = await createSearchPlan(store, secrets, { question, documentId });
     expect(plan.token).toBeTruthy();
     const response = (await answerQuestion(store, secrets, {
       ...baseInput(),
@@ -342,9 +344,11 @@ describe('有文献时联网不顶替文献', () => {
       confirmSearch: true,
       search_token: plan.token
     })) as ChatResponse;
-    // 不能因为带上了搜索计划就返回「只根据网页摘要」的答案：先读文献。
+    // 仍然先读文献：不能因为带上了搜索计划就返回「只根据网页摘要」的答案。
     expect(response.answer_mode).not.toBe('web');
     expect(response.answer ?? '').not.toBe('联网答案');
     expect(response.notice ?? '').not.toContain('已按确认的搜索计划');
+    // 新口径：已批准的查询用在**作答前**，网页只作背景，不进证据链、不给引用编号。
+    expect(response.notice ?? '').toContain('网页背景资料');
   });
 });

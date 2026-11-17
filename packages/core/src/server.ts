@@ -146,6 +146,7 @@ import {
   translationProgress
 } from './translation-service.js';
 import { embeddingStatus, indexChunks } from './embeddings.js';
+import { readingBatchBudget } from './reading-chat.js';
 import { retrieve, warmRetrievalIndex } from './retrieval.js';
 import { annotateSearchHits } from './section-context.js';
 import { resolveScopeIds } from './scope.js';
@@ -4362,35 +4363,14 @@ export function buildServer(options: ServerOptions): FastifyInstance {
    * 让提示反映"这一轮到底会读多少"。
    */
   function planForBudget(
-    body: Pick<Partial<ChatRequest>, 'question' | 'selection' | 'page' | 'reading_scope'>
+    body: Pick<Partial<ChatRequest>, 'question' | 'selection' | 'page'>
   ): ReadingPlanRecord {
-    const base = planQuestion(
+    // 范围只剩"自动 / 跨文献"：闸门只按问题与选文做**不调模型**的规则规划，
+    // 不再有"用户指定本页/整篇"的分支（局部范围由 `planFromRules` 从问题里解析）。
+    return planQuestion(
       body.question ?? '',
       typeof body.selection === 'string' ? body.selection : ''
     );
-    const page =
-      typeof body.page === 'number' && Number.isFinite(body.page)
-        ? Math.max(1, Math.trunc(body.page))
-        : 1;
-    if (body.reading_scope === 'local') {
-      return {
-        ...base,
-        breadth: 'local',
-        pages: [page - 1, page, page + 1].filter((value) => value >= 1),
-        reason: '用户指定：本页与相邻页',
-        origin: '规则'
-      };
-    }
-    if (body.reading_scope === 'document') {
-      return {
-        ...base,
-        breadth: 'document',
-        pages: [],
-        reason: '用户指定：整篇文献',
-        origin: '规则'
-      };
-    }
-    return base;
   }
 
   function pageFrom(body: { page?: unknown }): number {
@@ -4420,8 +4400,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     const plan = planForBudget({
       question: body.question,
       selection: typeof body.selection === 'string' ? body.selection : '',
-      page,
-      reading_scope: body.reading_scope as ChatRequest['reading_scope']
+      page
     });
     const scopeDocuments = scopeDocumentIds(body.scopeDocuments, body.scope_documents);
     const corpus = isCorpusBudgetRequest(body.reading_scope, body.documentId, scopeDocuments);
@@ -4444,26 +4423,28 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         return badRequest(reply, '需要 question 与 documentId');
       }
       const document = options.store.getDocument(body.documentId);
-      // 著作默认按章读；估算口径必须与实际阅读一致，否则又会出现"提示整本、实际读一章"。
-      const chaptered = (
-        await resolveChapterReading(options.store, body.documentId, plan, {
-          scope: (body.reading_scope ?? 'auto') as 'auto' | 'local' | 'document' | 'corpus',
-          page,
-          question: body.question,
-          selection: typeof body.selection === 'string' ? body.selection : '',
-          chapterIndex:
-            typeof body.reading_chapter_index === 'number' &&
-            Number.isInteger(body.reading_chapter_index) &&
-            body.reading_chapter_index >= 1
-              ? body.reading_chapter_index
-              : undefined
-        })
-      ).plan;
-      return estimateTurnBudget(options.store, chaptered, body.documentId, {
+      // 估算口径与实际阅读一致：自动选章不裁剪（结构只标注），只有用户**显式指定**章节时才按章估。
+      const planForEstimate =
+        typeof body.reading_chapter_index === 'number' &&
+        Number.isInteger(body.reading_chapter_index) &&
+        body.reading_chapter_index >= 1
+          ? (
+              await resolveChapterReading(options.store, body.documentId, plan, {
+                scope: (body.reading_scope ?? 'auto') as 'auto' | 'local' | 'document' | 'corpus',
+                page,
+                question: body.question,
+                selection: typeof body.selection === 'string' ? body.selection : '',
+                chapterIndex: body.reading_chapter_index
+              })
+            ).plan
+          : plan;
+      return estimateTurnBudget(options.store, planForEstimate, body.documentId, {
         page,
         maxBatches: readCapacity(settings).maxReadBatches,
+        // 与实际阅读同一口径：批预算跟随模型容量（环境变量覆盖只用于测试/调试）。
+        batchBudget: readingBatchBudget(options.store),
         thresholds,
-        scope: chaptered.breadth === 'local' ? 'local' : 'document',
+        scope: planForEstimate.breadth === 'local' ? 'local' : 'document',
         documentCategory: document?.docCategory
       });
     } catch (error) {
@@ -4537,28 +4518,31 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     }
     if (!body.documentId) return null;
     const document = options.store.getDocument(body.documentId);
-    let plan = planForBudget(body);
+    const plan = planForBudget(body);
     try {
-      // 与真实阅读保持一致：著作默认按章读，闸门也按"这一章"估，而不是整本。
-      plan = (
-        await resolveChapterReading(options.store, body.documentId, plan, {
-          scope: (body.reading_scope ?? 'auto') as 'auto' | 'local' | 'document' | 'corpus',
-          page,
-          question: body.question,
-          selection: typeof body.selection === 'string' ? body.selection : '',
-          chapterIndex:
-            typeof body.reading_chapter_index === 'number' &&
-            Number.isInteger(body.reading_chapter_index) &&
-            body.reading_chapter_index >= 1
-              ? body.reading_chapter_index
-              : undefined
-        })
-      ).plan;
-      return estimateTurnBudget(options.store, plan, body.documentId, {
+      // 与真实阅读保持一致：自动选章不裁剪，只有显式指定章节时才按章估。
+      const explicitChapterIndex =
+        typeof body.reading_chapter_index === 'number' &&
+        Number.isInteger(body.reading_chapter_index) &&
+        body.reading_chapter_index >= 1;
+      const planForEstimate = explicitChapterIndex
+        ? (
+            await resolveChapterReading(options.store, body.documentId, plan, {
+              scope: (body.reading_scope ?? 'auto') as 'auto' | 'local' | 'document' | 'corpus',
+              page,
+              question: body.question,
+              selection: typeof body.selection === 'string' ? body.selection : '',
+              chapterIndex: body.reading_chapter_index
+            })
+          ).plan
+        : plan;
+      return estimateTurnBudget(options.store, planForEstimate, body.documentId, {
         page,
         maxBatches: readCapacity(settings).maxReadBatches,
+        // 与实际阅读同一口径：批预算跟随模型容量（环境变量覆盖只用于测试/调试）。
+        batchBudget: readingBatchBudget(options.store),
         thresholds,
-        scope: plan.breadth === 'local' ? 'local' : 'document',
+        scope: planForEstimate.breadth === 'local' ? 'local' : 'document',
         documentCategory: document?.docCategory
       });
     } catch {
@@ -4660,7 +4644,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
             typeof body.search_token === 'string' ? body.search_token : undefined,
           history: Array.isArray(body.history) ? (body.history as never) : undefined,
           reading_scope: body.reading_scope,
-          reading_rigor: body.reading_rigor,
+          reading_force: body.reading_force,
           source_policy: body.source_policy,
           include_memory: body.include_memory === true,
           scope_documents: Array.isArray(body.scope_documents) ? body.scope_documents as string[] : undefined,
@@ -4764,7 +4748,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
               typeof body.search_token === 'string' ? body.search_token : undefined,
             history: Array.isArray(body.history) ? (body.history as never) : undefined,
             reading_scope: body.reading_scope,
-            reading_rigor: body.reading_rigor,
+            reading_force: body.reading_force,
             source_policy: body.source_policy,
             include_memory: body.include_memory === true,
             scope_documents: Array.isArray(body.scope_documents) ? body.scope_documents as string[] : undefined,

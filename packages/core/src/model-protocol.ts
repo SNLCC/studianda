@@ -186,6 +186,27 @@ export function miniMaxSupportsThinkingOff(model: string): boolean {
 export const DEEPSEEK_THINKING_RESERVE = 4096;
 
 /**
+ * 思考预留的观测自适应：`max(最小值, p90 × 1.2)`，封顶 `THINKING_RESERVE_CEILING`。
+ *
+ * 固定常量的问题：思维链长度取决于模型与问题，同一个 4096 对短思考模型是浪费
+ * （正文预算被压），对长思考模型又不够（正文被推理吃掉后只剩空正文）。
+ * 观测不到（样本 <3）时直接用调用方给的平台常量。
+ */
+export const THINKING_RESERVE_FLOOR = 1024;
+export const THINKING_RESERVE_CEILING = 16384;
+
+export function adaptiveThinkingReserve(
+  observed: { p90: number; samples: number } | null,
+  fallback: number
+): number {
+  if (!observed || observed.samples < 3 || observed.p90 <= 0) return fallback;
+  return Math.min(
+    THINKING_RESERVE_CEILING,
+    Math.max(THINKING_RESERVE_FLOOR, Math.ceil(observed.p90 * 1.2))
+  );
+}
+
+/**
  * 单个模型请求里的输出上限/思考参数。
  *
  * - MiniMax：增加思考预留，并要求把思考拆到 `reasoning_content`，避免 `<think>` 标签混进正文；
@@ -196,23 +217,29 @@ export const DEEPSEEK_THINKING_RESERVE = 4096;
  * `thinking` 为调用方算好的「本次请求确实会思考」；不传时按不会思考处理，
  * 保持 OCR/翻译/纠错这些过程性链路的请求体不变。
  *
+ * `thinkingReserve` 是本次实际给思维链留的空间（由调用方按观测自适应算出）；
+ * 不传时用平台常量。
+ *
  * 注意：官方没有「思考不计入输出上限」的开关——思考 token 计入 `completion_tokens`，
  * 只能通过关闭思考（DeepSeek 支持；MiniMax 不支持）或调低 `reasoning_effort` 控制。
  */
 export function chatOutputOptions(
   baseUrl: string,
   maxTokens: number,
-  thinking = false
+  thinking = false,
+  thinkingReserve?: number
 ): Record<string, unknown> {
   const budget = Math.max(1, Math.trunc(maxTokens));
+  const minimaxReserve = thinkingReserve ?? MINIMAX_THINKING_RESERVE;
   if (isMiniMaxHost(baseUrl)) {
     return {
-      max_completion_tokens: Math.min(budget + MINIMAX_THINKING_RESERVE, 131_072),
+      max_completion_tokens: Math.min(budget + minimaxReserve, 131_072),
       reasoning_split: true
     };
   }
   if (thinking && isDeepSeekHost(baseUrl)) {
-    return { max_tokens: Math.min(budget + DEEPSEEK_THINKING_RESERVE, 131_072) };
+    const reserve = thinkingReserve ?? DEEPSEEK_THINKING_RESERVE;
+    return { max_tokens: Math.min(budget + reserve, 131_072) };
   }
   return { max_tokens: budget };
 }

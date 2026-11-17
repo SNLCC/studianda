@@ -41,6 +41,15 @@ export interface RecognizeOptions {
   documentId?: string;
   /** 文档标题：仅用于没有标题的"前置部分"（封面/版权页等）的展示，不参与判定。 */
   title?: string;
+  /**
+   * 已判定为"文献自带目录页"的页码。
+   *
+   * 目录页上的行也会被识别成标题块，若拿它们当章节边界，一本 300 页的书会在目录页上
+   * 凭空长出十几节，`:decompose` 于是把目录条目当正文单元去读——既浪费又让真节的层级错位。
+   * 这些页的标题**不开启新节**，其块并入前面那一节（通常是题名/前置部分）。
+   * 判定由 `toc-pages.detectTocPages` 完成（见那里的实测裕度）。
+   */
+  tocPages?: readonly number[];
 }
 
 /** 列表项起始标记：项目符号，或"编号/字母 + 大写字母/汉字的后续内容"（避免把句中 "(3) write…" 当列表）。 */
@@ -325,14 +334,19 @@ function outlineBoundaries(layout: PdfLayout, blocks: ContentBlock[]): Boundary[
   return boundaries.sort((left, right) => left.block - right.block);
 }
 
-/** 没有目录时，用识别出的标题块当章节边界。 */
-function headingBoundaries(blocks: ContentBlock[]): Boundary[] {
+/** 没有目录时，用识别出的标题块当章节边界。`skipPages` 里的页（目录页）不产生边界。 */
+function headingBoundaries(
+  blocks: ContentBlock[],
+  skipPages?: ReadonlySet<number>
+): Boundary[] {
   const boundaries: Boundary[] = [];
   let inReferences = false;
   blocks.forEach((block, index) => {
     if (block.kind !== 'heading') return;
     // 参考文献区里的"标题"多数是被误判的条目（"1. Smith, J. …"），不当章节边界。
     if (inReferences) return;
+    // 目录页上的标题是目录条目，不是正文章节。
+    if (skipPages?.has(block.page)) return;
     boundaries.push({
       block: index,
       title: block.text.trim(),
@@ -347,7 +361,8 @@ function sectionsFromBoundaries(
   blocks: ContentBlock[],
   boundaries: Boundary[],
   origin: 'outline' | 'heading',
-  fallbackTitle: string
+  fallbackTitle: string,
+  tocPages: readonly number[] = []
 ): DocumentSection[] {
   if (boundaries.length === 0) return [];
   const sections: DocumentSection[] = [];
@@ -390,6 +405,18 @@ function sectionsFromBoundaries(
     });
     stack.push(index);
   });
+  // 吞并了目录页的那一节（通常是题名页 + 目录）整段都是前置材料，标成 front：
+  // 这样结构性排除（references / appendix / front）会跳过它，不会把目录条目当正文读。
+  // 只在「这一节结束于目录页」时改标——若真节一路跨过目录页，宁可保留 body，不吞掉正文。
+  if (tocPages.length > 0) {
+    const lastTocPage = Math.max(...tocPages);
+    for (const section of sections) {
+      if (section.kind !== 'body') continue;
+      if (section.pageStart <= lastTocPage && section.pageEnd <= lastTocPage) {
+        section.kind = 'front';
+      }
+    }
+  }
   return sections;
 }
 
@@ -425,6 +452,73 @@ function mergeColumnContinuations(blocks: ContentBlock[]): void {
       continue;
     }
     upper.text = glue(upper.text.trim(), lower.text.trim());
+    upper.bbox = [
+      Math.min(upper.bbox[0], lower.bbox[0]),
+      Math.min(upper.bbox[1], lower.bbox[1]),
+      Math.max(upper.bbox[2], lower.bbox[2]),
+      Math.max(upper.bbox[3], lower.bbox[3])
+    ];
+    upper.lines += lower.lines;
+    blocks.splice(index + 1, 1);
+  }
+}
+
+/**
+ * 跨行标题合并：版面把一条长标题折成两三行时，每一行都会被识别成独立 heading 块，
+ * 于是同一页上凭空多出「录」「为例」「社会史考察」这种一节。
+ *
+ * 只合并**看起来是同一句被折断**的情况，判据全部是版面/文本形状，不含语义猜测：
+ * - 同页、同层级、垂直相邻（下一块紧贴上一块下方，不在另一栏或另一处）；
+ * - 两块高度接近（同一字号），下一块不以编号/章节标记开头（"I." "一、" "Chapter" 都是新标题）；
+ * - 下一块很短（≤24 字）且不以大写拉丁字母/数字/项目符号开头；
+ * - 上一块"看起来没说完"：长度 > 12 字，或以连接词/冒号/破折号收尾。
+ *
+ * 反例保护：论文里 `ABSTRACT` + `Keywords` 这种相邻同级标题不会被合并（上块 8 字且不以连接词结尾）。
+ */
+const HEADING_CONTINUATION_MAX = 24;
+const HEADING_OPEN_ENDED_MIN = 12;
+/** 新标题/新章节的起始标记：出现在下一块开头就说明它不是上一句的续行。 */
+const HEADING_START_MARKER =
+  /^(?:第\s*[0-9一二三四五六七八九十百]+\s*[章节節篇部]|[0-9]+(?:\.[0-9]+)*[.．、)）]?\s|[（(]?[0-9一二三四五六七八九十百]+[)）.．、]\s?|[IVXLC]{1,6}[.．]\s|[A-Z][.．]\s|(?:chapter|section|part|appendix)\b|附\s*录|参考\s*文献|参考\s*书目|abstract\b|摘\s*要|keywords?\b|关键\s*词|目\s*录|contents\b)/i;
+/** 上一块以这些结尾时几乎肯定是断在中间的标题。 */
+const HEADING_OPEN_END =
+  /[的与和及、:：,，;；\-–—]$/;
+
+function mergeSplitHeadings(blocks: ContentBlock[]): void {
+  const CJK = /[\u2e80-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]/;
+  for (let index = 0; index + 1 < blocks.length; ) {
+    const upper = blocks[index]!;
+    const lower = blocks[index + 1]!;
+    if (upper.kind !== 'heading' || lower.kind !== 'heading') {
+      index += 1;
+      continue;
+    }
+    const upperHeight = upper.bbox[3] - upper.bbox[1];
+    const lowerHeight = lower.bbox[3] - lower.bbox[1];
+    const lowerText = lower.text.trim();
+    const upperText = upper.text.trim();
+    const sameBlockFlow =
+      upper.page === lower.page &&
+      (upper.level ?? 1) === (lower.level ?? 1) &&
+      lower.bbox[1] >= upper.bbox[3] - 0.005 &&
+      lower.bbox[1] - upper.bbox[3] <= Math.max(0.03, upperHeight * 1.2) &&
+      upperHeight > 0 &&
+      lowerHeight / upperHeight >= 0.7 &&
+      lowerHeight / upperHeight <= 1.4;
+    const looksLikeContinuation =
+      lowerText.length > 0 &&
+      lowerText.length <= HEADING_CONTINUATION_MAX &&
+      !HEADING_START_MARKER.test(lowerText) &&
+      !/^[A-Z0-9•·▪◦‣※*+\-–—]/.test(lowerText);
+    const upperOpenEnded =
+      upperText.length > HEADING_OPEN_ENDED_MIN || HEADING_OPEN_END.test(upperText);
+    if (!sameBlockFlow || !looksLikeContinuation || !upperOpenEnded) {
+      index += 1;
+      continue;
+    }
+    const joiner =
+      CJK.test(upperText.slice(-1)) || CJK.test(lowerText.charAt(0)) ? '' : ' ';
+    upper.text = `${upperText}${joiner}${lowerText}`;
     upper.bbox = [
       Math.min(upper.bbox[0], lower.bbox[0]),
       Math.min(upper.bbox[1], lower.bbox[1]),
@@ -578,15 +672,18 @@ export function recognizeBlocks(
     }
   }
 
-  // 段落/表格的跨块修补：都必须发生在章节边界之前（边界用块下标）。
+  // 段落/表格/标题的跨块修补：都必须发生在章节边界之前（边界用块下标）。
   mergeColumnContinuations(blocks);
   mergeTableRows(blocks);
+  mergeSplitHeadings(blocks);
   // 修补后重排 id，保持「阅读顺序 b0..bn」的契约（同一版面重算结果一致）。
   blocks.forEach((block, index) => {
     block.id = `b${index}`;
   });
 
   // 章节边界：优先 PDF 目录；目录为空/对不上时退回版面标题规则。
+  const tocPageSet =
+    options.tocPages && options.tocPages.length > 0 ? new Set(options.tocPages) : undefined;
   const outline = outlineBoundaries(layout, blocks);
   const basis: 'outline' | 'heading' | 'none' =
     outline.length > 0
@@ -594,12 +691,13 @@ export function recognizeBlocks(
       : blocks.some((block) => block.kind === 'heading')
         ? 'heading'
         : 'none';
-  const boundaries = outline.length > 0 ? outline : headingBoundaries(blocks);
+  const boundaries = outline.length > 0 ? outline : headingBoundaries(blocks, tocPageSet);
   const sections = sectionsFromBoundaries(
     blocks,
     boundaries,
     basis === 'outline' ? 'outline' : 'heading',
-    options.title ?? ''
+    options.title ?? '',
+    options.tocPages ?? []
   );
 
   // 回填每块所属章节；参考文献小节里的正文块改标为 reference。

@@ -63,22 +63,19 @@ describe('readInBatches execution', () => {
     expect(result.report.evidence_accounting?.unaccounted).toEqual([]);
   });
 
-  it('compresses analyses but keeps every verified evidence record in the bank', async () => {
+  it('keeps every batch record instead of compressing them (no reduce layer)', async () => {
     const sources: ReadingSource[] = Array.from({ length: 10 }, (_, index) => ({
       document_id: 'doc',
       page: index + 1,
       name: 'doc',
       text: `第 ${index + 1} 页的独特事实。${'限定条件与说明。'.repeat(80)}`
     }));
-    const reduceCalls: string[] = [];
+    const instructions: string[] = [];
     const result = await readInBatches(
       sources,
       1200,
       async (instruction, material) => {
-        if (instruction.includes('READING_REDUCE')) {
-          reduceCalls.push(material);
-          return JSON.stringify({ analysis: '合并后的分析要点。'.repeat(20) });
-        }
+        instructions.push(instruction);
         const match = material.match(/\[(\d+)\][^\n]*\n([^\n]+)/);
         const source = Number(match?.[1] ?? 1);
         const quote = match?.[2] ?? 'missing';
@@ -90,9 +87,11 @@ describe('readInBatches execution', () => {
       },
       { maxBatches: 12 }
     );
-    expect(reduceCalls.length).toBeGreaterThan(0);
-    expect(result.report.reduce_layers).toBeGreaterThan(0);
-    expect(result.findings.length).toBeLessThan(result.sourceFindings.length);
+    // 只允许批次阅读调用，不再出现任何压缩调用。
+    expect(instructions.some((text) => text.includes('READING_REDUCE'))).toBe(false);
+    // 批次记录原样交给综合层：每批都保留，只是可能在综合阶段被缩短。
+    expect(result.findings).toHaveLength(result.sourceFindings.length);
+    expect(result.findings).toHaveLength(10);
     expect(result.sourceFindings).toHaveLength(10);
     // 预算 1200 token × 0.6 = 720 token：每条证据（整行中文摘引）都超过这个额度，
     // 因此银行为空；但每条都被 accounting 记为 dropped（不是无声丢失）。
@@ -382,12 +381,8 @@ describe('readInBatches 压缩层检查点（reduce:）', () => {
     text: `第 ${index + 1} 页的独特事实。${'限定条件与说明。'.repeat(80)}`
   }));
 
-  const makeAsk = (counters: { batches: number; reduces: number }) =>
-    async (instruction: string, material: string) => {
-      if (instruction.includes('READING_REDUCE')) {
-        counters.reduces += 1;
-        return JSON.stringify({ analysis: '合并分析要点。'.repeat(20) });
-      }
+  const makeAsk = (counters: { batches: number }) =>
+    async (_instruction: string, material: string) => {
       counters.batches += 1;
       const { source, quote } = quoteOf(material);
       return JSON.stringify({
@@ -397,73 +392,44 @@ describe('readInBatches 压缩层检查点（reduce:）', () => {
       });
     };
 
-  it('同一输入第二次执行复用 reduce 存档，不再调用模型', async () => {
+  it('同一输入第二次执行复用批次存档，不再调用模型', async () => {
     const checkpoint = memoryCheckpoint();
-    const firstCounters = { batches: 0, reduces: 0 };
+    const firstCounters = { batches: 0 };
     const first = await readInBatches(longSources, 1200, makeAsk(firstCounters), {
       maxBatches: 12,
       checkpoint,
       identity: 'r1'
     });
-    expect(firstCounters.reduces).toBeGreaterThan(0);
-    expect(first.report.reduce_layers).toBeGreaterThan(0);
-    expect(first.report.resumed_reduces).toBe(0);
-    expect([...checkpoint.entries.keys()].some((key) => key.startsWith('reduce:'))).toBe(true);
+    expect(firstCounters.batches).toBeGreaterThan(0);
+    // 压缩层已删：不应再产生任何 reduce: 存档。
+    expect([...checkpoint.entries.keys()].some((key) => key.startsWith('reduce:'))).toBe(false);
 
-    const secondCounters = { batches: 0, reduces: 0 };
+    const secondCounters = { batches: 0 };
     const second = await readInBatches(longSources, 1200, makeAsk(secondCounters), {
       maxBatches: 12,
       checkpoint,
       identity: 'r1'
     });
     expect(secondCounters.batches).toBe(0);
-    expect(secondCounters.reduces).toBe(0);
     expect(second.report.resumed_batches).toBe(longSources.length);
-    expect(second.report.resumed_reduces).toBeGreaterThan(0);
-    expect(second.resumed_reduces).toBeGreaterThan(0);
     expect(second.findings).toEqual(first.findings);
     expect(second.bank).toEqual(first.bank);
-    expect(second.report.reduce_layers).toBe(first.report.reduce_layers);
   });
 
-  it('identity 变了就不复用（批次与压缩都要重读）', async () => {
+  it('identity 变了就不复用批次（全部重读）', async () => {
     const checkpoint = memoryCheckpoint();
-    await readInBatches(longSources, 1200, makeAsk({ batches: 0, reduces: 0 }), {
+    await readInBatches(longSources, 1200, makeAsk({ batches: 0 }), {
       maxBatches: 12,
       checkpoint,
       identity: 'r1'
     });
-    const counters = { batches: 0, reduces: 0 };
+    const counters = { batches: 0 };
     const other = await readInBatches(longSources, 1200, makeAsk(counters), {
       maxBatches: 12,
       checkpoint,
       identity: 'r2'
     });
     expect(counters.batches).toBeGreaterThan(0);
-    expect(counters.reduces).toBeGreaterThan(0);
-    expect(other.report.resumed_reduces).toBe(0);
     expect(other.report.resumed_batches).toBe(0);
-  });
-
-  it('损坏的 reduce 存档不被信任：重新调用模型而不是直接用', async () => {
-    const checkpoint = memoryCheckpoint();
-    await readInBatches(longSources, 1200, makeAsk({ batches: 0, reduces: 0 }), {
-      maxBatches: 12,
-      checkpoint,
-      identity: 'r1'
-    });
-    // 把 reduce: 存档改成不完整内容（缺 analysis）：必须被识别为无效并重新压缩。
-    for (const [key] of checkpoint.entries) {
-      if (key.startsWith('reduce:')) checkpoint.entries.set(key, { analysis: '' });
-    }
-    const counters = { batches: 0, reduces: 0 };
-    const third = await readInBatches(longSources, 1200, makeAsk(counters), {
-      maxBatches: 12,
-      checkpoint,
-      identity: 'r1'
-    });
-    expect(counters.batches).toBe(0);
-    expect(counters.reduces).toBeGreaterThan(0);
-    expect(third.report.resumed_reduces).toBe(0);
   });
 });

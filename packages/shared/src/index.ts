@@ -1305,6 +1305,19 @@ export interface BudgetEstimate {
   total_pages?: number;
   /** 单轮批次上限（`reading.max_read_batches`）。 */
   max_batches?: number;
+  /**
+   * 给用户看的一句话："读全篇 · 第 1–312 页" / "读 40 页 · 第 12–51 页"。
+   *
+   * 只描述**读什么**，不出现 token、调用次数、覆盖率——那些是工程指标，用户无法据此决策。
+   */
+  summary?: string;
+  /**
+   * 预计耗时（秒）。只在有历史观测时给出（按最近若干次调用的实测吞吐折算）；
+   * 没有样本就不写，绝不拿一个常数假装是估算。
+   */
+  eta_seconds?: number;
+  /** `eta_seconds` 的依据，界面需要时展示（例如"按最近 12 次调用"）。 */
+  eta_basis?: string;
 }
 
 export interface SettingsMap extends Record<string, string> {}
@@ -1599,6 +1612,11 @@ export interface ChatUsage {
   cached_tokens?: number;
   /** 本轮实际发生的模型调用次数（阅读链路可能多次）。 */
   calls?: number;
+  /**
+   * 输出中用于思维链的 token（**已包含在 `output_tokens` 里**）。
+   * 只用于两件事：让用户看见"思考花了多少"，以及自适应调整思考预留。
+   */
+  reasoning_tokens?: number;
   /** true = 至少有一次调用没有拿到供应商 usage，按字符估算。 */
   estimated?: boolean;
 }
@@ -1633,14 +1651,23 @@ export interface ChatRequest {
   taskId?: string;
   /** 预算超限后用户确认继续读取。 */
   confirm_budget?: boolean;
-  /** 智能阅读范围：auto 自动判断，local 本页与相邻页，document 整篇，corpus 跨文献。 */
-  reading_scope?: 'auto' | 'local' | 'document' | 'corpus';
-  /** 智能阅读深度：是否在缺口后回读。 */
-  reading_rigor?: 'auto' | 'fast' | 'standard' | 'exhaustive';
+  /**
+   * 阅读范围：只有"单篇自动判定"与"跨文献"两种。
+   *
+   * 局部/整篇不再由用户选——读哪几页由本机规则（用户显式提到的页、选文、当前页）与
+   * 结构装带决定。旧客户端传 `local` / `document` 会被当成 `auto`，不报错。
+   */
+  reading_scope?: 'auto' | 'corpus';
   /** 用户显式指定读第几章（1 起）；仅著作且有目录时生效，优先于自动选章。 */
   reading_chapter_index?: number;
   /** 智能来源：document_only 时本轮不联网、不补充模型知识。 */
   source_policy?: 'auto' | 'document_only';
+  /**
+   * 阅读策略覆盖（闸门里两个按钮的结果）：
+   * `prune` = 只读相关部分；`full` = 强制读完整篇（装不下就分轮）。
+   * 不给则由材料推导——装得下就整篇读，装不下才筛。
+   */
+  reading_force?: 'prune' | 'full';
   /**
    * 是否把本机笔记与批注纳入本轮问答（默认不纳入；界面默认勾选）。
    *
@@ -1724,6 +1751,28 @@ export interface CoverageSummary {
   estimator?: string;
   /** 为什么这一轮又要读一遍原文（页面文字/OCR/视觉解读复用，模型阅读按新问题重读）。 */
   reading_reuse?: string;
+  /**
+   * 结构装带与三态账（读 / 排除 / 未读）。
+   *
+   * 只在整篇阅读启用结构装带时出现。`excluded` 是"裁决为不读"的单元与其**块级依据**——
+   * 排除必须可复核（用户指出遗漏时能拿同一套依据重判），所以理由与命中词都要带上。
+   */
+  reading_plan?: {
+    from_units: boolean;
+    bands: number;
+    /** 已装入单元占全部单元的比例（0..1）。 */
+    read_ratio: number;
+    excluded: Array<{
+      section: number;
+      title: string;
+      pages: [number, number];
+      score: number;
+      hits: string[];
+      reason: string;
+    }>;
+    /** 裁决过程中的降级说明（如未启用语义通道、无可用查询词）。 */
+    degraded: string[];
+  };
   /** 多遍阅读时实际送入综合的本轮材料（单遍为空串）。 */
   final_context?: string;
 }
@@ -1828,9 +1877,8 @@ export interface ChatResponse {
   chapter?: DocumentChapter;
   /** 全书章数，配合 `chapter.index` 显示"第 2/12 章"与"下一章"。 */
   chapter_total?: number;
-  /** 本轮实际采用的阅读范围与深度（用于界面如实显示）。 */
-  reading_scope?: 'auto' | 'local' | 'document' | 'corpus';
-  reading_rigor?: 'auto' | 'fast' | 'standard' | 'exhaustive';
+  /** 本轮实际采用的阅读范围（用于界面如实显示）。 */
+  reading_scope?: 'auto' | 'corpus';
   /** 当前文献对这个问题“答到什么程度”：SUFFICIENT/PARTIAL/MENTION_ONLY/ABSENT/UNCERTAIN。 */
   answerability?: 'SUFFICIENT' | 'PARTIAL' | 'MENTION_ONLY' | 'ABSENT' | 'UNCERTAIN';
   /** 外部网页依据的域名分层清单（只说明域名归属，不代表内容质量）。 */

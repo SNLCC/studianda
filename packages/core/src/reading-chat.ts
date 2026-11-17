@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+﻿import { randomUUID } from 'node:crypto';
 import type {
   ChatResponse,
   ChatSource,
@@ -8,7 +8,7 @@ import type {
 } from '@studianda/shared';
 import { FAILED_ANSWER_PREFIX } from '@studianda/shared';
 import { ensureAutoOcr } from './ocr.js';
-import { planReading } from './reading-plan.js';
+import { planReading, planReadingWithStructure } from './reading-plan.js';
 import {
   readInBatches,
   evidenceBank,
@@ -18,7 +18,7 @@ import {
   type ReadInBatchesResult,
   type ReadingFinding
 } from './reading-executor.js';
-import { recordModelUsage } from './model-usage.js';
+import { observedReasoningTokens, recordModelUsage, recordReasoningTokens } from './model-usage.js';
 import { extractKeywords } from './keywords.js';
 import { hasActiveTokenizer } from './tokenizer.js';
 import { batches, cost, sourceText, splitSources, type ReadingSource } from './reading.js';
@@ -72,6 +72,9 @@ import {
   miniMaxEffort,
   miniMaxSupportsThinkingOff,
   ModelResponseFormatError,
+  adaptiveThinkingReserve,
+  DEEPSEEK_THINKING_RESERVE,
+  MINIMAX_THINKING_RESERVE,
   networkErrorMessage,
   nextOutputBudget,
   OUTPUT_LIMIT_MAX_ATTEMPTS,
@@ -95,7 +98,7 @@ import {
   visualReadingSupplement,
   type VisualReadingSupplement
 } from './visual-reading.js';
-import { MEMORY_RULES } from './memory-sources.js';
+import { EXTERNAL_BACKGROUND_RULES, MEMORY_RULES } from './memory-sources.js';
 
 export interface ReadingChatConfig {
   baseUrl: string;
@@ -220,6 +223,23 @@ export function chatInputLimit(store: Store): number {
 }
 
 /**
+ * 单带原文预算：由模型容量推导，不再写死 4000/6000/8000。
+ *
+ * `chatInputLimit` 已经扣过输出预留与协议开销，这里再留出四成给指令、历史、笔记/视觉材料，
+ * 剩下的才给原文。装得下时整篇就是一个带，直接进最终回答的上下文；装不下才切。
+ *
+ * 旧实现固定 6000，把 1M 窗口的模型也按每批约 4 页读，300 页文献因此要 75–110 批、
+ * 受 12 批/轮限制变成 7–10 轮续读——这不是模型能力问题，是一个常量。
+ */
+export function readingBatchBudget(store: Store): number {
+  // 环境变量是**测试/无界面调试**的显式覆盖（有些用例需要很小的批预算来触发分批/缺口路径），
+  // 正常运行不设置它，一律按模型容量推导。
+  const override = Number(process.env.STUDIANDA_READING_BUDGET);
+  if (Number.isFinite(override) && override > 0) return Math.trunc(override);
+  return Math.max(2000, Math.floor(chatInputLimit(store) * 0.6));
+}
+
+/**
  * 最终回答（以及依据回读证据的改写）的正文输出预算。
  *
  * 旧实现固定 1200：在「强制思考、思维链计入 max_tokens」的平台（MiniMax M3.1 Flash）
@@ -267,6 +287,93 @@ export function synthesisRoomFor(store: Store, instruction: string): number {
   return Math.max(1024, chatInputLimit(store) - cost(instruction) - 1024);
 }
 
+/**
+ * 结构装带的三态账（读 / 排除 / 未读）→ `coverage.reading_plan`。
+ *
+ * 只在整篇阅读启用结构装带时出现。`excluded` 带块级依据（得分 + 命中词 + 理由），
+ * 所以"这节为什么没读"可以复核、可以重判——这是"完备 = 每一处都有裁决"的落点。
+ */
+function readingPlanField(planned: {
+  fromUnits?: boolean;
+  batchCount: number;
+  readRatio?: number;
+  excluded?: Array<{
+    section: number;
+    title: string;
+    pages: [number, number];
+    score: number;
+    hits: string[];
+    reason: string;
+  }>;
+  pruneDegraded?: string[];
+}): Pick<NonNullable<ChatResponse['coverage']>, 'reading_plan'> | Record<string, never> {
+  if (!planned.fromUnits) return {};
+  return {
+    reading_plan: {
+      from_units: true,
+      bands: planned.batchCount,
+      read_ratio: planned.readRatio ?? 1,
+      excluded: planned.excluded ?? [],
+      degraded: planned.pruneDegraded ?? []
+    }
+  };
+}
+
+/** "哪几节被排除、为什么"—— 一句话，可展开。空数组时返回空串（不产生噪音）。 */
+function exclusionNotice(planned: { excluded?: Array<{ title: string; pages: [number, number]; reason: string }> }): string {
+  const excluded = planned.excluded ?? [];
+  if (excluded.length === 0) return '';
+  const labels = excluded
+    .slice(0, 3)
+    .map((row) => row.title.trim() || `第 ${row.pages[0]}–${row.pages[1]} 页`)
+    .join('、');
+  return `已排除 ${excluded.length} 个与问题无关的单元：${labels}${
+    excluded.length > 3 ? ' 等' : ''
+  }（可在阅读范围里重读）。`;
+}
+
+/** 结构装带没能生效时的如实说明（降级必须可见，不能静默退回字符切）。 */
+function planDegradeNotice(planned: { planDegraded?: string }): string {
+  if (planned.planDegraded === 'page_exceeds_budget') {
+    return '本轮有单页原文超出批预算，未按章节边界装带（改为按字符切分），可能读到与问题无关的目录/参考文献页。';
+  }
+  if (planned.planDegraded === 'no_units') {
+    return '本轮没有解析出可用的章节单元，已退回按页切分。';
+  }
+  if (planned.planDegraded === 'page_text_mismatch') {
+    return '本轮页文本与版面块不一致（可能手工改过页或做过 OCR 覆盖），未按章节边界装带（改为按字符切分）。';
+  }
+  if (planned.planDegraded === 'structure_integrity_failed') {
+    return '章节结构异常（节区间有空洞/重叠），本轮按内容长度切分而未按章节边界装带；解析结果可能需要重建。';
+  }
+  return '';
+}
+
+/**
+ * 审计改写的降级说明：没有改写的地方必须说出来，否则用户会以为什么都没发生。
+ *
+ * - `unmatched_claims`：编号与正文对不上，未改写（保留原文）；
+ * - `unverified_claims`：系统性核验失效（材料里没有可核对的引文），整段保留原文。
+ *   这类情况**不能**说成"缺证"——那等于告诉用户"文献里没依据"，而事实是"这轮没核成"。
+ */
+function auditRewriteNotices(report: {
+  unmatched_claims?: number;
+  unverified_claims?: number;
+}): string[] {
+  const rows: string[] = [];
+  if ((report.unmatched_claims ?? 0) > 0) {
+    rows.push(
+      `本轮有 ${report.unmatched_claims} 处论断的编号与正文对不上，未做改写（保留原文，请以原文为准）。`
+    );
+  }
+  if ((report.unverified_claims ?? 0) > 0) {
+    rows.push(
+      `本轮有 ${report.unverified_claims} 处论断未能逐字核验（材料里没有对应引文可核对），已保留原文；这些段落的依据需要你回到原文确认。`
+    );
+  }
+  return rows;
+}
+
 /** 历史消息（只允许 user/assistant：历史是对话记录，不是资料或系统指令）。 */
 export interface HistoryMessage {
   role: 'user' | 'assistant';
@@ -311,7 +418,7 @@ function cacheHitTokens(row: Record<string, unknown>): number {
 
 function usageFromPayload(
   payload: unknown
-): { input: number; output: number; cached: number } | null {
+): { input: number; output: number; cached: number; reasoning: number } | null {
   if (!payload || typeof payload !== 'object') return null;
   const usage = (payload as { usage?: unknown }).usage;
   if (!usage || typeof usage !== 'object') return null;
@@ -319,7 +426,20 @@ function usageFromPayload(
   const input = numericToken(row.prompt_tokens) ?? numericToken(row.input_tokens);
   const output = numericToken(row.completion_tokens) ?? numericToken(row.output_tokens);
   if (input === null && output === null) return null;
-  return { input: input ?? 0, output: output ?? 0, cached: cacheHitTokens(row) };
+  return {
+    input: input ?? 0,
+    output: output ?? 0,
+    cached: cacheHitTokens(row),
+    // DeepSeek / OpenAI 的新 usage 把思维链放在 `completion_tokens_details.reasoning_tokens`。
+    reasoning: reasoningTokens(row)
+  };
+}
+
+/** 思维链 token：缺字段时按 0（没有思考就是 0，而不是"未知"）。 */
+function reasoningTokens(usage: Record<string, unknown>): number {
+  const details = usage.completion_tokens_details ?? usage.output_tokens_details;
+  if (!details || typeof details !== 'object') return 0;
+  return numericToken((details as Record<string, unknown>).reasoning_tokens) ?? 0;
 }
 
 const HISTORY_SUMMARY_RULE =
@@ -510,29 +630,48 @@ export async function callChatModel(
    * - 其它平台：只有 `config.taskThinking === true && task === true` 时才加
    *   `thinking: { type: 'disabled' }`，其余情况请求体**完全不出现**该字段。
    */
-  task = false
+  task = false,
+  /**
+   * 本次调用的思考策略覆盖（思考策略重排）：
+   * - `true`：即使 `task=true` 也开思考——批次精读属于"这段原文对问题意味着什么"，
+   *   是整条链路里语义最难的一步，值得思考；但强度压到 low，避免每批都按最高档烧。
+   * - `false`：即使非任务型也关思考。
+   * - 不传：沿用原口径（任务型关、最终回答开，写作模型除外）。
+   */
+  thinkingOverride?: boolean
 ): Promise<string> {
   // 任务型调用切到「分析模型」；最终回答仍用本配置（写作模型）。
   const target = task && config.taskConfig ? config.taskConfig : config;
   // 写作模型：最终回答不思考（把整个输出预算留给正文）。任务型调用不适用。
   const noThinking = !task && config.answerNoThinking === true;
+  // 「机械型」= 关思考，原本等价于 `task || noThinking`；现在可以被调用方显式覆盖
+  //（批次精读开思考，审计/修复仍然关）。
+  const wantThinking = thinkingOverride ?? !(task || noThinking);
+  const mechanical = !wantThinking;
   // 本次请求是否真的会思考：决定要不要为思维链加输出预留、要不要发思考强度。
-  // DeepSeek 官方只有非任务型（最终回答）会开启思考；MiniMax 恒为开启，
-  // 但它的预留已经在 chatOutputOptions 里按平台固定处理。
-  const thinking = isDeepSeekHost(target.baseUrl) && !task && !noThinking;
+  // 只有 DeepSeek 官方端点支持关闭/开启思考字段；其它平台由协议层决定发不发。
+  const thinking = isDeepSeekHost(target.baseUrl) && wantThinking;
   // 思考强度：
-  // - MiniMax 不能关闭思考，但能调深度（官方默认 max 最费 token）——任务型调用固定 low，
+  // - MiniMax 不能关闭思考，但能调深度（官方默认 max 最费 token）——机械型/批次精读固定 low，
   //   最终回答跟随配置（默认 high）；写作模型同样压到 low。不发送就等于按平台默认 max 烧预算。
-  // - DeepSeek 官方只在真的会思考（最终回答）时发送强度；任务型调用已关闭思考。
-  // - 其它平台字段不统一，猜着发会把无关服务打挂：一个字都不发。
+  // - DeepSeek 官方只在真的会思考时发送强度；批次精读（原任务型 + 覆盖开思考）用 low 封顶成本。
   const effortOptions = isMiniMaxHost(target.baseUrl)
     ? reasoningEffortOptions(
         target.baseUrl,
-        miniMaxEffort(task || noThinking, target.reasoningEffort)
+        miniMaxEffort(mechanical || (task && wantThinking), target.reasoningEffort)
       )
     : thinking
-      ? reasoningEffortOptions(target.baseUrl, target.reasoningEffort)
+      ? reasoningEffortOptions(
+          target.baseUrl,
+          task ? (target.reasoningEffort ?? 'low') : target.reasoningEffort
+        )
       : {};
+  // 思维链预留按观测自适应：样本够了就用 p90×1.2，否则退回平台常量。
+  // 固定常量的两个失败模式是"浪费正文预算"与"正文被推理吃光变成空回答"。
+  const thinkingReserve = adaptiveThinkingReserve(
+    observedReasoningTokens(),
+    isMiniMaxHost(target.baseUrl) ? MINIMAX_THINKING_RESERVE : DEEPSEEK_THINKING_RESERVE
+  );
   // 请求消息与容量检查用同一份数组：历史作为 prior 夹在系统指令与材料之间。
   const requestMessages = messages(system, user, prior);
   const inputText = requestMessages.map((message) => message.content).join('\n');
@@ -561,7 +700,7 @@ export async function callChatModel(
           // 非思考/任务型调用仍然按低温度采样，不要因为看到它"好像没起作用"就删掉。
           temperature: 0.2,
           // 开启思考时给思维链留出输出空间，否则正文预算会被推理吃掉。
-          ...chatOutputOptions(target.baseUrl, outputBudget, thinking),
+          ...chatOutputOptions(target.baseUrl, outputBudget, thinking, thinkingReserve),
           // 始终整段返回：不再请求流式响应。
           stream: false,
           messages: requestMessages,
@@ -571,10 +710,10 @@ export async function callChatModel(
           // MiniMax-M3 支持关闭思考（M3.1-Flash 不支持，传了会 400），写作模型选它时
           // 同样把 thinking 关掉，最终回答的思维链为 0 token。
           ...(isMiniMaxHost(target.baseUrl) &&
-          (task || noThinking) &&
+          mechanical &&
           miniMaxSupportsThinkingOff(target.model)
             ? { thinking: { type: 'disabled' } }
-            : taskThinkingOptions(target.baseUrl, task || noThinking, target.taskThinking === true)),
+            : taskThinkingOptions(target.baseUrl, mechanical, target.taskThinking === true)),
           // 思考强度只在真的会思考时才有意义（关闭思考时官方会忽略强度）。
           ...effortOptions,
           // 内容审核只挂在面向用户的回答上：过程性调用（task=true）不发，
@@ -602,6 +741,7 @@ export async function callChatModel(
   let truncated: Error | null = null;
   for (let attempt = 0; attempt < OUTPUT_LIMIT_MAX_ATTEMPTS; attempt += 1) {
     let payload: unknown;
+    const startedAt = Date.now();
     try {
       payload = await post(budget);
     } catch (error) {
@@ -610,19 +750,22 @@ export async function callChatModel(
       if (truncated) throw truncated;
       throw error;
     }
+    const elapsedMs = Date.now() - startedAt;
     const choice = (
       payload as { choices?: Array<{ finish_reason?: string }> }
     ).choices?.[0];
     onMeta?.({ finishReason: choice?.finish_reason });
     const usage = usageFromPayload(payload);
+    // 思维链用量单独记一份：它是"自适应预留"的唯一依据，也是用户能看见的思考成本。
+    if (usage) recordReasoningTokens(usage.reasoning);
     try {
       const content = responseText(payload);
-      recordModelUsage(inputText, content, usage);
+      recordModelUsage(inputText, content, usage, elapsedMs);
       return content;
     } catch (error) {
       // 被截断的请求同样消耗 token（思维链也计费）：照实计入本轮用量，
       // 否则界面的「本轮 tokens」会少报一整段被截断的生成。
-      recordModelUsage(inputText, '', usage);
+      recordModelUsage(inputText, '', usage, elapsedMs);
       if (choice?.finish_reason !== 'length') throw error;
       truncated = error instanceof Error ? error : new ModelResponseFormatError('模型达到输出上限。');
       const next = nextOutputBudget(budget);
@@ -655,23 +798,43 @@ async function synthesize(
   /** 用户笔记/批注补充材料（不是文献原文证据）：只进入最终回答，不进入证据链/审计。 */
   memoryMaterial = '',
   /** 会话早期摘要（模型生成，只是上下文，不是文献原文/证据）。 */
-  historySummary = ''
+  historySummary = '',
+  /**
+   * 作答前取到的外部资料（网页摘要/正文）：**只作背景**，不进证据链、不参与引用编号。
+   *
+   * 与"读后审计再补查"的区别：资料在回答生成前就装配好，答案一次成型，
+   * 不再先写一版再修订。审计仍会检查论断有没有原文支持，作为兜底。
+   */
+  externalBackground = ''
 ): Promise<{
   answer: string;
   sources: ChatSource[];
-  droppedRecords: number;
+  /** 因容量被缩短的派生分析条数（每批仍保留，只是变短；逐字证据不截）。 */
+  shortenedRecords: number;
   historyDropped: number;
   /** 本轮综合**实际送入模型**的材料原文（多批/续读用于 coverage.final_context）。 */
   finalContext: string;
 }> {
   const baseInstruction = answerInstruction(full, allowKnowledge);
-  // 笔记/批注是补充材料：容量不足时先丢派生分析、再丢它，不能让它挤掉逐字证据，
+  // 笔记/批注是补充材料：容量不足时先缩短派生分析、再丢它，不能让它挤掉逐字证据，
   // 也不能因为附了笔记把原本能回答的请求顶成"超出上下文容量"。
-  let instruction = baseInstruction + (memoryMaterial ? `\n\n${MEMORY_RULES}` : '') + historyContextRules(history, historySummary);
+  let instruction =
+    baseInstruction +
+    (memoryMaterial ? `\n\n${MEMORY_RULES}` : '') +
+    (externalBackground ? `\n\n${EXTERNAL_BACKGROUND_RULES}` : '') +
+    historyContextRules(history, historySummary);
   let memoryBlock = memoryMaterial ? `\n\n${memoryMaterial}` : '';
-  const buildMaterial = (rows: ReadingFinding[], memory = memoryBlock): string => {
+  if (externalBackground) memoryBlock += `\n\n${externalBackground}`;
+  const buildMaterial = (
+    rows: ReadingFinding[],
+    memory = memoryBlock,
+    cap?: number
+  ): string => {
+    // 截断只作用在**派生分析**上（每批保留、只是变短）；verified_quotes 是逐字原文，永不截。
+    const clip = (text: string): string =>
+      cap !== undefined && text.length > cap ? `${text.slice(0, cap)}…` : text;
     const readingRecords = rows
-      .map((finding, index) => `批次 ${index + 1} 分析：${finding.analysis}`)
+      .map((finding, index) => `批次 ${index + 1} 分析：${clip(finding.analysis)}`)
       .join('\n');
     const verified = bank
       .map(
@@ -688,21 +851,41 @@ async function synthesize(
     );
   };
   // 材料 room 跟随会话模型的「手动容量」；auto/未配置模型时 chatInputLimit 与
-  // inputBudget(readCapacity(...)) 完全相等，行为不变（fitContext 的丢批顺序也不变）。
+  // inputBudget(readCapacity(...)) 完全相等。
   const room = synthesisRoomFor(store, instruction);
+  let cap: number | undefined;
   let usable = findings;
   let material = buildMaterial(usable);
-  // 容量不足时**先丢派生分析**（从最后一批开始），
-  // 逐字证据银行一条都不动；连银行都放不下时如实报错，不截断证据伪装完成。
+  // 第一选择是**按公平份额缩短每条派生分析**（每批仍参与综合、只是变短），而不是从最后一批整条丢弃：
+  // 丢整条会让靠后的批次完全不参与综合（旧 reduce 层就是为了绕开这一点才存在的）。
+  // 每轮把每条的上限砍半，最多 8 轮；下限 120 字，避免切成无意义的碎片。
+  for (let round = 0; cost(material) > room && round < 8; round += 1) {
+    const totalChars = findings.reduce((sum, finding) => sum + finding.analysis.length, 0);
+    if (totalChars === 0) break;
+    const currentPerRecord =
+      cap ?? Math.max(...findings.map((finding) => finding.analysis.length));
+    const nextCap = Math.max(120, Math.floor(currentPerRecord / 2));
+    if (cap !== undefined && nextCap >= cap) break;
+    cap = nextCap;
+    material = buildMaterial(usable, memoryBlock, cap);
+  }
+  // 兜底：压到下限仍放不下（极小上下文窗口），退回"从最后一批整条丢弃"，
+  // 保证一定能收敛到"只剩问题 + 逐字证据"，而不是抛错让整轮回答失败。
   while (usable.length > 0 && cost(material) > room) {
     usable = usable.slice(0, -1);
-    material = buildMaterial(usable);
+    material = buildMaterial(usable, memoryBlock, cap);
   }
-  // 派生分析已丢完仍放不下：先丢笔记/批注补充材料（并撤掉对应提示词规则），再按原口径报错。
+  const shortenedRecords =
+    findings.length -
+    usable.length +
+    (cap === undefined
+      ? 0
+      : usable.filter((finding) => finding.analysis.length > cap).length);
+  // 派生分析已压到下限仍放不下：先丢笔记/批注补充材料（并撤掉对应提示词规则），再按原口径报错。
   if (cost(material) > room && memoryBlock) {
     memoryBlock = '';
     instruction = baseInstruction + historyContextRules(history, historySummary);
-    material = buildMaterial(usable, '');
+    material = buildMaterial(usable, '', cap);
   }
   if (cost(material) > room) {
     throw new Error(
@@ -741,7 +924,7 @@ async function synthesize(
   return {
     answer,
     sources,
-    droppedRecords: findings.length - usable.length,
+    shortenedRecords,
     historyDropped: preparedHistory.dropped,
     // 多批/续读总是保存**实际送入**的完整材料
     // （无长度门限、不截断成假内容）；单遍仍由调用方不写 coverage.final_context（值为空串）。
@@ -1071,29 +1254,6 @@ function readingWorkers(config: ReadingChatConfig, maxParallel: number): number 
   return gotoWorkers(config.baseUrl, maxParallel);
 }
 
-function withQuestionContext(
-  question: string,
-  selection: string,
-  config: ReadingChatConfig,
-  signal?: AbortSignal
-): (instruction: string, material: string) => Promise<string> {
-  return (instruction, material) =>
-    callChatModel(
-      config,
-      instruction,
-      batchReadingPrompt(material, question, selection),
-      3000,
-      signal,
-      undefined,
-      undefined,
-      undefined,
-      '',
-      [],
-      true
-    );
-}
-
-
 /** 只用已逐字核验证据的 role 判断“文献答到什么程度”。 */
 function answerabilityFor(
   bank: EvidenceBankRecord[],
@@ -1105,6 +1265,23 @@ function answerabilityFor(
       .filter((role): role is string => typeof role === 'string' && role.length > 0),
     searched
   );
+}
+
+/**
+ * 单遍阅读没有"证据银行"（那是多批的中间产物），所以拿空 bank 判会永远得到 ABSENT。
+ * 单遍改用**审计结果**回答同一个问题：这批论断里有多少真的被原文支持。
+ *
+ * 与 `documentAnswerability` 的口径对齐：SUFFICIENT=足以回答，PARTIAL=只答了一部分，
+ * MENTION_ONLY=提到了但没答到点上，ABSENT=文献里没有可用依据。
+ */
+function singlePassAnswerability(
+  audit: { claims: ReadonlyArray<{ verdict: string }> } | null | undefined
+): ReturnType<typeof documentAnswerability> {
+  const claims = audit?.claims ?? [];
+  if (claims.length === 0) return 'UNCERTAIN';
+  const supported = claims.filter((claim) => claim.verdict === 'supported').length;
+  if (supported === 0) return 'ABSENT';
+  return supported * 5 >= claims.length * 3 ? 'SUFFICIENT' : 'PARTIAL';
 }
 
 
@@ -1277,17 +1454,13 @@ export async function auditGeneratedAnswer(
 }
 
 /**
- * 阅读路径：plan -> 批次 -> 逐字证据 -> 最终回答。
- * taskId 存在时只补读上次未读页，并把新证据与上次证据合并后重新综合。
+ * 回读轮数：**只由证据缺口决定，不再有"阅读深度"档位**。
+ *
+ * 原来的 `fast/standard/exhaustive` 只是把同一个数字换了个名字——它不改变阅读粒度，
+ * 只改变"读完之后返工几次"，而返工轮是最贵的（每轮 = 补读 + 修订 + 重审计）。
+ * 现在统一按"多批 + 缺证条数"给上限，并且真正决定要不要回读的是 `worthRereading`。
  */
-function rereadRounds(
-  rigor: 'auto' | 'fast' | 'standard' | 'exhaustive',
-  multiPass: boolean,
-  unsupported: number
-): number {
-  if (rigor === 'fast') return 0;
-  if (rigor === 'exhaustive') return 3;
-  if (rigor === 'standard') return 2;
+function rereadRounds(multiPass: boolean, unsupported: number): number {
   if (!multiPass) return 1;
   return unsupported >= 3 ? 3 : 2;
 }
@@ -1507,7 +1680,6 @@ function mergeSingleDocumentRuns(
       dimensions.length > 0 ? readingCoverage(sourceFindings, dimensions) : {},
     readPages,
     deferredBatches: 0,
-    resumed_reduces: base.resumed_reduces + extra.resumed_reduces,
     deferredPages,
     deferredDocuments,
     report: {
@@ -1516,7 +1688,6 @@ function mergeSingleDocumentRuns(
       multiPass: true,
       findings: sourceFindings.length,
       resumed_batches: base.report.resumed_batches + extra.report.resumed_batches,
-      resumed_reduces: base.report.resumed_reduces + extra.report.resumed_reduces,
       evidence: evidence.report,
       evidence_bank: {
         available: evidence.report.available,
@@ -1762,7 +1933,11 @@ export async function answerWithCorpus(
       requestInputLimit,
       '分批阅读原文',
       [],
-      true
+      true,
+      // 批次精读开思考：「这段原文对问题意味着什么」是链路里语义最难的一步。
+      // 强度由 callChatModel 压到 low；预留按观测自适应。
+      // 环境变量只用于实测 A/B（与 STUDIANDA_READING_BUDGET 同口径），生产不设置即为开。
+      process.env.STUDIANDA_BATCH_THINKING === 'on' // 实测默认关：批次开思考让用时近翻倍、无可辨认质量收益
     );
   const readOptions = {
     dimensions,
@@ -2119,9 +2294,9 @@ export async function answerWithCorpus(
       `有 ${qualityTotal} 页文本疑似乱码/字体异常（替换字符占比过高），已视为解析可疑、未宣称读到全篇。`
     );
   }
-  if (synthesized.droppedRecords > 0) {
+  if (synthesized.shortenedRecords > 0) {
     notices.push(
-      `按上下文容量省略了 ${synthesized.droppedRecords} 条批次派生分析；逐字核验摘引未删。`
+      `为适配上下文容量，缩短了 ${synthesized.shortenedRecords} 条批次派生分析（每批仍参与综合；逐字核验摘引未删）。`
     );
   }
   const historyNote = historyDropNotice(synthesized.historyDropped, audit.history_dropped);
@@ -2275,7 +2450,6 @@ export async function answerWithReading(
   taskId?: string,
   allowKnowledge = false,
   onDraft?: (text: string) => void,
-  rigor: 'auto' | 'fast' | 'standard' | 'exhaustive' = 'auto',
   onDraftReset?: () => void,
   onStage?: (text: string) => void,
   onAudit?: (claims: AuditClaim[]) => void,
@@ -2285,7 +2459,17 @@ export async function answerWithReading(
   /** 用户笔记/批注补充材料：只进入最终回答，不进入证据链/审计/引用编号。 */
   memoryMaterial = '',
   /** 会话早期摘要（模型生成，只是上下文，不是文献原文/证据）。 */
-  historySummary = ''
+  historySummary = '',
+  /**
+   * 本轮的阅读策略覆盖（用户在闸门里显式点过按钮才有值）：
+   * `prune` = 只读相关部分；`full` = 强制读完整篇（装不下就分轮）。
+   */
+  readingForce?: 'prune' | 'full',
+  /**
+   * 作答前取到的外部网页资料（只作背景，不进证据链、不参与引用编号）。
+   * 由调用方在生成前取好，答案一次成型；审计仍作兜底。
+   */
+  externalBackground = ''
 ): Promise<ChatResponse | null> {
   const document = store.getDocument(documentId);
   if (!document) return null;
@@ -2382,18 +2566,17 @@ export async function answerWithReading(
         pages: unreadPages,
         reason: '继续阅读未读页'
       };
-      // 著作按章继续：只读下一章（章界对齐）；非著作/无目录时保留原来的"继续未读页"。
+      // 续读**不按章裁剪**：未读页就是未读页，按章对齐会把"这一章剩下的部分"再切一次，
+      // 结构只应该分组（下面只用它标注"现在在第几章"），不该决定读哪些页。
       let continueChapter: { chapter: ChapterRange; total: number } | null = null;
-      const nextChapter = await nextChapterContinuePlan(
+      const currentChapter = await nextChapterContinuePlan(
         store,
         documentId,
         prior.plan,
         unreadPages
       );
-      if (nextChapter) {
-        continuePlan.pages = nextChapter.pages;
-        continuePlan.reason = nextChapter.plan.reason;
-        continueChapter = { chapter: nextChapter.chapter, total: nextChapter.total };
+      if (currentChapter) {
+        continueChapter = { chapter: currentChapter.chapter, total: currentChapter.total };
       }
       const continueFields = continueChapter
         ? {
@@ -2402,7 +2585,7 @@ export async function answerWithReading(
           }
         : {};
       await ensureAutoOcr(store, secrets, documentId, continuePlan.pages);
-      const planned = planReading(store, documentId, continuePlan, page, budget, 1);
+      const planned = await planReadingWithStructure(store, documentId, continuePlan, page, budget, 1);
       if (planned.batchCount <= 0 || planned.sources.length === 0) {
         return { ...prior, taskId, unread_pages: unreadPages, ...continueFields };
       }
@@ -2423,7 +2606,9 @@ export async function answerWithReading(
             requestInputLimit,
             '分批阅读原文',
             [],
-            true
+            true,
+            // 批次精读开思考（强度 low）：这是"读懂了什么"的核心判断，值得思考。
+            process.env.STUDIANDA_BATCH_THINKING === 'on' // 实测默认关：批次开思考让用时近翻倍、无可辨认质量收益
           ),
         {
           dimensions: prior.plan.dimensions,
@@ -2551,6 +2736,8 @@ export async function answerWithReading(
       store.saveReadingTask(taskId, next, [documentId]);
       if (remaining.length === 0) store.deleteReadingTask(taskId);
       const notices: string[] = [];
+      // 审计没有改写的地方必须说出来（续读路径）。
+      notices.push(...auditRewriteNotices(audit));
       if (sanitized.removed.length > 0) {
         notices.push(`已删除无来源支持的页码表述：${sanitized.removed.join('、')}`);
       }
@@ -2566,9 +2753,9 @@ export async function answerWithReading(
           `本轮先读完前 ${execution.report.batches} 批；还有 ${execution.deferredPages.length} 页未读，已保存，可继续阅读。`
         );
       }
-      if (synthesized.droppedRecords > 0) {
+      if (synthesized.shortenedRecords > 0) {
         notices.push(
-          `按上下文容量省略了 ${synthesized.droppedRecords} 条批次派生分析；逐字核验摘引未删。`
+          `为适配上下文容量，缩短了 ${synthesized.shortenedRecords} 条批次派生分析（每批仍参与综合；逐字核验摘引未删）。`
         );
       }
       const historyNote = historyDropNotice(synthesized.historyDropped, audit.history_dropped);
@@ -2732,7 +2919,38 @@ export async function answerWithReading(
         }
       : undefined;
 
-  let planned = planReading(store, documentId, effectivePlan, page, budget, 1);
+  // 裁决用的查询串：问题 + 选文 + 规划给出的同义表达。用 CJK bigram 切词，不做正则切片。
+  const readingQuery = [question, selection, ...(Array.isArray(plan.queries) ? plan.queries : [])]
+    .filter((part) => typeof part === 'string' && part.trim())
+    .join(' ');
+  let planned = await planReadingWithStructure(
+    store,
+    documentId,
+    effectivePlan,
+    page,
+    budget,
+    1,
+    readingQuery,
+    // 用户配了 embedding 就用它：同义/跨语言只有语义通道能救回来（未配置时返回 null）。
+    (texts) => vectorsFor(store, secrets, texts),
+    // 边界带交给模型做二元裁决：只判"这节帮不帮得上"，不让它写解释。
+    (instruction, material) =>
+      callChatModel(
+        config,
+        instruction,
+        material,
+        400,
+        signal,
+        undefined,
+        undefined,
+        undefined,
+        '裁决阅读范围',
+        [],
+        true
+      ),
+    // 用户在闸门里点过按钮才有值：`full` 不裁决，`prune` 即使装得下也先筛。
+    readingForce
+  );
   if (planned.batchCount <= 0) return null;
   let readPages = new Set(planned.pages);
   // 本地缺口安全网只在**局部范围**跑：
@@ -2772,10 +2990,20 @@ export async function answerWithReading(
     );
     readPages = new Set(planned.pages);
   }
-  let unreadPages = allPages.filter((pageNumber) => !readPages.has(pageNumber));
+  // 三态账的"排除"页：裁决为不读的单元覆盖的页，不算"未读"——
+  // 否则"继续阅读"会把用户明知道不该读的参考文献/无关章一直摆在待读里。
+  const excludedPageSet = new Set<number>();
+  for (const row of planned.excluded ?? []) {
+    for (let pageNumber = row.pages[0]; pageNumber <= row.pages[1]; pageNumber += 1) {
+      excludedPageSet.add(pageNumber);
+    }
+  }
+  let unreadPages = allPages.filter(
+    (pageNumber) => !readPages.has(pageNumber) && !excludedPageSet.has(pageNumber)
+  );
   // 综合前回读：局部/部分阅读时，先让模型指出
   // 回答所需的定义、反例、条件或跨页联系缺在哪几页，再补读后再综合。
-  if (rigor !== 'fast' && unreadPages.length > 0 && planned.batchCount === 1) {
+  if (unreadPages.length > 0 && planned.batchCount === 1) {
     try {
       const extras = await requestRereadPages(
         store,
@@ -2884,9 +3112,13 @@ export async function answerWithReading(
       allowKnowledge
     );
     let singleMemory = memoryMaterial ? `\n\n${memoryMaterial}` : '';
+    // 网页背景比笔记更"可丢"：容量不够时先丢它（笔记是用户自己的记录，优先级更高）。
+    let background = externalBackground;
+    if (background) singleMemory += `\n\n${background}`;
     let singleInstruction =
       baseSingleInstruction +
-      (singleMemory ? `\n\n${MEMORY_RULES}` : '') +
+      (memoryMaterial ? `\n\n${MEMORY_RULES}` : '') +
+      (background ? `\n\n${EXTERNAL_BACKGROUND_RULES}` : '') +
       historyContextRules(history, historySummary);
     const buildSingleMaterial = (memory = singleMemory): string =>
       `问题：${question}${selection ? `\n选文：${selection}` : ''}\n当前页：第 ${page} 页\n\n文献原文参考：\n${material}${
@@ -2900,7 +3132,11 @@ export async function answerWithReading(
       inputCost(messages(singleInstruction, singleMaterial)) > requestInputLimit
     ) {
       singleMemory = '';
-      singleInstruction = baseSingleInstruction + historyContextRules(history, historySummary);
+      background = '';
+      singleInstruction =
+        baseSingleInstruction +
+        (memoryMaterial ? `\n\n${MEMORY_RULES}` : '') +
+        historyContextRules(history, historySummary);
       singleMaterial = buildSingleMaterial();
     }
     // 多轮历史进入最终回答：超容量时先丢最旧，丢了几轮如实写进 notice。
@@ -2948,7 +3184,7 @@ export async function answerWithReading(
     // 深度档位的缺口回读：按档位决定的轮数上限，
     // 用核对意见回读原文并修订，再重新核对；fast 为 0 轮。
     const unsupported = audit.claims.filter((claim) => claim.verdict === 'unsupported').length;
-    const rounds = rereadRounds(rigor, false, unsupported);
+    const rounds = rereadRounds(false, unsupported);
     const rereadPages = new Set(planned.pages);
     // 回读门槛：只有「材料不够」类问题才回读/重写；
     // 「摘引与论断不匹配」这类再读一遍原文也不会变，重写整篇只是让用户多等一次生成。
@@ -3027,6 +3263,8 @@ export async function answerWithReading(
         signal,
         allowKnowledge,
         userContext(question, selection),
+        // 审计输入沿用原口径（证据银行为空 → 交给审计按"缺证"路由来源建议）；
+        // 用户可见的 answerability 另由审计结论决定，见下方 singlePassAnswerability。
         answerabilityFor([], gapRan),
         externalAllowed,
         requestInputLimit,
@@ -3089,6 +3327,7 @@ export async function answerWithReading(
         states: {},
         evidence: {},
         evidence_pages: {},
+        ...readingPlanField(planned),
         quality_pages: qualityPages,
         coverage_summary: ledgerSummary(singleLedger),
         coverage_note:
@@ -3105,12 +3344,17 @@ export async function answerWithReading(
           '页面文字与本机 OCR/视觉解读直接复用本机已保存的结果（未重新识别）；模型阅读按本轮问题重新进行。'
       } as ChatResponse['coverage'],
       unread_pages: unreadPages,
-      answerability: answerabilityFor([], gapRan),
+      // 单遍没有证据银行，改用审计结论：这比"空 bank → 恒 ABSENT"更接近用户看到的答案。
+      answerability: singlePassAnswerability(audit),
       taskId: nextTaskId,
       ...withCitationSupport(finalAnswer, sources, audit.claims),
       audit,
         notice: (() => {
         const notices: string[] = [];
+        const excludedNotice = exclusionNotice(planned);
+        if (excludedNotice) notices.push(excludedNotice);
+        const degradeNotice = planDegradeNotice(planned);
+        if (degradeNotice) notices.push(degradeNotice);
         if (sanitized.removed.length > 0) {
           notices.push(`已删除无来源支持的页码表述：${sanitized.removed.join('、')}`);
         }
@@ -3122,6 +3366,8 @@ export async function answerWithReading(
           );
         }
         if (rereadSkipped) notices.push(rereadSkipped);
+        // 审计没有改写的地方必须说出来，否则用户会以为改写过了。
+        notices.push(...auditRewriteNotices(audit));
         const historyNote = historyDropNotice(historyDropped, audit.history_dropped);
         if (historyNote) notices.push(historyNote);
         if (visual.warnings.length > 0) notices.push(...visual.warnings);
@@ -3151,7 +3397,9 @@ export async function answerWithReading(
       requestInputLimit,
       '分批阅读原文',
       [],
-      true
+      true,
+      // 批次精读开思考（强度 low）：这是"读懂了什么"的核心判断，值得思考。
+      process.env.STUDIANDA_BATCH_THINKING === 'on' // 实测默认关：批次开思考让用时近翻倍、无可辨认质量收益
     );
   let execution = await readInBatches(
     planned.sources,
@@ -3161,6 +3409,8 @@ export async function answerWithReading(
       dimensions: plan.dimensions,
       maxBatches: turnReadBatches(capacity.maxReadBatches),
       allowPartial: true,
+      // 结构装带的边界已经算好；再让 batches() 按字符切会把章节边界重新切碎。
+      ...(planned.fromUnits ? { groups: planned.batches } : {}),
       checkpoint: readingCheckpointFor(store, activeTaskId, documentId),
       identity: readingCheckpointIdentity(
         question,
@@ -3200,7 +3450,7 @@ export async function answerWithReading(
   );
   // 综合前回读：多批或未读全时，按模型指出的
   // 定义/反例/条件类缺口先补读一批，合并进证据后再综合，而不是等审计发现问题再补。
-  if (rigor !== 'fast' && (execution.report.multiPass || unreadPages.length > 0)) {
+  if (execution.report.multiPass || unreadPages.length > 0) {
     try {
       const extras = await requestRereadPages(
         store,
@@ -3276,7 +3526,11 @@ export async function answerWithReading(
   }
   if (execution.bank.length === 0) return null;
   // 部分阅读：只有真正读完的批次的页算已读；延期批次留给“继续阅读”。
-  unreadPages = allPages.filter((pageNumber) => !execution.readPages.includes(pageNumber));
+  // 被裁决排除的页不算未读（同上：它们是"明确不读"，不是"还没读"）。
+  unreadPages = allPages.filter(
+    (pageNumber) =>
+      !execution.readPages.includes(pageNumber) && !excludedPageSet.has(pageNumber)
+  );
   // 缺口检索是否查全（同单遍路径口径）：answerability 的 searched 必须用这个，
   // 不能用 full_extracted_text。
   const gapSearchedMulti = !notSearchable && gapTerms.length > 0;
@@ -3307,7 +3561,8 @@ export async function answerWithReading(
     visualText,
     history,
     memoryMaterial,
-    historySummary
+    historySummary,
+    externalBackground
   );
   const sanitized = sanitizeAnswer(synthesized.answer, synthesized.sources);
   synthesized.answer = sanitized.answer;
@@ -3334,7 +3589,7 @@ export async function answerWithReading(
     .map((source, index) => sourceText(source, index + 1))
     .join('\n\n');
   const unsupported = audit.claims.filter((claim) => claim.verdict === 'unsupported').length;
-  const rounds = rereadRounds(rigor, true, unsupported);
+  const rounds = rereadRounds(true, unsupported);
   const rereadPages = new Set(planned.pages);
   // 同上：核对问题属于「匹配类」时不回读、不重写，并在 notice 里如实说明（不把未回读说成已回读）。
   let rereadSkipped = '';
@@ -3557,6 +3812,7 @@ export async function answerWithReading(
             batches: execution.coverage.batches,
             recorded_batches: execution.coverage.recorded_batches,
             hits: execution.coverage.hits,
+            ...readingPlanField(planned),
             states: execution.coverage.states,
             evidence: execution.coverage.evidence,
             evidence_pages: execution.coverage.evidence_pages,
@@ -3597,6 +3853,10 @@ export async function answerWithReading(
     audit,
     notice: (() => {
       const notices: string[] = [];
+      const excludedNotice = exclusionNotice(planned);
+      if (excludedNotice) notices.push(excludedNotice);
+      const degradeNotice = planDegradeNotice(planned);
+      if (degradeNotice) notices.push(degradeNotice);
       if (sanitized.removed.length > 0) {
         notices.push(`已删除无来源支持的页码表述：${sanitized.removed.join('、')}`);
       }
@@ -3612,9 +3872,9 @@ export async function answerWithReading(
           `本轮先读完前 ${execution.report.batches} 批；还有 ${execution.deferredPages.length} 页未读，已保存，可继续阅读。`
         );
       }
-      if (synthesized.droppedRecords > 0) {
+      if (synthesized.shortenedRecords > 0) {
         notices.push(
-          `按上下文容量省略了 ${synthesized.droppedRecords} 条批次派生分析；逐字核验摘引未删。`
+          `为适配上下文容量，缩短了 ${synthesized.shortenedRecords} 条批次派生分析（每批仍参与综合；逐字核验摘引未删）。`
         );
       }
       const historyNote = historyDropNotice(synthesized.historyDropped, audit.history_dropped);
@@ -3624,13 +3884,12 @@ export async function answerWithReading(
           `按完整请求容量省略了 ${execution.report.evidence_bank.dropped} 条证据；逐字核验摘引完整保留。`
         );
       }
-      if (execution.report.reduce_warning) {
-        notices.push(execution.report.reduce_warning);
-      }
       if (lexicalGapPages.length > 0) {
         notices.push(`本机核对发现 ${lexicalGapPages.length} 页问题相关原文未读，已补读。`);
       }
       if (rereadSkipped) notices.push(rereadSkipped);
+      // 审计没有改写的地方必须说出来（整篇/多批路径）。
+      notices.push(...auditRewriteNotices(audit));
       if (visual.warnings.length > 0) notices.push(...visual.warnings);
       if (qualityNotice) notices.push(qualityNotice);
       return notices.length > 0 ? notices.join('；') : undefined;

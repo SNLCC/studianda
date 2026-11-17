@@ -7488,8 +7488,9 @@ function ReaderView({
        * 内取一次并立即清空，避免它随 React Query 的 mutation 变量长期驻留内存。
        */
       voice?: boolean;
-      readingScope?: 'auto' | 'local' | 'document' | 'corpus';
-      readingRigor?: 'auto' | 'fast' | 'standard' | 'exhaustive';
+      readingScope?: 'auto' | 'corpus';
+      /** 闸门里选的阅读策略（只读相关部分 / 读完整篇）。 */
+      readingForce?: 'prune' | 'full';
       readingChapterIndex?: number;
       sourcePolicy?: 'auto' | 'document_only';
       scopeDocuments?: string[];
@@ -7524,7 +7525,7 @@ function ReaderView({
             history: input.history,
             audio: voiceAudio,
             reading_scope: input.readingScope,
-            reading_rigor: input.readingRigor,
+            reading_force: input.readingForce,
             reading_chapter_index: input.readingChapterIndex,
             source_policy: input.sourcePolicy,
             scope_documents: input.scopeDocuments,
@@ -10376,7 +10377,7 @@ function ReaderView({
               falsify={chatData?.falsify}
               error={budgetWarning ? null : askMutation.isError ? askMutation.error.message : null}
               budget={budgetWarning}
-              onConfirmBudget={() => {
+              onConfirmBudget={(force) => {
                 if (!activeSessionId) {
                   setChatActionError('阅读伙伴会话还在准备中，请稍后再试。');
                   return;
@@ -10386,6 +10387,8 @@ function ReaderView({
                   question: lastQuestion,
                   selection: chatQuote,
                   confirmBudget: true,
+                  // 用户在闸门里选的策略：只读相关部分 / 读完整篇。
+                  ...(force ? { readingForce: force } : {}),
                   ...lastAskExtras
                 });
               }}
@@ -10463,7 +10466,6 @@ function ReaderView({
                   confirmSearch: options?.confirmSearch,
                   searchToken: options?.search_token,
                   readingScope: options?.readingScope,
-                  readingRigor: options?.readingRigor,
                   readingChapterIndex: options?.readingChapterIndex,
                   sourcePolicy: options?.sourcePolicy,
                   scopeDocuments: options?.scopeDocuments,

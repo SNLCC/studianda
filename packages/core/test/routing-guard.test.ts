@@ -266,7 +266,7 @@ describe('routeQuestion（history / 缓存 / 页码校验）', () => {
     expect(route.search).toBe(false);
   });
 
-  it('模型给的页码超出文献页数时退回整篇（不读不存在的页）', async () => {
+  it('模型返回的页码一律丢弃：读哪几页由本机决定', async () => {
     vi.stubGlobal('fetch', async () =>
       routeResponse({
         document: true,
@@ -279,12 +279,13 @@ describe('routeQuestion（history / 缓存 / 页码校验）', () => {
       })
     );
     const route = await routeQuestion(routeConfigStore(), secretsStub(), baseInput);
-    expect(route.plan?.breadth).toBe('document');
+    // 页码不再来自模型；`local` 又给不出本地可定位的页，于是保守退回整篇。
     expect(route.plan?.pages).toEqual([]);
-    expect(route.plan?.reason).toContain('超出文献页数');
+    expect(route.plan?.breadth).toBe('document');
+    expect(route.plan?.reason ?? '').not.toContain('超出文献页数');
   });
 
-  it('页码在范围内时保留 local 计划', async () => {
+  it('模型给的页码即使在范围内也不进入计划', async () => {
     vi.stubGlobal('fetch', async () =>
       routeResponse({
         document: true,
@@ -297,8 +298,7 @@ describe('routeQuestion（history / 缓存 / 页码校验）', () => {
       })
     );
     const route = await routeQuestion(routeConfigStore(), secretsStub(), baseInput);
-    expect(route.plan?.breadth).toBe('local');
-    expect(route.plan?.pages).toEqual([2]);
+    expect(route.plan?.pages).toEqual([]);
   });
 });
 

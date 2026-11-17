@@ -138,6 +138,102 @@ describe('answer audit', () => {
     expect(rewritten.answer).not.toContain('提升了治理绩效');
   });
 
+  it('标题行不会被改写成缺证提示（模型把标题判成 unsupported 也一样）', async () => {
+    // 回答是多行 Markdown：第一条论断实际是"标题"，模型却把它判成 unsupported。
+    const answer = ['## 结论', '', '工程干预提升了治理绩效 [1]。'].join('\n');
+    const report = await auditAnswer(
+      answer,
+      async () =>
+        JSON.stringify({
+          claims: [row(1, 'unsupported'), row(2, 'unsupported')]
+        }),
+      { originals }
+    );
+    const rewritten = rewriteAuditedAnswer(answer, report, originals);
+    // 标题必须原样保留。
+    expect(rewritten.answer).toContain('## 结论');
+    // 标题不会被替换成免责话；正文那段仍然按缺证处理。
+    expect(rewritten.answer.split('\n')[0]).toBe('## 结论');
+    expect(rewritten.answer).toContain('此处结论缺少本轮证据支持');
+  });
+
+  it('编号与正文对得上时照旧替换缺证段落', async () => {
+    const answer = '工程干预提升了治理绩效 [1]。';
+    const report = await auditAnswer(
+      answer,
+      async () =>
+        JSON.stringify({
+          claims: [row(1, 'unsupported', { text: '工程干预提升了治理绩效' })]
+        }),
+      { originals }
+    );
+    const rewritten = rewriteAuditedAnswer(answer, report, originals);
+    expect(rewritten.answer).toContain('此处结论缺少本轮证据支持');
+    expect(report.unmatched_claims).toBeUndefined();
+  });
+
+  it('系统性核验失效时保留原文，只记账（不整篇替换成免责话）', () => {
+    // 四段全部被判缺证：这是"材料里没有可核对引文"的典型信号，不是四段都该删。
+    const lines = ['第一段讲制度延续。', '第二段讲灾异记录。', '第三段讲水利工程。', '第四段讲结论。'];
+    const report = {
+      status: '已进行模型证据支持复核' as const,
+      issues: [] as string[],
+      claims: lines.map((text, index) => ({
+        claim: index + 1,
+        text,
+        verdict: 'unsupported' as const
+      })),
+      unverified_claims: undefined as number | undefined
+    };
+    const rewritten = rewriteAuditedAnswer(lines.join('\n'), report, []);
+    expect(rewritten.answer).toBe(lines.join('\n'));
+    expect(rewritten.answer).not.toContain('此处结论缺少本轮证据支持');
+    expect(report.unverified_claims).toBe(4);
+  });
+
+  it('只有个别缺证时仍按原口径替换那一段', () => {
+    const lines = ['第一段讲制度延续。', '第二段讲灾异记录。', '第三段讲水利工程。', '第四段讲结论。'];
+    const report = {
+      status: '已进行模型证据支持复核' as const,
+      issues: [] as string[],
+      claims: [
+        { claim: 1, text: lines[0]!, verdict: 'inference' as const },
+        { claim: 2, text: lines[1]!, verdict: 'inference' as const },
+        { claim: 3, text: lines[2]!, verdict: 'unsupported' as const },
+        { claim: 4, text: lines[3]!, verdict: 'inference' as const }
+      ],
+      unverified_claims: undefined as number | undefined
+    };
+    const rewritten = rewriteAuditedAnswer(lines.join('\n'), report, []);
+    // 个别缺证照旧替换，其余保留。
+    expect(rewritten.answer).toContain('此处结论缺少本轮证据支持');
+    expect(rewritten.answer).toContain('第一段讲制度延续');
+    expect(rewritten.answer).not.toContain('第三段讲水利工程');
+    expect(report.unverified_claims).toBeUndefined();
+  });
+
+  it('论断与行按文本绑定：编号错位也能改对那一段', () => {
+    const answer = ['## 标题', '甲段正文。', '乙段正文。'].join('\n');
+    const report = {
+      status: '已进行模型证据支持复核' as const,
+      issues: [] as string[],
+      claims: [
+        // 编号与行顺序故意不一致：审计把"乙段"编成第 1 条。
+        { claim: 1, text: '乙段正文。', verdict: 'unsupported' as const },
+        { claim: 2, text: '甲段正文。', verdict: 'inference' as const }
+      ],
+      unverified_claims: undefined as number | undefined,
+      unmatched_claims: undefined as number | undefined
+    };
+    const rewritten = rewriteAuditedAnswer(answer, report, []);
+    // 乙段（缺证）被替换；甲段（推断）加前缀；标题原样。
+    expect(rewritten.answer).toContain('此处结论缺少本轮证据支持');
+    expect(rewritten.answer).not.toContain('乙段正文');
+    expect(rewritten.answer).toContain('推断（有原文依据，但不是作者直接结论）：甲段正文');
+    expect(rewritten.answer.split('\n')[0]).toBe('## 标题');
+    expect(report.unmatched_claims).toBeUndefined();
+  });
+
   it('groups long answers by budget and citation count', () => {
     const lines = Array.from({ length: 8 }, (_, index) => ({
       claim: index + 1,

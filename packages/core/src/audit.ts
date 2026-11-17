@@ -88,6 +88,22 @@ export interface AuditReport {
   /** 审计阶段因容量省略的历史轮数（仅当真的发生丢弃时出现；无丢弃时省略）。 */
   history_dropped?: number;
   evidence_scope?: { mode: string; groups?: unknown[] };
+  /**
+   * 审计编号与回答行对不上、因而**没有执行改写**的论断条数。
+   *
+   * 改写是按"第 N 条论断 = 第 N 个非空行"定位的；模型给 Markdown 时这个对应会错位，
+   * 直接按编号替换会把标题/段落整行吞掉。错位时保留原文并记账，而不是静默改错内容。
+   */
+  unmatched_claims?: number;
+  /**
+   * 因"本轮没有可核验引文"而没有改写、保留原文的论断条数。
+   *
+   * 与 `unmatched_claims` 的区别：这里不是编号错位，而是**系统性核验失效**——
+   * 材料一多，逐字摘引被压缩，审计拿不到可核验引文，于是把所有论断都判成缺证。
+   * 这种时候整段替换成免责话会让"读了全文"的答案比"只读相关部分"更差，
+   * 所以保留原文、只记账，让上层如实说明。
+   */
+  unverified_claims?: number;
 }
 
 const EVIDENCE_KEY_RULE =
@@ -496,19 +512,51 @@ export function rewriteAuditedAnswer(
   answer: string;
   pageMentionsRemoved: Array<{ claim: number; text: string }>;
 } {
-  const byClaim = new Map(report.claims.map((claim) => [claim.claim, claim]));
+  const claims = report.claims;
+  // 论断与行的绑定**按文本**做，不按行号猜：模型写 Markdown、sanitize 改动、修订后重审，
+  // 都会让"第 N 条 = 第 N 个非空行"失准（实测曾把标题/整段正文替换成免责话）。
+  const bound = new Set<number>();
   let lineNumber = 0;
+  let unmatched = 0;
+  let unverified = 0;
+  // 系统性核验失效：材料一多，逐字摘引被压缩，审计拿不到可核验引文，于是把几乎所有论断
+  // 都判成缺证。这时整段替换会让"读了全文"的答案比"只读相关部分"更差（实测：整篇被
+  // 免责话淹没）。判据刻意保守：至少 3 段、且缺证占一半以上，才按"核验失效"处理。
+  const unsupportedRows = claims.filter((claim) => claim.verdict === 'unsupported');
+  const systemicFailure =
+    unsupportedRows.length >= 3 &&
+    claims.length > 0 &&
+    unsupportedRows.length * 2 >= claims.length;
+  const claimForLine = (line: string): AuditClaim | undefined => {
+    const byText = claims.find(
+      (claim) => !bound.has(claim.claim) && claim.text && lineMatchesClaim(claim.text, line)
+    );
+    if (byText) return byText;
+    // 兼容不返回 text 的旧报告：退回"收到的顺序"。
+    return claims.find(
+      (claim) => !bound.has(claim.claim) && !claim.text && claim.claim === lineNumber
+    );
+  };
   const removed: Array<{ claim: number; text: string }> = [];
   const rewritten = answer
     .split(/\r?\n/)
     .map((line) => {
       if (!line.trim()) return line;
       lineNumber += 1;
-      const claim = byClaim.get(lineNumber);
+      const claim = claimForLine(line);
       if (!claim) return line;
+      bound.add(claim.claim);
+      // Markdown 标题行永远原样保留：把它换成"缺证"提示会让整篇回答失去结构（实测踩到过）。
+      // 只认显式 `#` 标记，不按"短句像标题"去猜——那会误伤真正的短论断。
+      if (/^\s*#{1,6}\s/.test(line)) return line;
       if (claim.verdict === 'unsupported') {
         // 审计本身没有完成（不是“核验后缺证”）：保留原文，不把“没核”伪装成“缺证”。
         if (claim.review_problem === 'audit_failed') return line;
+        // 系统性核验失效：保留原文并记账，由上层如实说明"这段未核验"。
+        if (systemicFailure) {
+          unverified += 1;
+          return line;
+        }
         return '此处结论缺少本轮证据支持，暂不作确定回答。';
       }
       if (claim.verdict === 'background') {
@@ -545,7 +593,30 @@ export function rewriteAuditedAnswer(
       return stripped.text;
     })
     .join('\n');
+  // 有文本却始终没绑到任何一行：说明审计回的论断在正文里找不到对应段（真错位）。
+  unmatched = claims.filter((claim) => claim.text && !bound.has(claim.claim)).length;
+  if (unmatched > 0) report.unmatched_claims = unmatched;
+  if (unverified > 0) report.unverified_claims = unverified;
   return { answer: rewritten, pageMentionsRemoved: removed };
+}
+
+/**
+ * 审计回的论断文本与回答行是否是同一段。
+ *
+ * 用"去掉空白与引用编号后的包含关系"判断，容忍模型微调标点/截断；
+ * 对不上就不改写——宁可保留原文，也不把标题或整段正文替换成一句免责话。
+ */
+function lineMatchesClaim(claimText: string, line: string): boolean {  const normalize = (value: string): string =>
+    value
+      .replace(/\[\d+\]/g, '')
+      .replace(/[\s*_`#>•\-—、，。；：""''（）()]+/g, '')
+      .trim();
+  const claim = normalize(claimText);
+  const target = normalize(line);
+  if (!claim || !target) return false;
+  if (target.includes(claim) || claim.includes(target)) return true;
+  // 长段落常被截断：取前 24 字做前缀比对，避免"整段都算对不上"。
+  return claim.slice(0, 24).length >= 8 && target.includes(claim.slice(0, 24));
 }
 
 export async function auditAnswer(

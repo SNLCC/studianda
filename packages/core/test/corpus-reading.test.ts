@@ -270,8 +270,7 @@ describe('跨文献阅读走逐批管线', () => {
         undefined,
         undefined,
         false,
-        undefined,
-        'fast'
+        undefined
       );
       expect(result?.notice ?? '').toContain('补读');
     } finally {

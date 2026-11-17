@@ -56,7 +56,10 @@ describe('worthRereading', () => {
   });
 
   it('不回读的说明如实写“没有重写”，不把未回读说成已回读', () => {
-    expect(REREAD_SKIPPED_NOTE).toContain('不需要再读原文');
-    expect(REREAD_SKIPPED_NOTE).toContain('本轮没有重写整篇回答');
+    // 说清"再读也解决不了"，以及"没有重新生成"——不能让用户以为后面一段被省掉了。
+    expect(REREAD_SKIPPED_NOTE).toContain('无法靠再读原文解决');
+    expect(REREAD_SKIPPED_NOTE).toContain('没有重新生成回答');
+    // 不要把"个别论断缺证"说成"整篇回答没有依据"。
+    expect(REREAD_SKIPPED_NOTE).not.toContain('没有依据');
   });
 });

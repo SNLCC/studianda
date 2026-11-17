@@ -9,9 +9,8 @@ import type {
 } from '@studianda/shared';
 import type { SecretStore } from './secrets.js';
 import type { Store } from './store.js';
-import { retrieve } from './retrieval.js';
 import { routeQuestion, type QuestionRoute } from './question-route.js';
-import { planQuestion, withDefaultDimensions } from './planning.js';
+import { planFromRules, planQuestion, withDefaultDimensions } from './planning.js';
 import {
   answerWithCorpus,
   answerWithReading,
@@ -19,10 +18,12 @@ import {
   callChatModel,
   chatInputLimit,
   prepareHistory,
+  readingBatchBudget,
   type HistoryMessage,
   type ReadingChatConfig
 } from './reading-chat.js';
 import { readCachedBookSummary } from './book-summary.js';
+import { cost } from './reading.js';
 import { collectModelUsage } from './model-usage.js';
 import { resolveModelCapacity, resolveModelService, resolveOmniService } from './model-services.js';
 import { prepareReadingSessionContext } from './reading-session-context.js';
@@ -50,11 +51,11 @@ import {
   searchMemory,
   memoryMaterial,
   memoryChatSources,
+  EXTERNAL_BACKGROUND_HEADER,
   MEMORY_RULES,
   type MemoryHit
 } from './memory-sources.js';
 import { citationSupport, invalidCitations } from './citations.js';
-import { locateSectionContext } from './section-context.js';
 import { inputCost, messages as budgetMessages } from './request-budget.js';
 
 interface ChatConfig {
@@ -72,6 +73,38 @@ interface ChatConfig {
   taskConfig?: ReadingChatConfig;
   /** 写作模型：最终回答不思考。 */
   answerNoThinking?: boolean;
+}
+
+/** 用户取消：要冒泡，不能当成"阅读失败"记进 notice。 */
+export function isAbortError(error: unknown): boolean {
+  return (error as { name?: string } | null)?.name === 'AbortError';
+}
+
+/**
+ * 这个错误是不是**代码缺陷**（而不是可降级的阅读失败）。
+ *
+ * 阅读链路里大量**故意**的 throw 都是 `new Error('可执行中文提示')`（证据无法核验、材料装不下、
+ * 批次超限……），它们应当降级成 notice、继续走检索回答。但 `TypeError` / `ReferenceError` 这类
+ * 是编程错误——一旦被同一个 catch 吞掉，就会显示成"完整阅读未完成"，把 bug 伪装成环境问题，
+ * 正是失败可见性要禁止的（例如调用了一个不存在的导出，只会表现为回答悄悄退化）。
+ *
+ * 唯一例外：`fetch` 的网络失败在 Node/undici 里也是 `TypeError`（message 含 "fetch"），
+ * 那是真实的环境问题，仍按阅读失败降级。
+ */
+export function isProgrammingError(error: unknown): boolean {
+  if (!(error instanceof Error)) return true;
+  switch (error.name) {
+    case 'TypeError':
+      return !/fetch/i.test(String(error.message ?? ''));
+    case 'ReferenceError':
+    case 'RangeError':
+    case 'SyntaxError':
+    case 'EvalError':
+    case 'URIError':
+      return true;
+    default:
+      return false;
+  }
 }
 
 function getConfig(store: Store, secrets: SecretStore): ChatConfig | null {
@@ -429,6 +462,10 @@ async function answerQuestionInner(
   // 检索/规划阶段也能看到指代对象。
   const retrievalQuestion = question;
   // 续读不再重跑问题路由：范围与问题都在任务里，再问一次模型只会多一次调用，还可能改范围。
+  // 短文献（整篇装得下、联网本来就不可用）也不必问：一次往返延迟比一次判断更贵。
+  const shortRoute = corpusResume
+    ? null
+    : shortCircuitRoute(store, secrets, input, question, selection);
   const route: QuestionRoute = corpusResume
     ? {
         document: true,
@@ -439,7 +476,7 @@ async function answerQuestionInner(
         plan: null,
         summaryIntent: false
       }
-    : await routeQuestion(store, secrets, { ...input, question, selection });
+    : shortRoute ?? (await routeQuestion(store, secrets, { ...input, question, selection }));
   onStage?.('正在判断阅读范围');
   const plan = route.plan ? withDefaultDimensions(route.plan) : undefined;
   // 路由兜底说明：只在“模型判成与文献无关”这一支路上产生，不改变回答本身。
@@ -485,27 +522,18 @@ async function answerQuestionInner(
     reason: route.reason
   };
 
-  const readingPlan = plan ?? planQuestion(retrievalQuestion, selection);
+  // 用户自己的话优先于模型的保守判断：
+  // "第 3–5 页""解释这段""这一页"这些是本机可判定的局部范围，不该被 router 的 document 判断盖掉；
+  // 反过来，router 也不再给页码（模型给的 pages 在 routeQuestion 里就被丢弃）。
+  const rulePlan = planFromRules(retrievalQuestion, selection);
+  const readingPlan = rulePlan
+    ? withDefaultDimensions(rulePlan)
+    : plan ?? planQuestion(retrievalQuestion, selection);
   const scope = input.reading_scope ?? 'auto';
   const scopePage = input.page ?? 1;
-  const scopedReadingPlan =
-    scope === 'local'
-      ? {
-          ...readingPlan,
-          breadth: 'local' as const,
-          reason: '用户指定：本页与相邻页',
-          origin: '规则' as const,
-          pages: [scopePage - 1, scopePage, scopePage + 1].filter((page) => page >= 1)
-        }
-      : scope === 'document'
-        ? {
-            ...readingPlan,
-            breadth: 'document' as const,
-            reason: '用户指定：整篇文献',
-            origin: '规则' as const,
-            pages: []
-          }
-        : readingPlan;
+  // 范围只剩"单篇自动 / 跨文献"两种：局部还是整篇由 `planFromRules` 与结构装带决定，
+  // 不再有"用户指定本页/整篇"的分支（那两条只会和自动判定打架）。
+  const scopedReadingPlan = readingPlan;
   // 著作默认按章读；用户显式指定章节时按指定章读。两种都由同一个解析器决定。
   const chapterResolution = await resolveChapterReading(
     store,
@@ -524,7 +552,18 @@ async function answerQuestionInner(
           : undefined
     }
   );
-  const chapteredPlan = chapterResolution.plan;
+  // 章节信息用于展示（"第 2/12 章"）与"下一章"入口。
+  const explicitChapterIndex =
+    typeof input.reading_chapter_index === 'number' &&
+    Number.isInteger(input.reading_chapter_index) &&
+    input.reading_chapter_index >= 1;
+  // **自动选章不再裁剪范围**：结构只能分组与命名，不能决定读到哪一页——
+  // 否则"这本书如何论证 X"会被静默降成"读当前页所在章"，而界面看不出来。
+  // 但用户**显式指定**"读第 2 章"是用户自己的话，照旧按章读。
+  const planForReading =
+    explicitChapterIndex && chapterResolution.chapter
+      ? chapterResolution.plan
+      : scopedReadingPlan;
   const chapterInfo = chapterResolution.chapter
     ? chapterRecord(chapterResolution.chapter)
     : undefined;
@@ -596,7 +635,6 @@ async function answerQuestionInner(
           route_note: routeNote,
           answer_mode: 'reading',
           reading_scope: 'auto',
-          reading_rigor: input.reading_rigor ?? 'auto',
           model_knowledge: input.source_policy !== 'document_only',
           web_search: false,
           notice:
@@ -819,6 +857,30 @@ async function answerQuestionInner(
     }
   }
   let readingFailure = '';
+  // 用户已确认过搜索计划、且本轮要读文献：把搜索**放到生成之前**做一次，
+  // 取到的资料作为背景材料与文献一起装配，答案一次成型——不再"先写一版、审计后再联网补查修订"。
+  // 读后审计仍然是兜底（论断确实缺外部依据时还会触发）。
+  let preSearchResults = 0;
+  let externalBackground = '';
+  if (plannedSearch && documentFirst && input.source_policy !== 'document_only') {
+    // 已批准的搜索计划是一次性的：失败（过期/指纹不符/网络）必须让用户重新确认，
+    // 不能静默退回"只读文献"——那等于把用户批准过的查询悄悄丢掉。
+    const queries = consumeSearchPlan(store, secrets, input);
+    let results = await searchWebQueries(store, secrets, queries, { question });
+    results = await withFetchedContent(store, secrets, results);
+    preSearchResults = results.length;
+    if (results.length > 0) {
+      externalBackground =
+        EXTERNAL_BACKGROUND_HEADER +
+        '\n\n' +
+        results
+          .map(
+            (item, index) =>
+              `[${index + 1}] ${item.title}\n${item.url}\n${webResultDetail(item)}`
+          )
+          .join('\n\n');
+    }
+  }
   if (readingConfig && input.documentId && !corpusScope) {
     try {
       const readingAnswer = await answerWithReading(
@@ -829,20 +891,14 @@ async function answerQuestionInner(
         selection,
         input.documentId,
         input.page ?? 1,
-        chapteredPlan,
-        Number(
-          input.reading_rigor === 'exhaustive'
-            ? 8000
-            : input.reading_rigor === 'fast'
-              ? 4000
-              : process.env.STUDIANDA_READING_BUDGET ?? 6000
-        ),
+        // 自动选章不裁剪（见上）；只有用户显式指定章节时才按章读。
+        planForReading,
+        readingBatchBudget(store),
         signal,
         onProgress,
         input.taskId,
         input.source_policy !== 'document_only',
         onDraft,
-        input.reading_rigor ?? 'auto',
         onDraftReset,
         onStage,
         onAudit,
@@ -859,7 +915,11 @@ async function answerQuestionInner(
         // 笔记/批注补充材料：只进最终回答，不进证据链。
         memoryText,
         // 会话早期摘要（模型生成，不是文献原文/证据）。
-        readingSummary
+        readingSummary,
+        // 闸门里用户点过按钮才有值：只读相关部分 / 读完整篇。
+        input.reading_force,
+        // 生成前取到的网页背景资料（只作背景，不进证据链、不参与引用编号）。
+        externalBackground
       );
       if (readingAnswer) {
         let finalReading = readingAnswer;
@@ -901,6 +961,10 @@ async function answerQuestionInner(
         let webReviewFailed = false;
         if (input.source_policy === 'document_only') {
           autoSource.status = '未发起：设置里「智能来源」选的是「仅文献」，本轮不发送任何外部请求';
+        } else if (preSearchResults > 0) {
+          // 作答前已经用过网页背景资料：不再重复搜一遍（同一轮里搜两次只会多花钱、多等待）。
+          autoSource.status =
+            '未发起：本轮已在作答前检索过网页背景资料，不再重复补查；网页仍不计入文献证据';
         } else if (externalClaims.length === 0) {
           autoSource.status = '未发起：本轮没有需要外部依据的论断';
         } else if (searchConfig.permission === 'off') {
@@ -1160,6 +1224,12 @@ async function answerQuestionInner(
         const noticeParts: string[] = [];
         if (finalReading.notice) noticeParts.push(finalReading.notice);
         if (readingContextNotice) noticeParts.push(readingContextNotice);
+        if (preSearchResults > 0) {
+          // 如实说明"资料是在作答前装配的背景"：它不是文献证据，也没有引用编号。
+          noticeParts.push(
+            `本轮在作答前已检索 ${preSearchResults} 条网页背景资料（仅作背景，不计入文献证据与引用编号）。`
+          );
+        }
         if (autoWebResults > 0) {
           noticeParts.push(`已按审计来源建议逐段补查 ${autoWebResults} 条网页结果。`);
         } else if (autoAttempted) {
@@ -1218,13 +1288,15 @@ async function answerQuestionInner(
           source_routing: sourceRouting,
           audit_summary: auditSummary,
           reading_scope: scope,
-          reading_rigor: input.reading_rigor ?? 'auto',
           model_knowledge: input.source_policy !== 'document_only',
-          web_search: Boolean(shouldSearch) || Boolean(finalReading.web_search)
+          web_search:
+            Boolean(shouldSearch) || Boolean(finalReading.web_search) || preSearchResults > 0
         };
       }
       readingFailure = '完整阅读没有返回结果';
     } catch (error) {
+      // 取消与代码缺陷必须冒泡：前者不该被写成"阅读失败"，后者不该被伪装成它。
+      if (isAbortError(error) || isProgrammingError(error)) throw error;
       readingFailure = error instanceof Error ? error.message : '完整阅读失败';
       // 分批阅读失败时保留检索回答路径，并在回答下方明确说明，不伪装成完整阅读。
     }
@@ -1239,13 +1311,7 @@ async function answerQuestionInner(
         question,
         selection,
         corpusDocumentIds,
-        Number(
-          input.reading_rigor === 'exhaustive'
-            ? 8000
-            : input.reading_rigor === 'fast'
-              ? 4000
-              : process.env.STUDIANDA_READING_BUDGET ?? 6000
-        ),
+        readingBatchBudget(store),
         signal,
         onDraft,
         input.source_policy !== 'document_only',
@@ -1265,7 +1331,6 @@ async function answerQuestionInner(
           routing,
           route_note: routeNote,
           reading_scope: 'corpus',
-          reading_rigor: input.reading_rigor ?? 'auto',
           model_knowledge: input.source_policy !== 'document_only',
           web_search: Boolean(shouldSearch),
           // 复用上一轮已保存回答（没有重新调用模型）：不能声称本轮纳入过笔记/批注。
@@ -1278,6 +1343,8 @@ async function answerQuestionInner(
         };
       }
     } catch (error) {
+      // 同上：取消与代码缺陷必须冒泡，不能被当成"跨文献阅读失败"。
+      if (isAbortError(error) || isProgrammingError(error)) throw error;
       readingFailure = error instanceof Error ? error.message : '跨文献阅读失败';
     }
   }
@@ -1289,13 +1356,83 @@ async function answerQuestionInner(
     routing,
     route_note: routeNote,
     reading_scope: scope,
-    reading_rigor: input.reading_rigor ?? 'auto',
     notice: readingFailure
       ? `完整阅读未完成：${readingFailure}`
       : '本轮没有可用的回答路径'
   };
 }
 
+
+/**
+ * 小文本短路 router 的判据（内部函数，导出只为可测）。
+ *
+ * 路由器是一次模型调用，它回答两个问题：**要不要读文献**、**要不要联网**。
+ * 文献很短时，第二个问题在这里已经是否定的（配置根本不允许联网），第一个问题
+ * 也能由本机的确定性信号回答——那就没必要再等一次往返延迟。
+ *
+ * 只在**全部**条件成立时短路，宁可不省这一轮，也不要替用户猜错意图：
+ * - 单篇文献、非跨文献范围、不是续读任务；
+ * - 联网本来就不可用（`document_only` 或搜索权限关闭）——否则跳过的是一次真实能力判断；
+ * - 页数 ≤ 24 且整篇页文本装得进一次装配预算（装不下就要分多批，更该先判断值不值得读）；
+ * - 问题里有**指向文献的话**（"本文/作者/这段/第 3 页"）或与本文献术语有重合。
+ */
+export function shortCircuitRoute(
+  store: Store,
+  secrets: SecretStore,
+  input: ChatRequest,
+  question: string,
+  selection: string
+): QuestionRoute | null {
+  if (!input.documentId || input.taskId) return null;
+  if (input.reading_scope === 'corpus') return null;
+  if (input.scope_documents || input.scope_tags) return null;
+  const search = getSearchConfig(store, secrets);
+  if (input.source_policy !== 'document_only' && search.permission !== 'off') return null;
+  const document = store.getDocument(input.documentId);
+  if (!document || document.pages <= 0 || document.pages > SHORT_DOC_MAX_PAGES) return null;
+  const rulePlan = planFromRules(question, selection);
+  const deictic = selection.trim().length > 0 || DOCUMENT_DEICTIC.test(question);
+  const mentions = deictic ? null : documentMentions(store, input.documentId, question);
+  if (!deictic && !rulePlan && !mentions?.hit) return null;
+  let pagesCost = 0;
+  for (let page = 1; page <= document.pages; page += 1) {
+    pagesCost += cost(store.getPageText(input.documentId, page));
+  }
+  if (pagesCost > readingBatchBudget(store)) return null;
+  return {
+    document: true,
+    search: false,
+    reason: '文献较短：整篇可直接读完，跳过意图判断',
+    reply: '',
+    summaryIntent: false,
+    modelPlan: false,
+    plan: rulePlan
+  };
+}
+
+/** "短"的页数硬上限：再大的文献即使页文本不贵，也不该为了省一次调用整篇读。 */
+const SHORT_DOC_MAX_PAGES = 24;
+/** 指向文献本身的说法：出现这些词时，问题的对象几乎必然是这篇文献。 */
+const DOCUMENT_DEICTIC =
+  /(本文|本篇|这篇|这一篇|该文|文中|正文|全文|通篇|整篇|作者|上面|上述|前述|上文|本章|本段|这段|这一节|这本书|第\s*\d+\s*页)/;
+
+/**
+ * 兜底：模型偶尔返回空正文（实测一次：3.7 秒、无内容）。空字符串对用户毫无信息。
+ *
+ * 至少给出可执行提示，并如实说明**这是模型返回空内容**——不能让用户以为"文献里没有答案"。
+ * `answer` 为 null 的路径（例如保存的继续阅读任务）保持原样：那不是"空回答"。
+ */
+export function guardEmptyAnswer(response: ChatResponse): ChatResponse {
+  const answer = response.answer;
+  if (typeof answer !== 'string' || answer.trim()) return response;
+  const notice = response.notice ? `${response.notice}；` : '';
+  return {
+    ...response,
+    answer:
+      '本轮没有生成可用回答：模型返回了空内容。可以重试一次；如果反复出现，请缩小阅读范围或换一个模型。',
+    notice: `${notice}模型这次返回了空正文，已用可执行提示代替空白（这不代表文献里没有相关内容）。`
+  };
+}
 
 export async function answerQuestion(
   store: Store,
@@ -1321,5 +1458,5 @@ export async function answerQuestion(
       onAudit
     )
   );
-  return usage ? { ...result, usage } : result;
+  return guardEmptyAnswer(usage ? { ...result, usage } : result);
 }

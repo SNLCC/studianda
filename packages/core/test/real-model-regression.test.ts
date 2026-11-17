@@ -69,8 +69,6 @@ describe.skipIf(!enabled)('真实模型回归（需显式开启）', () => {
       question: '这篇文献如何定义价值信念？',
       documentId,
       page: 1,
-      reading_scope: 'local',
-      reading_rigor: 'fast',
       source_policy: 'document_only'
     });
     expect(response.answer?.trim().length ?? 0).toBeGreaterThan(0);

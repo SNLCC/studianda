@@ -96,7 +96,7 @@ import {
   sanitizeReferenceInput,
   type ReferenceEditRecord
 } from './references.js';
-import { normalizeTocPages, tocNavigation } from './toc-pages.js';
+import { detectTocPages, normalizeTocPages, tocNavigation } from './toc-pages.js';
 import {
   documentStructure,
   masksForPage,
@@ -1059,6 +1059,8 @@ export class Store {
    * 不写数据库：版面已持久化，重算结果确定，没必要再存一份块文本。
    */
   private readonly blocksCache = new Map<string, { stamp: string; blocks: DocumentBlocks }>();
+  /** 章节索引片段缓存（派生自内容块；键 = 文献 + 结构版本 + 切片参数）。 */
+  private readonly sectionIndexCache = new Map<string, DocumentSectionIndex>();
   /** 页遮罩重建进度（内存态，用于状态接口；不持久化）。 */
   private readonly maskJobs = new Map<
     string,
@@ -4165,6 +4167,7 @@ export class Store {
     // 进程内缓存同样要失效：否则清空后还可能返回已删文献的解析文本/关系图。
     this.layoutCache.clear();
     this.blocksCache.clear();
+    this.sectionIndexCache.clear();
     this.maskJobs.clear();
     this.maskPending.clear();
     this.invalidateReferenceGraphCache();
@@ -6887,7 +6890,7 @@ export class Store {
     if (pages.length === 0) throw new Error('请先指定目录页（1 起，可多页）');
     const layout = await this.readLayout(documentId);
     const masks = this.listPageMasks(documentId);
-    const blocks = recognizeBlocks(layout, masks, { documentId });
+    const blocks = recognizeBlocks(layout, masks, { documentId, tocPages: pages });
     const result = tocNavigation(layout, masks, pages, document.pages, blocks);
     return {
       toc_pages: pages,
@@ -7094,7 +7097,7 @@ export class Store {
     const tocPages = this.getNavigationTocPages(documentId);
     if (tocPages.length > 0) {
       // 用户指定了目录页：只信这张印刷目录，不再用标题规则猜。
-      const blocks = recognizeBlocks(layout, masks, { documentId });
+      const blocks = recognizeBlocks(layout, masks, { documentId, tocPages });
       const document = this.getDocument(documentId);
       const result = tocNavigation(
         layout,
@@ -7115,6 +7118,24 @@ export class Store {
     }
     const nodes = navigationNodes(layout, masks);
     if (nodes.length === 0) {
+      // 标题规则一条都没有：最后再试"文献自带的印刷目录"。
+      // 很多书没有 PDF 书签，但正文前印了一张目录页；自动认出来后就能直接建导航，
+      // 不必要求用户手工指定目录页（那条路实际上没人会走）。
+      const detected = detectTocPages(layout, masks, layout.pages.length);
+      if (detected.length > 0) {
+        const tocBlocks = recognizeBlocks(layout, masks, { documentId, tocPages: detected });
+        const tocResult = tocNavigation(
+          layout,
+          masks,
+          detected,
+          this.getDocument(documentId)?.pages ?? layout.pages.length,
+          tocBlocks
+        );
+        if (tocResult.nodes.length > 0) {
+          this.storeNavigation(documentId, tocResult.nodes, stamp, sourceHash);
+          return;
+        }
+      }
       // 0 条目录不能当"生成成功"落库：否则界面只会关掉弹窗、什么都不显示，
       // 看起来像点击没反应（用户报告 5）。这里抛明确错误，让 buildError 能显示，
       // 也避免用空目录覆盖用户已有的本地目录。
@@ -7553,9 +7574,11 @@ export class Store {
     const cached = this.blocksCache.get(documentId);
     if (cached && info && cached.stamp === info.stamp) return cached.blocks;
     const layout = await this.readLayout(documentId);
+    const tocPages = detectTocPages(layout, this.listPageMasks(documentId), document.pages);
     const blocks = recognizeBlocks(layout, this.listPageMasks(documentId), {
       documentId,
-      title: document.name
+      title: document.name,
+      tocPages
     });
     if (info) {
       if (this.blocksCache.size >= 8) {
@@ -7580,13 +7603,29 @@ export class Store {
     return cached.blocks;
   }
 
-  /** 章节级问答索引片段（带章节标题、起止页）；纯派生索引材料，不作原文证据。 */
+  /**
+   * 章节级问答索引片段（带章节标题、起止页）；纯派生索引材料，不作原文证据。
+   *
+   * 结果按「结构版本 + maxChars + overlap」缓存：这是从已识别内容块派生的纯函数，
+   * 同一篇文献反复请求（界面翻索引、导出、测试）不该每次都重新拼几 MB 字符串。
+   * 结构一变（重解析/编辑页）`structureStamp` 变化，旧缓存自然失效。
+   */
   async getSectionIndex(
     documentId: string,
     options: SectionIndexOptions = {}
   ): Promise<DocumentSectionIndex> {
     const blocks = await this.getDocumentBlocks(documentId);
-    return sectionIndexChunks(documentId, blocks, options);
+    const stamp = this.structureStamp(documentId)?.stamp ?? '';
+    const key = `${documentId}\u0000${stamp}\u0000${options.maxChars ?? ''}\u0000${options.overlap ?? ''}`;
+    const cached = this.sectionIndexCache.get(key);
+    if (cached) return cached;
+    const index = sectionIndexChunks(documentId, blocks, options);
+    if (this.sectionIndexCache.size >= 16) {
+      const oldest = this.sectionIndexCache.keys().next().value;
+      if (oldest !== undefined) this.sectionIndexCache.delete(oldest);
+    }
+    this.sectionIndexCache.set(key, index);
+    return index;
   }
 
   /**

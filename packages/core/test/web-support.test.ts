@@ -17,7 +17,10 @@ vi.mock('../src/question-route.js', () => ({
 vi.mock('../src/reading-chat.js', () => ({
   answerWithReading: vi.fn(),
   answerWithCorpus: vi.fn(),
-  callChatModel: vi.fn()
+  callChatModel: vi.fn(),
+  // chat.ts 用它算单带原文预算；mock 模块必须提供同名导出，否则调用即 TypeError，
+  // 会被 chat 的 try/catch 吞掉并误走降级路径（表现为 coverage 缺失）。
+  readingBatchBudget: vi.fn(() => 60_000)
 }));
 
 import type { ChatRequest, ChatResponse } from '@studianda/shared';
@@ -343,7 +346,6 @@ describe('chat 级：外部论断但本轮没有联网时如实记账/notice', (
       question: '情感主义是什么',
       documentId: 'doc-1',
       page: 1,
-      reading_scope: 'document',
       ...overrides
     };
   }

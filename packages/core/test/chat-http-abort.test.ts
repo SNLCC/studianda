@@ -93,7 +93,6 @@ describe('非流式 /chat/ask 真实 HTTP 生命周期', () => {
         documentId,
         page: 1,
         reading_scope: 'document',
-        reading_rigor: 'fast',
         source_policy: 'document_only'
       }),
       signal: AbortSignal.timeout(30_000)
