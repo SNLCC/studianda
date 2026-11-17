@@ -73,6 +73,16 @@ function formatBytes(bytes: number): string {
   return `${unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
 }
 
+/** MiniMax 国内站（含旧域名）：播报必须显式给音色，界面据此做完整性提示。 */
+function isMinimaxSpeechTarget(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return ['api.minimax.cn', 'api.minimaxi.com', 'api.minimax.chat'].includes(host);
+  } catch {
+    return false;
+  }
+}
+
 function SectionHeading({
   title,
   hint,
@@ -306,7 +316,6 @@ function SettingsViewContent({
   >('keywords-only');
   const [searchPlanner, setSearchPlanner] = useState(true);
   const [searchFollowup, setSearchFollowup] = useState(true);
-  const [searchFetchContent, setSearchFetchContent] = useState(false);
   const [searchSendQuestion, setSearchSendQuestion] = useState(false);
   const [searchAllow, setSearchAllow] = useState({
     question: true,
@@ -721,7 +730,6 @@ function SettingsViewContent({
     setSearchPlanner(searchQueryConfig.data.planner);
     setSearchPrivacyMode(searchQueryConfig.data.privacy_mode);
     setSearchFollowup(searchQueryConfig.data.followup);
-    setSearchFetchContent(searchQueryConfig.data.fetch_content);
     setSearchSendQuestion(searchQueryConfig.data.send_question);
     setSearchAllow({
       question: searchQueryConfig.data.allow_question,
@@ -757,7 +765,9 @@ function SettingsViewContent({
         allow_current_page: searchAllow.currentPage,
         allow_surrounding: searchAllow.surrounding,
         allow_title: searchAllow.title,
-        fetch_content: searchFetchContent,
+        // 「抓取前 2 条网页正文」已从界面移除：始终关闭，避免旧配置继续把网页正文
+        // 发给搜索服务（第三方内容风险 + 用户不再能看到这个开关）。
+        fetch_content: false,
         send_question: searchSendQuestion,
         ...(searchKey.trim() ? { api_key: searchKey.trim() } : {})
       }),
@@ -853,41 +863,62 @@ function SettingsViewContent({
     onError: (error: Error) => notify(`更改资料位置失败：${error.message}`)
   });
 
-  const saveSpeech = useMutation({    mutationFn: () =>
-      api.updateSpeechConfig({
-        asr_mode: asrMode,
-        asr_url: asrUrl,
-        asr_model: asrModel,
-        asr_connection_id: asrConnectionId,
-        tts_connection_id: ttsConnectionId,
-        input_enabled: inputEnabled,
-        auto_send: autoSend,
-        auto_read: autoRead,
-        trigger_mode: triggerMode,
-        direct_audio: directAudio,
-        correction,
-        context: correctionContext,
-        tts_mode: ttsMode,
-        tts_url: ttsUrl,
-        tts_model: ttsModel,
-        voice: ttsVoice,
-        ...(asrKey.trim() ? { asr_key: asrKey.trim() } : {}),
-        ...(ttsKey.trim() ? { tts_key: ttsKey.trim() } : {})
-      }),
-    onSuccess: (saved) => {
-      setTtsKey('');
-      setAsrKey('');
+  const saveSpeech = useMutation({
+    // 识别页与播报页各有自己的保存按钮：只提交本页字段，另一页保持已保存值。
+    // 这样一页配置不完整（例如自定义播报还没填地址）不会挡住另一页保存。
+    mutationFn: (scope: 'asr' | 'tts') =>
+      scope === 'asr'
+        ? api.updateSpeechConfig({
+            asr_mode: asrMode,
+            asr_url: asrUrl,
+            asr_model: asrModel,
+            asr_connection_id: asrConnectionId,
+            input_enabled: inputEnabled,
+            auto_send: autoSend,
+            trigger_mode: triggerMode,
+            direct_audio: directAudio,
+            correction,
+            context: correctionContext,
+            ...(asrKey.trim() ? { asr_key: asrKey.trim() } : {})
+          })
+        : api.updateSpeechConfig({
+            tts_mode: ttsMode,
+            tts_url: ttsUrl,
+            tts_model: ttsModel,
+            tts_connection_id: ttsConnectionId,
+            voice: ttsVoice,
+            auto_read: autoRead,
+            ...(ttsKey.trim() ? { tts_key: ttsKey.trim() } : {})
+          }),
+    onSuccess: (saved, scope) => {
+      // 只清空刚保存的那一页的密钥输入，不把另一页正在填写的内容抹掉。
+      if (scope === 'asr') setAsrKey('');
+      else setTtsKey('');
       void queryClient.invalidateQueries({ queryKey: ['speech-config'] });
       void queryClient.invalidateQueries({ queryKey: ['model-services'] });
-      // 保存回执写清「实际生效」的播报目标与音色：否则用户只看到“已保存”，
-      // 无法确认模型/音色是否真的换了（本次 bug 13 的反馈点）。
-      const modeLabel =
+      // 保存回执写清「实际生效」的识别/播报目标与音色：否则用户只看到“已保存”，
+      // 无法确认模型/音色是否真的换了。
+      const asrModeLabel =
+        saved.asr_mode === 'system'
+          ? '系统语音'
+          : saved.asr_mode === 'model'
+            ? '模型服务'
+            : '自定义服务';
+      const asrTarget =
+        saved.asr_mode === 'system'
+          ? 'Windows 系统语音'
+          : saved.asr_mode === 'model'
+            ? `${asrConnectionName || saved.asr_connection_id || '未选择平台'}${
+                saved.asr_model ? ` / ${saved.asr_model}` : ''
+              }`
+            : saved.asr_url || '未填写地址';
+      const ttsModeLabel =
         saved.tts_mode === 'system'
           ? '系统语音'
           : saved.tts_mode === 'model'
             ? '模型服务'
             : '自定义服务';
-      const target =
+      const ttsTarget =
         saved.tts_mode === 'system'
           ? 'Windows 系统语音'
           : saved.tts_mode === 'model'
@@ -896,7 +927,7 @@ function SettingsViewContent({
               }`
             : saved.tts_url || '未填写地址';
       notify(
-        `语音设置已保存：播报方式 ${modeLabel}，目标 ${target}，音色 ${saved.voice || '默认音色'}。`
+        `语音设置已保存：识别 ${asrModeLabel} / ${asrTarget}；播报 ${ttsModeLabel} / ${ttsTarget}，音色 ${saved.voice || '默认音色'}。`
       );
     },
     onError: (error: Error) => notify(`语音设置保存失败：${error.message}`)
@@ -932,8 +963,8 @@ function SettingsViewContent({
       })
   });
 
-  // 「当前播报配置」摘要：模式/平台/模型/音色/可用性。播报按钮读的是**已保存**配置，
-  // 所以这里把表单值与已保存值对比，提示“未保存的修改”，避免用户以为改了没生效。
+  // 「当前播报 / 识别配置」摘要：按钮读的是**已保存**配置，这里把表单值与已保存值对比，
+  // 提示“未保存的修改”，避免用户以为改了没生效。
   const ttsModeLabel =
     ttsMode === 'system' ? '系统语音' : ttsMode === 'model' ? '模型服务' : '自定义服务';
   const ttsPlatformLabel =
@@ -949,6 +980,19 @@ function SettingsViewContent({
       : ttsMode === 'model' || ttsMode === 'custom'
         ? ttsModel.trim() || '未填写模型'
         : '';
+  const asrModeLabel =
+    asrMode === 'system' ? '系统语音' : asrMode === 'model' ? '模型服务' : '自定义服务';
+  const asrPlatformLabel =
+    asrMode === 'system'
+      ? 'Windows 系统语音'
+      : asrMode === 'model'
+        ? asrConnectionName ||
+          (asrConnectionId ? '已保存的平台（不在模型服务列表中）' : '未选择平台')
+        : asrUrl.trim() || '未填写地址';
+  const asrModelLabel =
+    asrMode === 'system'
+      ? '系统默认（Windows 识别引擎）'
+      : asrModel.trim() || '未填写模型';
   const ttsReadiness = ((): { ok: boolean; reasons: string[] } => {
     if (ttsMode === 'system') {
       if (!speechSystem) {
@@ -993,6 +1037,10 @@ function SettingsViewContent({
           reasons.push('所选语音模型不属于当前平台，请重新选择');
         }
         if (connection.hasKey === false) reasons.push('该平台还没有保存 API Key');
+        // MiniMax 的播报接口必须带 voice_id，没有音色会在播报时才报错。
+        if (isMinimaxSpeechTarget(connection.baseUrl) && !ttsVoice.trim()) {
+          reasons.push('MiniMax 播报必须选择音色：点「获取音色」后选择，或手动填写音色 ID');
+        }
       }
       return { ok: reasons.length === 0, reasons };
     }
@@ -1002,14 +1050,38 @@ function SettingsViewContent({
     if (!speechQuery.data?.has_tts_key && !ttsKey.trim()) {
       reasons.push('未填写 API Key（部分自建服务可留空）');
     }
+    if (isMinimaxSpeechTarget(ttsUrl) && !ttsVoice.trim()) {
+      reasons.push('MiniMax 播报必须选择音色：点「获取音色」后选择，或手动填写音色 ID');
+    }
     return { ok: reasons.length === 0, reasons };
   })();
-  const speechConfigDirty = Boolean(speechQuery.data) &&
+  // 语音识别/播报表单分别判断“有没有未保存的修改”：两个分区各有自己的保存按钮。
+  const speechAsrDirty = Boolean(speechQuery.data) &&
+    (speechQuery.data!.asr_mode !== asrMode ||
+      speechQuery.data!.asr_url !== asrUrl.trim() ||
+      speechQuery.data!.asr_model !== asrModel.trim() ||
+      speechQuery.data!.asr_connection_id !== asrConnectionId.trim() ||
+      speechQuery.data!.input_enabled !== inputEnabled ||
+      speechQuery.data!.trigger_mode !== triggerMode ||
+      speechQuery.data!.direct_audio !== directAudio ||
+      speechQuery.data!.correction !== correction ||
+      speechQuery.data!.context !== correctionContext ||
+      speechQuery.data!.auto_send !== autoSend);
+  const speechTtsDirty = Boolean(speechQuery.data) &&
     (speechQuery.data!.tts_mode !== ttsMode ||
       speechQuery.data!.tts_connection_id !== ttsConnectionId ||
       speechQuery.data!.tts_model !== ttsModel.trim() ||
       speechQuery.data!.tts_url !== ttsUrl.trim() ||
-      speechQuery.data!.voice !== ttsVoice.trim());
+      speechQuery.data!.voice !== ttsVoice.trim() ||
+      speechQuery.data!.auto_read !== autoRead);
+  // 播报目标不完整时不让保存，避免“保存成功但播报必失败”。
+  const ttsSaveBlocked = ttsMode !== 'system' && !ttsReadiness.ok;
+  // 左侧导航里的「未保存」提示：设置按分区显示，保存按钮在分区底部，
+  // 先把“还有改动没保存”暴露出来，避免用户以为切换模型已经生效。
+  const dirtyNavTargets: Record<string, boolean> = {
+    语音识别: speechAsrDirty,
+    语音播报: speechTtsDirty
+  };
 
   const diagnosticsQuery = useQuery({
     queryKey: ['diagnostics'],
@@ -1660,6 +1732,9 @@ function SettingsViewContent({
                 onClick={() => scrollToSetting(item.target)}
               >
                 {item.label}
+                {dirtyNavTargets[item.target] ? (
+                  <span className="kr-settings__nav-dirty"> · 未保存</span>
+                ) : null}
               </button>
             ))}
           </div>
@@ -2614,34 +2689,16 @@ function SettingsViewContent({
             回答过程中允许提出补充搜索（最多两轮）
           </label>
           {searchProvider === 'deepseek' ? (
-            <>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={searchSendQuestion}
-                  onChange={(event) => setSearchSendQuestion(event.target.checked)}
-                />
-                把当前问题原文发给搜索服务（≤128 字符，改善搜索意图）
-              </label>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={searchFetchContent}
-                  onChange={(event) => setSearchFetchContent(event.target.checked)}
-                />
-                抓取前 2 条网页正文（第三方内容，仅本轮使用）
-              </label>
-            </>
+            <label>
+              <input
+                type="checkbox"
+                checked={searchSendQuestion}
+                onChange={(event) => setSearchSendQuestion(event.target.checked)}
+              />
+              把当前问题原文发给搜索服务（≤128 字符，改善搜索意图）
+            </label>
           ) : null}
         </div>
-        {searchProvider === 'deepseek' && searchFetchContent ? (
-          <p className="kr-muted">
-            开启后，搜索结果里的链接会发送给搜索服务换取正文，正文只用于本轮回答：
-            <strong>不写入资料目录、不随来源保存、不导出</strong>。
-            第三方网页可能包含错误信息、个人信息或受版权保护的内容，请勿据此整段复制或对外传播；
-            单页抓取失败会自动回退到摘要。
-          </p>
-        ) : null}
         <p className="kr-settings__group-label">
           搜索规划可发送的内容
           <HintMark text="仅在「按下方范围发送」策略下生效；默认仅本地关键词。" />
@@ -2905,6 +2962,27 @@ function SettingsViewContent({
             </label>
           </div>
         )}
+        {/* 语音识别分区自己的保存按钮：设置按分区显示，之前只有一个「保存语音设置」
+            放在语音播报分区，识别页改了平台/模型也没有可见的保存入口。 */}
+        <div className="kr-settings__actions">
+          <button
+            type="button"
+            onClick={() => saveSpeech.mutate('asr')}
+            disabled={saveSpeech.isPending}
+          >
+            {saveSpeech.isPending ? '保存中…' : '保存语音识别设置'}
+          </button>
+        </div>
+        <div className="kr-settings__hint" role="status" aria-label="当前识别配置">
+          <p>
+            当前识别配置：方式 {asrModeLabel}；平台 {asrPlatformLabel}；模型 {asrModelLabel}。
+          </p>
+          {speechAsrDirty ? (
+            <p>有未保存的修改：点「保存语音识别设置」后才会生效。</p>
+          ) : (
+            <p>以上识别设置已保存，录音识别时按此配置调用。</p>
+          )}
+        </div>
       </section>
 
       <section className="kr-settings__section">
@@ -3104,8 +3182,16 @@ function SettingsViewContent({
             回答后自动朗读
           </label>
         </div>
+        {!ttsReadiness.ok && ttsMode !== 'system' ? (
+          <p className="kr-page-error">还不能播报：{ttsReadiness.reasons.join('；')}</p>
+        ) : null}
         <div className="kr-settings__actions">
-          <button type="button" onClick={() => saveSpeech.mutate()} disabled={saveSpeech.isPending}>
+          <button
+            type="button"
+            onClick={() => saveSpeech.mutate('tts')}
+            disabled={saveSpeech.isPending || ttsSaveBlocked}
+            title={ttsSaveBlocked ? ttsReadiness.reasons.join('；') : undefined}
+          >
             {saveSpeech.isPending ? '保存中…' : '保存语音设置'}
           </button>
           <button
@@ -3126,7 +3212,7 @@ function SettingsViewContent({
           <p>
             可用性：{ttsReadiness.ok ? '配置完整，可用于播报' : ttsReadiness.reasons.join('；')}
           </p>
-          {speechConfigDirty ? (
+          {speechTtsDirty ? (
             <p>有未保存的修改：点「保存语音设置」后才会生效。</p>
           ) : (
             <p>以上配置已保存，播报时按此配置调用。</p>

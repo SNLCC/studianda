@@ -151,7 +151,11 @@ export function saveSpeechConfig(
     'speech.auto_read': String(input.auto_read ?? current.auto_read),
     'speech.correction': String(input.correction ?? current.correction),
     'speech.context': String(input.context ?? current.context),
-    'speech.trigger_mode': input.trigger_mode === 'click' ? 'click' : current.trigger_mode,
+    // 两个取值都要原样保存：旧实现只认 'click'，从「单击」切回「按住」会静默不生效。
+    'speech.trigger_mode':
+      input.trigger_mode === 'click' || input.trigger_mode === 'hold'
+        ? input.trigger_mode
+        : current.trigger_mode,
     'speech.direct_audio': String(input.direct_audio ?? current.direct_audio),
     'speech.language': (input.language ?? current.language).trim() || DEFAULTS.language,
     'speech.asr_mode': asrMode,
@@ -229,6 +233,27 @@ function mimoLanguage(language: string): string {
   if (value.startsWith('zh')) return 'zh';
   if (value.startsWith('en')) return 'en';
   return 'auto';
+}
+
+/**
+ * 音频容器：从上传文件名 / MIME 推断。
+ *
+ * 识别接口是**按容器解析**的：MediaRecorder 录出来的是 webm/opus，如果一律改名成
+ * `speech.wav` 再声明 `audio/wav` 上传，服务端会按 WAV 解码失败（MiniMax 直接 400）。
+ * 界面已经统一转成 16k 单声道 WAV；这里仍按真实容器传参，避免其它调用方被错误标签带偏。
+ */
+function audioContainer(filename: string, mimeType: string): { format: string; mime: string } {
+  const fromName = /\.([a-z0-9]+)$/i.exec(filename.trim())?.[1]?.toLowerCase() ?? '';
+  const fromMime = /^audio\/([a-z0-9.+-]+)/i.exec(mimeType.trim())?.[1]?.toLowerCase() ?? '';
+  const aliases: Record<string, string> = {
+    wave: 'wav',
+    mpeg: 'mp3',
+    'x-m4a': 'm4a',
+    'x-wav': 'wav'
+  };
+  const raw = fromName || fromMime || 'wav';
+  const format = aliases[raw] ?? raw;
+  return { format, mime: mimeType.trim() || `audio/${format}` };
 }
 
 const MIMO_VOICE_SOURCE = 'https://mimo.mi.com/docs/zh-CN/api/audio/tts';
@@ -352,8 +377,11 @@ async function mimoTranscribe(
   key: string,
   model: string,
   bytes: Uint8Array,
-  language: string
+  language: string,
+  filename: string,
+  mimeType: string
 ): Promise<SpeechTranscription> {
+  const container = audioContainer(filename, mimeType);
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -369,8 +397,8 @@ async function mimoTranscribe(
             {
               type: 'input_audio',
               input_audio: {
-                data: `data:audio/wav;base64,${Buffer.from(bytes).toString('base64')}`,
-                format: 'wav'
+                data: `data:${container.mime};base64,${Buffer.from(bytes).toString('base64')}`,
+                format: container.format
               }
             }
           ]
@@ -396,18 +424,21 @@ async function mimoSynthesize(
   text: string,
   voice: string
 ): Promise<{ bytes: Uint8Array; contentType: string }> {
+  // 与其它朗读通道一致：超长文本截断，避免整段朗读被平台上限拒绝。
+  const spoken = truncateSpeechText(text.trim(), 9_500);
+  if (!spoken) throw new Error('没有可朗读的文本');
   const audio: Record<string, unknown> = { format: 'wav' };
   let messages: Array<{ role: string; content: string }>;
   if (model.endsWith('-voicedesign')) {
     messages = [
       { role: 'user', content: voice.trim() || '用自然清晰的标准普通话朗读。' },
-      { role: 'assistant', content: text }
+      { role: 'assistant', content: spoken }
     ];
   } else {
     if (model.endsWith('-voiceclone')) {
       throw new Error('音色复刻模型需要音频样本，请改用预置音色或文字描述音色模型');
     }
-    messages = [{ role: 'assistant', content: text }];
+    messages = [{ role: 'assistant', content: spoken }];
     audio.voice = voice.trim() || 'mimo_default';
   }
   const response = await fetch(`${baseUrl}/chat/completions`, {
@@ -431,20 +462,50 @@ async function mimoSynthesize(
   return { bytes, contentType: 'audio/wav' };
 }
 
+/**
+ * MiniMax 的错误体（OpenAI 风格 `error.message` 或 `base_resp.status_msg`）→ 一句中文提示。
+ *
+ * 只取错误说明并截断，不回显请求体/密钥；拿不到时返回空串，由调用方给通用提示。
+ */
+async function minimaxErrorDetail(response: Response): Promise<string> {
+  try {
+    const payload = (await response.clone().json()) as {
+      error?: { message?: unknown };
+      base_resp?: { status_msg?: unknown };
+    };
+    const message =
+      typeof payload.error?.message === 'string'
+        ? payload.error.message
+        : typeof payload.base_resp?.status_msg === 'string'
+          ? payload.base_resp.status_msg
+          : '';
+    return message.trim().slice(0, 200);
+  } catch {
+    return '';
+  }
+}
+
 async function minimaxTranscribe(
   baseUrl: string,
   key: string,
   model: string,
   bytes: Uint8Array,
-  language: string
+  language: string,
+  filename: string,
+  mimeType: string
 ): Promise<SpeechTranscription> {
   const code = language.toLowerCase().startsWith('zh')
     ? 'zh'
     : language.toLowerCase().startsWith('en')
       ? 'en'
       : '';
+  const container = audioContainer(filename, mimeType);
   const form = new FormData();
-  form.append('file', new Blob([new Uint8Array(bytes)], { type: 'audio/wav' }), 'speech.wav');
+  form.append(
+    'file',
+    new Blob([new Uint8Array(bytes)], { type: container.mime }),
+    `speech.${container.format}`
+  );
   form.append('model', model);
   form.append('response_format', 'json');
   form.append('stream', 'false');
@@ -457,8 +518,28 @@ async function minimaxTranscribe(
     body: form,
     signal: AbortSignal.timeout(120_000)
   });
-  if (!response.ok) throw new Error(`MiniMax 语音识别返回 HTTP ${response.status}`);
-  const payload = (await response.json()) as { text?: unknown };
+  if (!response.ok) {
+    const detail = await minimaxErrorDetail(response);
+    // 400 最常见的原因是音频容器不受支持（例如直接把 webm/opus 当 wav 上传）。
+    const hint =
+      response.status === 400
+        ? '音频格式或参数不被接受：请使用 wav / mp3 / ogg 等受支持的容器'
+        : '';
+    throw new Error(
+      `MiniMax 语音识别返回 HTTP ${response.status}${detail ? `：${detail}` : hint ? `：${hint}` : ''}`
+    );
+  }
+  const payload = (await response.json()) as {
+    text?: unknown;
+    base_resp?: { status_code?: number; status_msg?: string };
+  };
+  // 国内站部分网关会用 200 + base_resp 返回业务错误：要给出原因而不是“没有返回文字”。
+  const status = payload.base_resp?.status_code;
+  if (status !== undefined && status !== 0) {
+    throw new Error(
+      `MiniMax 语音识别失败：${payload.base_resp?.status_msg ?? `错误码 ${status}`}`
+    );
+  }
   const text = typeof payload.text === 'string' ? payload.text.trim() : '';
   if (!text) throw new Error('MiniMax 没有返回识别文字');
   return { text: text.slice(0, 8000), confidence: null, source: 'minimax' };
@@ -472,6 +553,10 @@ async function minimaxSynthesize(
   voice: string
 ): Promise<{ bytes: Uint8Array; contentType: string }> {
   if (!voice.trim()) throw new Error('MiniMax 播报必须指定音色 ID');
+  // MiniMax 单次合成要求文本 < 10,000 字符：超长直接截断（朗读是易失输出），
+  // 否则接口返回 2013「text too long」，用户只会看到“朗读失败”。
+  const spoken = truncateSpeechText(text.trim(), 9_500);
+  if (!spoken) throw new Error('没有可朗读的文本');
   const response = await fetch(`${baseUrl}/t2a_v2`, {
     method: 'POST',
     headers: {
@@ -480,16 +565,24 @@ async function minimaxSynthesize(
     },
     body: JSON.stringify({
       model,
-      text,
+      text: spoken,
       stream: false,
       output_format: 'hex',
       language_boost: 'auto',
       voice_setting: { voice_id: voice.trim(), speed: 1, vol: 1, pitch: 0 },
-      audio_setting: { format: 'wav', sample_rate: 32000, channel: 1 }
+      // 用 mp3 而不是 wav：32 kHz 单声道 WAV 约 64 KB/秒，一段几千字的回答就会
+      // 超过 30 MB 上限（实测 3,680 字 ≈ 36 MB），整段播报会直接失败；
+      // mp3 体积约为 1/4，浏览器/Electron 都能直接播放。
+      audio_setting: { format: 'mp3', sample_rate: 32000, bitrate: 128_000, channel: 1 }
     }),
     signal: AbortSignal.timeout(180_000)
   });
-  if (!response.ok) throw new Error(`MiniMax 语音播报返回 HTTP ${response.status}`);
+  if (!response.ok) {
+    const detail = await minimaxErrorDetail(response);
+    throw new Error(
+      `MiniMax 语音播报返回 HTTP ${response.status}${detail ? `：${detail}` : ''}`
+    );
+  }
   const payload = (await response.json()) as {
     base_resp?: { status_code?: number; status_msg?: string };
     data?: { audio?: unknown };
@@ -503,7 +596,7 @@ async function minimaxSynthesize(
   const bytes = new Uint8Array(Buffer.from(encoded.trim(), 'hex'));
   if (bytes.byteLength === 0) throw new Error('MiniMax 返回了空音频');
   if (bytes.byteLength > 30 * 1024 * 1024) throw new Error('返回的音频超过 30 MB');
-  return { bytes, contentType: 'audio/wav' };
+  return { bytes, contentType: 'audio/mpeg' };
 }
 
 const SYSTEM_SPEECH_SCRIPT = `
@@ -1134,10 +1227,26 @@ export async function transcribeAudio(
     );
   }
   if (protocol === 'mimo') {
-    return mimoTranscribe(profileConfig.baseUrl, profileConfig.key, profileConfig.model, bytes, language);
+    return mimoTranscribe(
+      profileConfig.baseUrl,
+      profileConfig.key,
+      profileConfig.model,
+      bytes,
+      language,
+      filename,
+      mimeType
+    );
   }
   if (protocol === 'minimax') {
-    return minimaxTranscribe(profileConfig.baseUrl, profileConfig.key, profileConfig.model, bytes, language);
+    return minimaxTranscribe(
+      profileConfig.baseUrl,
+      profileConfig.key,
+      profileConfig.model,
+      bytes,
+      language,
+      filename,
+      mimeType
+    );
   }
   const form = new FormData();
   form.append('file', new Blob([new Uint8Array(bytes)], { type: mimeType }), filename);

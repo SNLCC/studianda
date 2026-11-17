@@ -5050,6 +5050,13 @@ a {
 .kr-settings__nav button.is-active:hover {
   background: var(--kr-celadon-soft);
 }
+/* 设置：导航里的“有未保存修改”提示（保存按钮在分区底部，先在这里提醒） */
+.kr-settings__nav-dirty {
+  color: var(--kr-celadon-deep);
+  font-size: var(--kr-fs-caption);
+  font-weight: 500;
+  white-space: nowrap;
+}
 .kr-settings__nav-section {
   display: contents;
 }

@@ -62,8 +62,9 @@ function writeAscii(bytes: Uint8Array, offset: number, value: string): void {
 /**
  * 把浏览器录音（通常是 webm/opus）转成 16kHz 单声道 16bit PCM WAV。
  *
- * 系统语音识别（Windows）只接受 WAV，而 MediaRecorder 一般只能录 webm/ogg；
- * 这里用 Web Audio 解码后重采样并写 WAV 头，整个转换在渲染进程完成，不上传原始录音之外的任何东西。
+ * MediaRecorder 一般只能录 webm/ogg，而语音识别接口按容器解析（MiniMax 的
+ * speech_to_text 只接受 wav/mp3/ogg 等，系统语音也只接受 WAV）；统一在渲染进程
+ * 解码重采样并写 WAV 头，不上传原始录音之外的任何东西。
  */
 export async function blobToWav(input: Blob): Promise<Blob> {
   const scope = window as typeof window & {

@@ -10529,25 +10529,21 @@ function ReaderView({
                 // 语音转写在进入输入框之前先做"只校正转写"的纠错：
                 // 失败/坏 JSON 保留原文并给出 needs_review 提示，不阻塞用户继续改字。
                 setVoiceNotice(null);
-                // 系统语音识别（Windows）只接受 WAV；MediaRecorder 一般录 webm/opus，
-                // 这里在渲染进程解码重采样成 16k 单声道 WAV 再上传，其余模式直接发 webm。
-                let payload = audio;
-                if (speechConfigQuery.data?.asr_mode === 'system') {
-                  try {
-                    payload = await blobToWav(audio);
-                  } catch (error) {
-                    throw new Error(
-                      `无法把录音转成系统识别需要的 WAV 格式：${
-                        error instanceof Error ? error.message : '未知错误'
-                      }；也可以改用模型语音识别`
-                    );
-                  }
+                // 统一转成 16k 单声道 WAV 再上传：MediaRecorder 录的是 webm/opus，
+                // 而识别接口按容器解析（MiniMax 的 speech_to_text 只接受 wav/mp3/ogg
+                // 等容器，把 webm 改名成 speech.wav 会被直接 400）。转成 WAV 后
+                // 系统语音、MiniMax、MiMo、DeepSeek 与 OpenAI 兼容服务都能直接用。
+                let payload: Blob;
+                try {
+                  payload = await blobToWav(audio);
+                } catch (error) {
+                  throw new Error(
+                    `无法把录音转成识别需要的 WAV 格式：${
+                      error instanceof Error ? error.message : '未知错误'
+                    }；请检查麦克风录音是否正常`
+                  );
                 }
-                const isWav = payload.type.includes('wav');
-                const transcribed = await api.transcribeAudio(
-                  payload,
-                  isWav ? 'speech.wav' : 'speech.webm'
-                );
+                const transcribed = await api.transcribeAudio(payload, 'speech.wav');
                 // 直接语音（全模态）里的转写只用于在会话中显示「说了什么」，
                 // 不再额外调用「按当前页术语校正」——那会多一次模型往返，让语音提问变慢。
                 if (speechConfigQuery.data?.direct_audio) return transcribed.text;

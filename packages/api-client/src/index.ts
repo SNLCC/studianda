@@ -1875,9 +1875,19 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         reader.releaseLock();
       }
     },
-    async transcribeAudio(audio, filename = 'speech.webm') {
+    async transcribeAudio(audio, filename) {
+      // 文件名必须与音频容器一致：识别服务按扩展名/容器解码，把 webm 改名成
+      // speech.wav 会被直接 400。调用方没给名字时按 Blob 的 MIME 推断。
+      const type = (audio.type || '').toLowerCase();
+      const extension = type.includes('wav')
+        ? 'wav'
+        : type.includes('mpeg') || type.includes('mp3')
+          ? 'mp3'
+          : type.includes('ogg')
+            ? 'ogg'
+            : 'webm';
       const form = new FormData();
-      form.append('file', audio, filename);
+      form.append('file', audio, filename ?? `speech.${extension}`);
       const response = await fetch(`${base}/speech/transcribe`, {
         method: 'POST',
         headers,

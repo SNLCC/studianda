@@ -178,6 +178,89 @@ describe('speech', () => {
     }
   });
 
+  it('MiniMax 识别按录音真实容器上传，并把上游 400 的原因带出来', async () => {
+    const bodies: FormData[] = [];
+    vi.stubGlobal('fetch', async (_input: unknown, init?: RequestInit) => {
+      bodies.push(init?.body as FormData);
+      return new Response(
+        JSON.stringify({
+          type: 'error',
+          error: {
+            type: 'bad_request_error',
+            message: 'invalid params, unsupported audio format (2013)'
+          },
+          http_code: '400'
+        }),
+        { status: 400, headers: { 'content-type': 'application/json' } }
+      );
+    });
+    saveSpeechConfig(store, secrets, {
+      asr_mode: 'custom',
+      asr_url: 'https://api.minimax.cn/v1',
+      asr_model: 'asr-1.0',
+      asr_key: 'key'
+    });
+    try {
+      await expect(
+        transcribeAudio(
+          store,
+          secrets,
+          new Uint8Array([1, 2]),
+          'recording.webm',
+          'audio/webm'
+        )
+      ).rejects.toThrow('unsupported audio format');
+      const file = bodies[0]!.get('file');
+      expect(file).toBeInstanceOf(File);
+      // 不能把 webm 录音改名成 speech.wav：MiniMax 会按 WAV 解码失败并 400。
+      expect((file as File).name).toBe('speech.webm');
+      expect((file as File).type).toBe('audio/webm');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('MiniMax 播报改用 mp3 并截断超长文本，避免整段因体积/长度失败', async () => {
+    let body: Record<string, unknown> = {};
+    vi.stubGlobal('fetch', async (_input: unknown, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(
+        JSON.stringify({
+          base_resp: { status_code: 0 },
+          data: { audio: Buffer.from('ID3').toString('hex') }
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      );
+    });
+    saveSpeechConfig(store, secrets, {
+      tts_mode: 'custom',
+      tts_url: 'https://api.minimax.cn/v1',
+      tts_model: 'speech-2.8-hd',
+      voice: 'female-shaonv',
+      tts_key: 'key'
+    });
+    try {
+      const audio = await synthesizeSpeech(store, secrets, '正'.repeat(6000));
+      expect(body).toMatchObject({
+        model: 'speech-2.8-hd',
+        audio_setting: { format: 'mp3' }
+      });
+      // 汉字算 2 个计费字符：9,500 上限 → 最多 4,750 个汉字。
+      expect((body.text as string).length).toBe(4750);
+      expect(audio.contentType).toBe('audio/mpeg');
+      expect(Buffer.from(audio.bytes).toString('utf8')).toBe('ID3');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('触发方式可以切回「按住说话」（不再只认 click）', () => {
+    saveSpeechConfig(store, secrets, { trigger_mode: 'click' });
+    expect(getSpeechConfig(store, secrets).trigger_mode).toBe('click');
+    saveSpeechConfig(store, secrets, { trigger_mode: 'hold' });
+    expect(getSpeechConfig(store, secrets).trigger_mode).toBe('hold');
+  });
+
   it('模型模式按选中的平台连接与模型播报，并拒绝来自其它平台的旧模型名', async () => {
     const requests: Array<{ url: string; body: string }> = [];
     vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
