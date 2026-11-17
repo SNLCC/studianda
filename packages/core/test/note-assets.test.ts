@@ -126,9 +126,11 @@ describe('Store.saveNoteAsset', () => {
       });
       expect(traversal.filename).toBe('evil问.png');
 
+      // 用明显的占位路径：这里测的是"Windows 绝对路径 + 非 ASCII 文件名"的清洗，
+      // 不需要（也不应该）出现任何像真实用户目录的路径。
       const windowsPath = await store.saveNoteAsset({
         dataUrl: dataUrl('image/jpeg', JPEG_BYTES),
-        filename: 'C:\\Users\\me\\图片 1.jpg'
+        filename: 'C:\\path\\to\\图片 1.jpg'
       });
       expect(windowsPath.filename).toBe('图片 1.jpg');
 
