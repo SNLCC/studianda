@@ -1,6 +1,6 @@
 # 许可证来源与哈希
 
-生成时间：2026-11-15T10:24:30.016Z
+生成时间：2026-11-17T16:56:36.794Z
 
 “官方仓库”列取自各包 `package.json` 的 repository/homepage；许可证文件哈希取自安装包内实际文件。
 
@@ -115,11 +115,18 @@
 
 - NSIS 3.0.4.1（zlib/libpng license）：`upstream/official/nsis-COPYING.txt`
 - nsis7z.dll（基于 7-Zip 19.00，7-Zip License / LGPL-2.1+，含 unRAR 限制）：许可、来源、随包源码与实际 DLL 的 SHA-256 见 `upstream/official/nsis7z/`
-- StdUtils.dll（LoRd_MuldeR，GNU LGPL-2.1+）：许可、澄清与源码见 `upstream/official/nsis-plugins/stdutils/`
+- StdUtils.dll（LoRd_MuldeR，GNU LGPL-2.1+，版本 1.1.4.0，DLL SHA-256 B72E9013A6204E9F01076DC38DABBF30870D44DFC66962ADBF73619D4331601E）：许可、澄清与源码见 `upstream/official/nsis-plugins/stdutils/`
 - UAC.dll（Anders，ZLIB/LIBPNG）：许可与源码见 `upstream/official/nsis-plugins/uac/`
 - elevate.exe（MIT）：`upstream/official/elevate-MIT.txt`
-- FFmpeg（Electron 内置 ffmpeg.dll，LGPL-2.1-or-later）：`upstream/official/ffmpeg-LGPL-2.1.txt`
+- FFmpeg（Electron 内置 ffmpeg.dll，LGPL-2.1-or-later）：`upstream/official/ffmpeg-LGPL-2.1.txt`；**LGPL 2.1 §6(c) 书面源码要约**见 `upstream/official/ffmpeg-SOURCE-OFFER.md`（三年有效，接收方无需预先回应）
+- electron-builder / app-builder-lib 26.18.0（MIT，构建期 NSIS 模板）：`upstream/official/electron-builder-NOTICE.md`、`upstream/official/repos/electron-userland_electron-builder-LICENSE.txt`
 - WinShell.dll：**已由脚本实现替代**，不再随包分发 DLL（AUMID 行为保留）；依据与证据见 `upstream/official/nsis-plugins/winshell/README.md`
+
+## 运行时下载 / 特殊组件
+
+- Tesseract tessdata_fast（Apache-2.0，运行时按需下载）：`upstream/official/tessdata_fast-SOURCES.json`、`upstream/Tesseract-tessdata-APACHE-2.0.txt`
+- pako zlib 兼容层：`upstream/official/pako-zlib-README.txt`
+- Tesseract.js-core 修改版 Tesseract fork：`upstream/official/tesseract-core/README.md`
 
 ## 内嵌组件的固定版本源码
 

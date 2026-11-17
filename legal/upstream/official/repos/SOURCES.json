@@ -137,21 +137,6 @@
       "npmSha256": "4ffb54af38f35ca8005893c382e19f3c3e919c499d50804c00d3c124bc6508f4"
     },
     {
-      "package": "@napi-rs/canvas",
-      "version": "1.0.13",
-      "repository": "git+https://github.com/Brooooooklyn/canvas.git",
-      "officialUrl": "https://raw.githubusercontent.com/Brooooooklyn/canvas/v1.0.13/LICENSE",
-      "ref": "v1.0.13",
-      "file": "LICENSE",
-      "sha256": "0b8e3b4f0042f33677406344854c1dcce3a2878eb3a3f6baee58c6f5752655ce",
-      "localPath": "upstream/official/repos/Brooooooklyn_canvas-LICENSE.txt",
-      "versionPinned": true,
-      "versionPinNote": "",
-      "npmUrl": "https://unpkg.com/@napi-rs/canvas@1.0.13/LICENSE",
-      "npmFile": "LICENSE",
-      "npmSha256": "0b8e3b4f0042f33677406344854c1dcce3a2878eb3a3f6baee58c6f5752655ce"
-    },
-    {
       "package": "@napi-rs/canvas-win32-x64-msvc",
       "version": "1.0.13",
       "repository": "git+https://github.com/Brooooooklyn/canvas.git",
@@ -162,6 +147,21 @@
       "localPath": "upstream/official/repos/Brooooooklyn_canvas-LICENSE.txt",
       "versionPinned": true,
       "versionPinNote": "精确 tag v1.0.13 的官方 LICENSE（与 @napi-rs/canvas@1.0.13 npm LICENSE 一致）；平台包无独立 LICENSE",
+      "npmUrl": "https://unpkg.com/@napi-rs/canvas@1.0.13/LICENSE",
+      "npmFile": "LICENSE",
+      "npmSha256": "0b8e3b4f0042f33677406344854c1dcce3a2878eb3a3f6baee58c6f5752655ce"
+    },
+    {
+      "package": "@napi-rs/canvas",
+      "version": "1.0.13",
+      "repository": "git+https://github.com/Brooooooklyn/canvas.git",
+      "officialUrl": "https://raw.githubusercontent.com/Brooooooklyn/canvas/v1.0.13/LICENSE",
+      "ref": "v1.0.13",
+      "file": "LICENSE",
+      "sha256": "0b8e3b4f0042f33677406344854c1dcce3a2878eb3a3f6baee58c6f5752655ce",
+      "localPath": "upstream/official/repos/Brooooooklyn_canvas-LICENSE.txt",
+      "versionPinned": true,
+      "versionPinNote": "",
       "npmUrl": "https://unpkg.com/@napi-rs/canvas@1.0.13/LICENSE",
       "npmFile": "LICENSE",
       "npmSha256": "0b8e3b4f0042f33677406344854c1dcce3a2878eb3a3f6baee58c6f5752655ce"
@@ -257,6 +257,21 @@
       "npmSha256": "e1a86711fb5055c0e66901276b7d2c843554bf5f1dab218c069c8b9d17148e81"
     },
     {
+      "package": "ajv-formats",
+      "version": "3.0.1",
+      "repository": "git+https://github.com/ajv-validator/ajv-formats.git",
+      "officialUrl": "https://raw.githubusercontent.com/ajv-validator/ajv-formats/v3.0.1/LICENSE",
+      "ref": "v3.0.1",
+      "file": "LICENSE",
+      "sha256": "9df3bb69929a3b650ed73b3bfa1756725aaff0ac296461605753547004eafeaf",
+      "localPath": "upstream/official/repos/ajv-validator_ajv-formats-LICENSE.txt",
+      "versionPinned": true,
+      "versionPinNote": "",
+      "npmUrl": "https://unpkg.com/ajv-formats@3.0.1/LICENSE",
+      "npmFile": "LICENSE",
+      "npmSha256": "9df3bb69929a3b650ed73b3bfa1756725aaff0ac296461605753547004eafeaf"
+    },
+    {
       "package": "ajv",
       "version": "8.20.0",
       "repository": "ajv-validator/ajv",
@@ -272,19 +287,19 @@
       "npmSha256": "a05350a88e318e4f5f2c2a1ff1e2e88daa4dd38e6e78b71cccae422bdc762cc3"
     },
     {
-      "package": "ajv-formats",
-      "version": "3.0.1",
-      "repository": "git+https://github.com/ajv-validator/ajv-formats.git",
-      "officialUrl": "https://raw.githubusercontent.com/ajv-validator/ajv-formats/v3.0.1/LICENSE",
-      "ref": "v3.0.1",
+      "package": "argparse",
+      "version": "2.0.1",
+      "repository": "https://github.com/nodeca/argparse.git",
+      "officialUrl": "https://raw.githubusercontent.com/nodeca/argparse/2.0.1/LICENSE",
+      "ref": "2.0.1",
       "file": "LICENSE",
-      "sha256": "9df3bb69929a3b650ed73b3bfa1756725aaff0ac296461605753547004eafeaf",
-      "localPath": "upstream/official/repos/ajv-validator_ajv-formats-LICENSE.txt",
+      "sha256": "de4d1f2d2ad5ad0cfd1657a106476b31cb5db5ef9d1ff842b237c0c81f0c8a23",
+      "localPath": "upstream/official/repos/nodeca_argparse-LICENSE.txt",
       "versionPinned": true,
       "versionPinNote": "",
-      "npmUrl": "https://unpkg.com/ajv-formats@3.0.1/LICENSE",
-      "npmFile": "LICENSE",
-      "npmSha256": "9df3bb69929a3b650ed73b3bfa1756725aaff0ac296461605753547004eafeaf"
+      "npmUrl": "",
+      "npmFile": "",
+      "npmSha256": ""
     },
     {
       "package": "atomic-sleep",
@@ -332,6 +347,21 @@
       "npmSha256": "9f165f5bd2b462122cacb8c6dc32028be1abb4d8ad0322e9a332f30b2ebdb833"
     },
     {
+      "package": "builder-util-runtime",
+      "version": "9.7.0",
+      "repository": "https://github.com/electron-userland/electron-builder.git",
+      "officialUrl": "https://raw.githubusercontent.com/electron-userland/electron-builder/HEAD/LICENSE",
+      "ref": "HEAD",
+      "file": "LICENSE",
+      "sha256": "bed8d0ab3e6031817f775a641ff37313b0f5591bc8ba0ed79b978dafbd4231ce",
+      "localPath": "upstream/official/repos/electron-userland_electron-builder-LICENSE.txt",
+      "versionPinned": true,
+      "versionPinNote": "electron-builder 仓库无对应版本 tag；官方仓库 MIT 原文取自 HEAD，版本锚定使用 npm 发布物 LICENSE。",
+      "npmUrl": "https://unpkg.com/builder-util-runtime@9.7.0/LICENSE",
+      "npmFile": "LICENSE",
+      "npmSha256": "bed8d0ab3e6031817f775a641ff37313b0f5591bc8ba0ed79b978dafbd4231ce"
+    },
+    {
       "package": "cookie",
       "version": "2.0.1",
       "repository": "jshttp/cookie",
@@ -347,6 +377,21 @@
       "npmSha256": "c02110eedc16c7114f1a9bdc026c65626ce1d9c7e27fd51a8e0feee8a48a6858"
     },
     {
+      "package": "debug",
+      "version": "4.4.3",
+      "repository": "https://github.com/debug-js/debug.git",
+      "officialUrl": "https://raw.githubusercontent.com/debug-js/debug/4.4.3/LICENSE",
+      "ref": "4.4.3",
+      "file": "LICENSE",
+      "sha256": "3a61c6c96caf5c1d9b623fb9b04c822b783dfcb78aa7e49c76a3f643e6ed7f95",
+      "localPath": "upstream/official/repos/debug-js_debug-LICENSE.txt",
+      "versionPinned": true,
+      "versionPinNote": "",
+      "npmUrl": "",
+      "npmFile": "",
+      "npmSha256": ""
+    },
+    {
       "package": "dequal",
       "version": "2.0.3",
       "repository": "lukeed/dequal",
@@ -360,6 +405,21 @@
       "npmUrl": "https://unpkg.com/dequal@2.0.3/LICENSE",
       "npmFile": "LICENSE",
       "npmSha256": "306fa513e39b23a6e8747520de761809d206b99800ef41907b530226574c59ae"
+    },
+    {
+      "package": "electron-updater",
+      "version": "6.8.11",
+      "repository": "https://github.com/electron-userland/electron-builder.git",
+      "officialUrl": "https://raw.githubusercontent.com/electron-userland/electron-builder/HEAD/LICENSE",
+      "ref": "HEAD",
+      "file": "LICENSE",
+      "sha256": "bed8d0ab3e6031817f775a641ff37313b0f5591bc8ba0ed79b978dafbd4231ce",
+      "localPath": "upstream/official/repos/electron-userland_electron-builder-LICENSE.txt",
+      "versionPinned": true,
+      "versionPinNote": "electron-builder 仓库无对应版本 tag；官方仓库 MIT 原文取自 HEAD，版本锚定使用 npm 发布物 LICENSE。",
+      "npmUrl": "https://unpkg.com/electron-updater@6.8.11/LICENSE",
+      "npmFile": "LICENSE",
+      "npmSha256": "bed8d0ab3e6031817f775a641ff37313b0f5591bc8ba0ed79b978dafbd4231ce"
     },
     {
       "package": "fast-decode-uri-component",
@@ -452,21 +512,6 @@
       "npmSha256": "b010b0dfdfdb23d7396e03b82cd4621fc9bb8f95d6b0aea70b9c24e12074c786"
     },
     {
-      "package": "fastify",
-      "version": "5.12.7",
-      "repository": "git+https://github.com/fastify/fastify.git",
-      "officialUrl": "https://raw.githubusercontent.com/fastify/fastify/v5.12.7/LICENSE",
-      "ref": "v5.12.7",
-      "file": "LICENSE",
-      "sha256": "23c91863859171455a536380991b4160fee4e19e2d8dc353ecf7143cc4e53ca2",
-      "localPath": "upstream/official/repos/fastify_fastify-LICENSE.txt",
-      "versionPinned": true,
-      "versionPinNote": "",
-      "npmUrl": "https://unpkg.com/fastify@5.12.7/LICENSE",
-      "npmFile": "LICENSE",
-      "npmSha256": "23c91863859171455a536380991b4160fee4e19e2d8dc353ecf7143cc4e53ca2"
-    },
-    {
       "package": "fastify-plugin",
       "version": "6.0.1",
       "repository": "git+https://github.com/fastify/fastify-plugin.git",
@@ -480,6 +525,21 @@
       "npmUrl": "https://unpkg.com/fastify-plugin@6.0.1/LICENSE",
       "npmFile": "LICENSE",
       "npmSha256": "ba9677e5a34c2738c26b36bb478f95e0369cac48fbe68a01a91fd5c7972f2043"
+    },
+    {
+      "package": "fastify",
+      "version": "5.12.7",
+      "repository": "git+https://github.com/fastify/fastify.git",
+      "officialUrl": "https://raw.githubusercontent.com/fastify/fastify/v5.12.7/LICENSE",
+      "ref": "v5.12.7",
+      "file": "LICENSE",
+      "sha256": "23c91863859171455a536380991b4160fee4e19e2d8dc353ecf7143cc4e53ca2",
+      "localPath": "upstream/official/repos/fastify_fastify-LICENSE.txt",
+      "versionPinned": true,
+      "versionPinNote": "",
+      "npmUrl": "https://unpkg.com/fastify@5.12.7/LICENSE",
+      "npmFile": "LICENSE",
+      "npmSha256": "23c91863859171455a536380991b4160fee4e19e2d8dc353ecf7143cc4e53ca2"
     },
     {
       "package": "fastq",
@@ -527,6 +587,36 @@
       "npmSha256": "693f9539655acc1847add1ccd364312ba570bf8ce84706b6059e7e0b5ceb90e6"
     },
     {
+      "package": "fs-extra",
+      "version": "10.1.0",
+      "repository": "https://github.com/jprichardson/node-fs-extra.git",
+      "officialUrl": "https://raw.githubusercontent.com/jprichardson/node-fs-extra/10.1.0/LICENSE",
+      "ref": "10.1.0",
+      "file": "LICENSE",
+      "sha256": "1e76029602ae9b21cc4e612db2496d92febed882ba13ba745f8b3309e85f9d39",
+      "localPath": "upstream/official/repos/jprichardson_node-fs-extra-LICENSE.txt",
+      "versionPinned": true,
+      "versionPinNote": "",
+      "npmUrl": "",
+      "npmFile": "",
+      "npmSha256": ""
+    },
+    {
+      "package": "graceful-fs",
+      "version": "4.2.11",
+      "repository": "https://github.com/isaacs/node-graceful-fs.git",
+      "officialUrl": "https://raw.githubusercontent.com/isaacs/node-graceful-fs/v4.2.11/LICENSE",
+      "ref": "v4.2.11",
+      "file": "LICENSE",
+      "sha256": "f65c5d9f22a317b2a10803bd1868461ce6499c2ed7217bc80c0cc772a748789c",
+      "localPath": "upstream/official/repos/isaacs_node-graceful-fs-LICENSE.txt",
+      "versionPinned": true,
+      "versionPinNote": "",
+      "npmUrl": "",
+      "npmFile": "",
+      "npmSha256": ""
+    },
+    {
       "package": "idb-keyval",
       "version": "6.3.0",
       "repository": "git+https://github.com/jakearchibald/idb-keyval.git",
@@ -572,6 +662,21 @@
       "npmSha256": "80957b522b0ea4ce24290953d74d818220c804d1f42cad02b8d7da1c12ce1fc1"
     },
     {
+      "package": "js-yaml",
+      "version": "4.3.2",
+      "repository": "https://github.com/nodeca/js-yaml.git",
+      "officialUrl": "https://raw.githubusercontent.com/nodeca/js-yaml/4.3.2/LICENSE",
+      "ref": "4.3.2",
+      "file": "LICENSE",
+      "sha256": "a07bc24468b9654ce76a547d47a2db282d07733b715db4c73a98bd63961f9550",
+      "localPath": "upstream/official/repos/nodeca_js-yaml-LICENSE.txt",
+      "versionPinned": true,
+      "versionPinNote": "",
+      "npmUrl": "",
+      "npmFile": "",
+      "npmSha256": ""
+    },
+    {
       "package": "json-schema-ref-resolver",
       "version": "3.0.1",
       "repository": "git+https://github.com/fastify/json-schema-ref-resolver.git",
@@ -602,6 +707,36 @@
       "npmSha256": "7bf9b2de73a6b356761c948d0e9eeb4be6c1270bd04c79cd489c1e400ffdfc1a"
     },
     {
+      "package": "jsonfile",
+      "version": "6.2.1",
+      "repository": "https://github.com/jprichardson/node-jsonfile.git",
+      "officialUrl": "https://raw.githubusercontent.com/jprichardson/node-jsonfile/6.2.1/LICENSE",
+      "ref": "6.2.1",
+      "file": "LICENSE",
+      "sha256": "a9801fb52ba22ef808682a094da8a7a480584b7ed0dfd0d888ab543616335031",
+      "localPath": "upstream/official/repos/jprichardson_node-jsonfile-LICENSE.txt",
+      "versionPinned": true,
+      "versionPinNote": "",
+      "npmUrl": "",
+      "npmFile": "",
+      "npmSha256": ""
+    },
+    {
+      "package": "lazy-val",
+      "version": "1.0.5",
+      "repository": "https://github.com/develar/lazy-val",
+      "officialUrl": "https://github.com/develar/lazy-val",
+      "ref": "",
+      "file": "",
+      "sha256": "e20c03878b9664b129807be4b268d32d4acf8f2a722f4867f4f57cb696778f06",
+      "localPath": "upstream/official/repos/develar_lazy-val-NO-LICENSE.md",
+      "versionPinned": false,
+      "versionPinNote": "上游仓库与 npm 包均无 LICENSE 文件；仅 package.json 声明 MIT；本文件记录该例外，MIT 文本见 upstream/LazyVal-MIT.txt（按声明补充）",
+      "npmUrl": "https://registry.npmjs.org/lazy-val/1.0.5",
+      "npmFile": "package.json",
+      "npmSha256": ""
+    },
+    {
       "package": "light-my-request",
       "version": "6.8.0",
       "repository": "git+https://github.com/fastify/light-my-request.git",
@@ -615,6 +750,51 @@
       "npmUrl": "https://unpkg.com/light-my-request@6.8.0/LICENSE",
       "npmFile": "LICENSE",
       "npmSha256": "a46f56efbbd8ee5b8f80c8e60b3340f253714e010803b2671180f860222e1317"
+    },
+    {
+      "package": "lodash.escaperegexp",
+      "version": "4.1.2",
+      "repository": "https://github.com/lodash/lodash.git",
+      "officialUrl": "https://raw.githubusercontent.com/lodash/lodash/4.5.0/LICENSE",
+      "ref": "4.5.0",
+      "file": "LICENSE",
+      "sha256": "5b36b1230e57ce107ef477283adbf8c20561846626a67e1a7d648f6c6e902980",
+      "localPath": "upstream/official/repos/lodash_lodash-LICENSE.txt",
+      "versionPinned": true,
+      "versionPinNote": "仓库级 LICENSE；lodash.escaperegexp / lodash.isequal 为独立 npm 包，包内 license 另行保留。",
+      "npmUrl": "",
+      "npmFile": "",
+      "npmSha256": ""
+    },
+    {
+      "package": "lodash.isequal",
+      "version": "4.5.0",
+      "repository": "https://github.com/lodash/lodash.git",
+      "officialUrl": "https://raw.githubusercontent.com/lodash/lodash/4.5.0/LICENSE",
+      "ref": "4.5.0",
+      "file": "LICENSE",
+      "sha256": "5b36b1230e57ce107ef477283adbf8c20561846626a67e1a7d648f6c6e902980",
+      "localPath": "upstream/official/repos/lodash_lodash-LICENSE.txt",
+      "versionPinned": true,
+      "versionPinNote": "仓库级 LICENSE；lodash.escaperegexp / lodash.isequal 为独立 npm 包，包内 license 另行保留。",
+      "npmUrl": "",
+      "npmFile": "",
+      "npmSha256": ""
+    },
+    {
+      "package": "ms",
+      "version": "2.1.3",
+      "repository": "https://github.com/vercel/ms.git",
+      "officialUrl": "https://raw.githubusercontent.com/vercel/ms/2.1.3/license.md",
+      "ref": "2.1.3",
+      "file": "license.md",
+      "sha256": "1662fae9b5314d11cf51284e2dcd1f006a354f7343f08712a730fcff9a359801",
+      "localPath": "upstream/official/repos/vercel_ms-LICENSE.txt",
+      "versionPinned": true,
+      "versionPinNote": "",
+      "npmUrl": "",
+      "npmFile": "",
+      "npmSha256": ""
     },
     {
       "package": "node-fetch",
@@ -707,21 +887,6 @@
       "npmSha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
     },
     {
-      "package": "pino",
-      "version": "10.4.0",
-      "repository": "git+https://github.com/pinojs/pino.git",
-      "officialUrl": "https://raw.githubusercontent.com/pinojs/pino/v10.4.0/LICENSE",
-      "ref": "v10.4.0",
-      "file": "LICENSE",
-      "sha256": "03ebd87bfc3fde763e4d698939097903a202163f3365d92d2031a4e63e0c5487",
-      "localPath": "upstream/official/repos/pinojs_pino-LICENSE.txt",
-      "versionPinned": true,
-      "versionPinNote": "",
-      "npmUrl": "https://unpkg.com/pino@10.4.0/LICENSE",
-      "npmFile": "LICENSE",
-      "npmSha256": "03ebd87bfc3fde763e4d698939097903a202163f3365d92d2031a4e63e0c5487"
-    },
-    {
       "package": "pino-abstract-transport",
       "version": "3.0.0",
       "repository": "git+https://github.com/pinojs/pino-abstract-transport.git",
@@ -750,6 +915,21 @@
       "npmUrl": "https://unpkg.com/pino-std-serializers@7.1.0/LICENSE",
       "npmFile": "LICENSE",
       "npmSha256": "6206673d24786f09656f7a480b7c50af289e9690963aaa135af5b626de5250df"
+    },
+    {
+      "package": "pino",
+      "version": "10.4.0",
+      "repository": "git+https://github.com/pinojs/pino.git",
+      "officialUrl": "https://raw.githubusercontent.com/pinojs/pino/v10.4.0/LICENSE",
+      "ref": "v10.4.0",
+      "file": "LICENSE",
+      "sha256": "03ebd87bfc3fde763e4d698939097903a202163f3365d92d2031a4e63e0c5487",
+      "localPath": "upstream/official/repos/pinojs_pino-LICENSE.txt",
+      "versionPinned": true,
+      "versionPinNote": "",
+      "npmUrl": "https://unpkg.com/pino@10.4.0/LICENSE",
+      "npmFile": "LICENSE",
+      "npmSha256": "03ebd87bfc3fde763e4d698939097903a202163f3365d92d2031a4e63e0c5487"
     },
     {
       "package": "process-warning",
@@ -782,7 +962,7 @@
       "npmSha256": "5ac141bfc70bec8f40838502436bfcb85e3f4c24377e41b9ddef07bdd6aa51bc"
     },
     {
-      "package": "react",
+      "package": "react-dom",
       "version": "19.3.1",
       "repository": "https://github.com/react/react.git",
       "officialUrl": "https://raw.githubusercontent.com/react/react/v19.3.1/LICENSE",
@@ -797,7 +977,7 @@
       "npmSha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93"
     },
     {
-      "package": "react-dom",
+      "package": "react",
       "version": "19.3.1",
       "repository": "https://github.com/react/react.git",
       "officialUrl": "https://raw.githubusercontent.com/react/react/v19.3.1/LICENSE",
@@ -932,6 +1112,21 @@
       "npmSha256": "3a6d6de49d284a36c5d271ef0e62eca1838cc460dd7630e3f2c347c8f5b2232a"
     },
     {
+      "package": "sax",
+      "version": "1.6.1",
+      "repository": "https://github.com/isaacs/sax-js.git",
+      "officialUrl": "https://raw.githubusercontent.com/isaacs/sax-js/v1.6.1/LICENSE.md",
+      "ref": "v1.6.1",
+      "file": "LICENSE.md",
+      "sha256": "8a1af140fdfbf5afd3df27f7e662f989c5b963a300020dfafce42033cae9e004",
+      "localPath": "upstream/official/repos/isaacs_sax-js-LICENSE.txt",
+      "versionPinned": true,
+      "versionPinNote": "",
+      "npmUrl": "",
+      "npmFile": "",
+      "npmSha256": ""
+    },
+    {
       "package": "scheduler",
       "version": "0.28.0",
       "repository": "https://github.com/react/react.git",
@@ -960,6 +1155,21 @@
       "npmUrl": "https://unpkg.com/secure-json-parse@4.1.1/LICENSE",
       "npmFile": "LICENSE",
       "npmSha256": "354dacd69de5070d69b2e4c5598bd1f51d980775422c3ee663160f9da88ebf63"
+    },
+    {
+      "package": "semver",
+      "version": "7.7.4",
+      "repository": "git+https://github.com/npm/node-semver.git",
+      "officialUrl": "https://raw.githubusercontent.com/npm/node-semver/v7.7.4/LICENSE",
+      "ref": "v7.7.4",
+      "file": "LICENSE",
+      "sha256": "4ec3d4c66cd87f5c8d8ad911b10f99bf27cb00cdfcff82621956e379186b016b",
+      "localPath": "upstream/official/repos/npm_node-semver-LICENSE.txt",
+      "versionPinned": true,
+      "versionPinNote": "与 semver@7.8.5 使用同一 ISC LICENSE 文本；哈希一致",
+      "npmUrl": "https://unpkg.com/semver@7.8.5/LICENSE",
+      "npmFile": "LICENSE",
+      "npmSha256": "4ec3d4c66cd87f5c8d8ad911b10f99bf27cb00cdfcff82621956e379186b016b"
     },
     {
       "package": "semver",
@@ -1022,21 +1232,6 @@
       "npmSha256": "c372ef2fa1dfcb124ed807609751e75e3a009f108c5724916b489288fcb88a0c"
     },
     {
-      "package": "tesseract.js",
-      "version": "7.0.0",
-      "repository": "https://github.com/naptha/tesseract.js.git",
-      "officialUrl": "https://raw.githubusercontent.com/naptha/tesseract.js/v7.0.0/LICENSE.md",
-      "ref": "v7.0.0",
-      "file": "LICENSE.md",
-      "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1",
-      "localPath": "upstream/official/repos/naptha_tesseract.js-LICENSE.txt",
-      "versionPinned": true,
-      "versionPinNote": "",
-      "npmUrl": "https://unpkg.com/tesseract.js@7.0.0/LICENSE.md",
-      "npmFile": "LICENSE.md",
-      "npmSha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1"
-    },
-    {
       "package": "tesseract.js-core",
       "version": "7.0.0",
       "repository": "https://github.com/naptha/tesseract.js-core.git",
@@ -1052,6 +1247,21 @@
       "npmSha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
     },
     {
+      "package": "tesseract.js",
+      "version": "7.0.0",
+      "repository": "https://github.com/naptha/tesseract.js.git",
+      "officialUrl": "https://raw.githubusercontent.com/naptha/tesseract.js/v7.0.0/LICENSE.md",
+      "ref": "v7.0.0",
+      "file": "LICENSE.md",
+      "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1",
+      "localPath": "upstream/official/repos/naptha_tesseract.js-LICENSE.txt",
+      "versionPinned": true,
+      "versionPinNote": "",
+      "npmUrl": "https://unpkg.com/tesseract.js@7.0.0/LICENSE.md",
+      "npmFile": "LICENSE.md",
+      "npmSha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1"
+    },
+    {
       "package": "thread-stream",
       "version": "4.2.0",
       "repository": "git+https://github.com/mcollina/thread-stream.git",
@@ -1065,6 +1275,21 @@
       "npmUrl": "https://unpkg.com/thread-stream@4.2.0/LICENSE",
       "npmFile": "LICENSE",
       "npmSha256": "47404ffc18f1267832bc0623857871de5a3a93ebb19693f5e1b963af91fab54b"
+    },
+    {
+      "package": "tiny-typed-emitter",
+      "version": "2.1.0",
+      "repository": "https://github.com/binier/tiny-typed-emitter.git",
+      "officialUrl": "https://raw.githubusercontent.com/binier/tiny-typed-emitter/v2.1.0/LICENSE",
+      "ref": "v2.1.0",
+      "file": "LICENSE",
+      "sha256": "4b3faf884ee71eec3df920b66c98fc6618af28e824cf3a32ef3d8774048cc76d",
+      "localPath": "upstream/official/repos/binier_tiny-typed-emitter-LICENSE.txt",
+      "versionPinned": true,
+      "versionPinNote": "",
+      "npmUrl": "",
+      "npmFile": "",
+      "npmSha256": ""
     },
     {
       "package": "toad-cache",
@@ -1110,6 +1335,21 @@
       "npmUrl": "https://unpkg.com/tslib@1.14.1/LICENSE.txt",
       "npmFile": "LICENSE.txt",
       "npmSha256": "210b19e543130388c68654b7497e967119ce17145f66ab7d85688fbd70f08751"
+    },
+    {
+      "package": "universalify",
+      "version": "2.0.1",
+      "repository": "https://github.com/RyanZim/universalify.git",
+      "officialUrl": "https://raw.githubusercontent.com/RyanZim/universalify/2.0.1/LICENSE",
+      "ref": "2.0.1",
+      "file": "LICENSE",
+      "sha256": "3fda5977c0904e226190b4e21d64340c1731e2142d6fe5f3dee0090a216b8b63",
+      "localPath": "upstream/official/repos/RyanZim_universalify-LICENSE.txt",
+      "versionPinned": true,
+      "versionPinNote": "",
+      "npmUrl": "",
+      "npmFile": "",
+      "npmSha256": ""
     },
     {
       "package": "wasm-feature-detect",

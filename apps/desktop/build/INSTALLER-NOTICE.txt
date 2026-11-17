@@ -8,19 +8,23 @@
 安装后可从“设置 → 第三方许可与声明”打开完整声明。
 
 安装器使用 NSIS 3.0.4.1 与 nsis7z 解压插件；nsis7z 基于 7-Zip 19.00 源码，按 7-Zip License（GNU LGPL-2.1+，含 unRAR 限制）分发。许可原文、来源与完整对应源码见 resources/legal/upstream/official/nsis7z/。
-安装器还内嵌 NSIS 插件 StdUtils 与 UAC；许可与来源见 resources/legal/upstream/official/nsis-plugins/。安装器不使用任何第三方快捷方式插件；快捷方式的 AppUserModelID 由安装脚本调用 Windows 公开 API 写入。
+安装器还内嵌 NSIS 插件 StdUtils（1.1.4.0，LGPL-2.1+）与 UAC（ZLIB/LIBPNG）；许可、来源、DLL 哈希与源码见 resources/legal/upstream/official/nsis-plugins/。安装器不使用任何第三方快捷方式插件；快捷方式的 AppUserModelID 由安装脚本调用 Windows 公开 API 写入。
+安装器的 NSIS 脚本基于 electron-builder / app-builder-lib 26.18.0（MIT，Copyright (c) 2015 Loopline Systems）的模板生成；其版权与许可声明见 resources/legal/upstream/official/electron-builder-NOTICE.md 与 resources/legal/upstream/official/repos/electron-userland_electron-builder-LICENSE.txt。
 
 第三方组件的强制声明：
 - libjpeg-turbo：This software is based in part on the work of the Independent JPEG Group.
 - MPL-2.0：@napi-rs/canvas 内含 cssparser、cssparser-macros、dtoa-short、selectors 四个 MPL-2.0 组件；其未修改的上游源码随包提供于 resources/legal/upstream/official/napi-canvas/mpl-sources/，许可原文见同目录 MPL-2.0.txt。
 - 随包字体：界面内置中文字体按各自自身许可分发，逐款许可见 resources/legal/fonts.json，版权行与许可原文见 resources/legal/font-licenses/。
+- pako：根许可为 MIT，其 lib/zlib 部分另适用 Zlib 许可；通知全文见 resources/legal/upstream/official/pako-zlib-README.txt。
+- Tesseract.js-core：WASM 来自 naptha/tesseract.js-core 的修改版 Tesseract fork；修改说明与源码地址见 resources/legal/upstream/official/tesseract-core/README.md。
+- FFmpeg：安装包内的 ffmpeg.dll 来自 Electron 44.5.1，LGPL-2.1-or-later；LGPL 2.1 §6(c) 书面源码要约见 resources/legal/upstream/official/ffmpeg-SOURCE-OFFER.md（三年有效，接收方无需预先回应）。
 
 使用须知与隐私说明：完整版见安装目录 resources/legal/USAGE-NOTICE.md；应用内“设置 → 关于与更新 → 使用须知与隐私说明”为精简版。
 
 本项目应用图标、安装包/卸载程序图标与界面内品牌标记图标以几何图元程序化生成。溯源见安装目录 legal/BRAND.md。
 
 说明：
-1. 本机 OCR 使用 Tesseract.js（Apache-2.0）；语言训练数据不随安装包分发，只由用户在本机 OCR 设置里选择并主动下载，许可证见 legal/upstream/Tesseract-tessdata-APACHE-2.0.txt。
+1. 本机 OCR 使用 Tesseract.js（Apache-2.0）；语言训练数据不随安装包分发，只由用户在本机 OCR 设置里选择并主动下载，官方来源、许可与哈希见 legal/upstream/official/tessdata_fast-SOURCES.json 与 legal/upstream/Tesseract-tessdata-APACHE-2.0.txt。
 2. 本提示是安装前摘要，不替代 resources/legal/THIRD-PARTY.md、NOTICE.html、SOURCES.md、USAGE-NOTICE.md 与各许可证原文。
 3. 再分发时请保留安装包内的 legal/ 目录：其中的第三方许可与声明是各许可证的要求，LICENSE 与 NOTICE 的保留也是 Apache-2.0 的要求。
 

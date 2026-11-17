@@ -20,12 +20,16 @@
 | Electron | MIT | 保留版权与许可声明 |
 | Chromium | BSD-3-Clause 等 | 保留 `LICENSES.chromium.html` |
 | Node.js | MIT | 保留 `runtime/Node-LICENSE.txt` |
-| FFmpeg（Electron 内置） | LGPL-2.1-or-later | 保留许可；源码与构建配置见 Electron 官方（见下文「FFmpeg」） |
+| electron-builder / app-builder-lib | MIT | 构建期 NSIS 模板；安装器脚本由其模板生成；保留 `upstream/official/electron-builder-NOTICE.md` 与 LICENSE |
+| FFmpeg（Electron 内置） | LGPL-2.1-or-later | 保留许可；源码与构建配置见 Electron 官方；书面源码要约见 `upstream/official/ffmpeg-SOURCE-OFFER.md` |
 | NSIS 安装器 stub | zlib/libpng | 保留许可声明 |
-| StdUtils（NSIS 插件） | LGPL-2.1-or-later + 作者澄清 | 逐字使用 DLL；保留许可、澄清与源码 |
+| StdUtils（NSIS 插件） | LGPL-2.1-or-later + 作者澄清 | 版本 1.1.4.0；逐字使用 DLL；保留许可、澄清、源码、DLL 哈希 |
 | UAC（NSIS 插件） | ZLIB/LIBPNG | 保留许可、来源与源码 |
 | nsis7z / 7-Zip | 7-Zip License（GNU LGPL-2.1+ 为主，含 unRAR 限制） | 保留许可；随包提供完整对应源码；记录随包 DLL 来源与哈希 |
 | **WinShell（NSIS 插件）** | **无许可文本，仅 "Freeware"** | **已移除，不再随包分发（见下文）** |
+| Tesseract.js-core WASM | Apache-2.0 + 各内嵌组件 | 保留许可、内嵌组件许可与修改版说明 |
+| Tesseract tessdata_fast 语言包 | Apache-2.0 | **不随包分发**；仅用户主动下载；保留官方来源与许可 |
+| pako（zlib 兼容层） | MIT AND Zlib | 保留 MIT LICENSE 与 zlib 通知全文 |
 | PDF.js 资源（CMaps、标准字体、ICC、WASM） | Adobe BSD-3 / PDFium BSD-3 / CC0-1.0 / BSD-2 / MIT / Apache-2.0 | 保留各自许可与版权行 |
 | libjpeg-turbo（内嵌于 Tesseract WASM 与 `skia.node`） | IJG + Modified BSD | 仅分发二进制时，文档须包含 IJG 固定署名句（已写入） |
 | 随包字体（9 个 woff2） | SIL Open Font License 1.1 | 保留 OFL 与版权行；子集化/改名按 §3、§5 合规；**不属于本项目许可范围** |
@@ -83,11 +87,12 @@ MPL-2.0 §3.2(b) 要求可执行形式的条款不得限制接收方对源码的
 - 许可全文随包：`legal/upstream/official/ffmpeg-LGPL-2.1.txt`；
 - 对应源码：Electron 在其官方仓库 <https://github.com/electron/electron> 公开 FFmpeg 源码与构建配置，
   版本与本安装包内的 Electron 版本一致（见 `legal/inventory.json` 的 `electron` 字段）；
-- 本项目在此作出书面说明：如需该 FFmpeg 构建的对应源码，请按上述仓库的对应版本获取；本项目不分发、
-  也不修改 FFmpeg 源码。
+- **书面源码要约（LGPL 2.1 §6(c)）**：`legal/upstream/official/ffmpeg-SOURCE-OFFER.md`。该要约自安装包
+  发布之日起三年内有效，收到安装包的第三方无需预先回应，可在有效期内随时按其中的方式请求完整对应
+  源码；本项目本身不分发、也不修改 FFmpeg 源码。
 
-依据：LGPL-2.1 §6 要求随作品提供对应源码或以书面方式告知获取途径；本项目以“DLL 可替换 + 上游公开
-源码 + 本文书面说明”履行。
+依据：LGPL-2.1 §6(c) 要求随作品提供有效的书面要约（或 §6 的其它方式）；本项目以“DLL 可替换 +
+上游公开源码 + 书面源码要约”履行。
 
 ## Electron 随包的运行时二进制（补充说明）
 
@@ -112,16 +117,45 @@ MPL-2.0 §3.2(b) 要求可执行形式的条款不得限制接收方对源码的
 > 对应源码，因此不依赖 LGPL 的“共享库机制”例外。LGPL 并不要求源码必须物理放进安装包，但“随包源码”
 > 是最直接、无需书面要约或依赖外部链接的履行方式。
 
-## 构建工具：electron-builder（MIT，不随包分发）
+## 构建工具：electron-builder（MIT，不随包分发源码/二进制）
 
-安装器的 NSIS 脚本基于 **electron-builder**（MIT，Copyright (c) 2015 Loopline Systems；作者
-Vladimir Krivosheev 及贡献者）的模板。本项目在构建期按自身需要修改该模板
+安装器的 NSIS 脚本基于 **electron-builder 26.18.0 / app-builder-lib 26.18.0**（MIT，Copyright (c) 2015
+Loopline Systems；作者 Vladimir Krivosheev 及贡献者）的模板。本项目在构建期按自身需要修改该模板
 （`scripts/patch-nsis-templates.mjs`：把 WinShell 插件调用改为本项目自己的脚本实现，见
 `apps/desktop/build/nsis/aumid.nsh`）；修改后的模板只存在于构建时的 `node_modules` 中，
-**不随安装包分发**，安装包中也不包含 electron-builder 的源码或二进制。
+**不随安装包分发源码或构建二进制**。
 
-electron-builder 的 MIT 许可声明由其 npm 包内的 `LICENSE` 文件携带；本项目没有再分发该包，因此
-不产生额外的声明义务。此处记录仅为权属与来源说明，并致谢其作者与贡献者。
+但安装器内的 NSIS 脚本由该 MIT 模板生成，因此本项目在 `legal/` 中保留其版权与许可声明：
+`upstream/official/electron-builder-NOTICE.md` 与
+`upstream/official/repos/electron-userland_electron-builder-LICENSE.txt`。此处记录同时致谢其作者与贡献者。
+
+## StdUtils.dll（LGPL-2.1+，随安装器分发）
+
+- 版本 **1.1.4.0**（上游 tag `1.14`），`StdUtils.dll` 102,400 字节，SHA-256
+  `B72E9013A6204E9F01076DC38DABBF30870D44DFC66962ADBF73619D4331601E`；
+- 源码与版本对应证据：`upstream/official/nsis-plugins/stdutils/source/`（`Resource.h` 的
+  `DLL_VERSION_*` 为 1/1/4/0）；README 记录版本、DLL 哈希与源码来源；
+- 许可、作者澄清与完整源码随包提供。LGPL 允许其与安装器一起分发，不限制接收者修改、调试反向
+  工程与再分发该库的权利。
+
+## Tesseract.js-core（Apache-2.0，上游为 WebAssembly 适配修改的 Tesseract 分支）
+
+`tesseract.js-core@7.0.0` 的 WASM 由 `naptha/tesseract.js-core` 为 WebAssembly 适配而修改的上游 Tesseract 分支编译。本项目
+随包分发的是**未修改的 npm 发行物**，不自行修改 WASM；修改清单、上游源码地址与 README 证据见
+`upstream/official/tesseract-core/README.md` 与 `upstream/Tesseract-core-THIRD-PARTY.md`。Apache-2.0
+不要求二进制分发随附源码，但要求保留许可证与修改声明；本项目按此口径保留证据。
+
+## pako 的 Zlib 通知
+
+`pako@1.0.11` 的 `package.json` 声明 `(MIT AND Zlib)`；根 `LICENSE` 只含 MIT。其 `lib/zlib` 部分的
+Zlib 许可通知全文随包保存在 `upstream/official/pako-zlib-README.txt`，并在 `NOTICE.html` 与
+`THIRD-PARTY.md` 中链接。再分发时请保留该通知。
+
+## Tesseract 语言包（tessdata_fast，Apache-2.0）
+
+语言训练数据**不随包分发**；用户在本机 OCR 设置中主动点击下载后，才从
+<https://github.com/tesseract-ocr/tessdata_fast> 获取。许可原文与官方来源/哈希记录见
+`upstream/Tesseract-tessdata-APACHE-2.0.txt` 与 `upstream/official/tessdata_fast-SOURCES.json`。
 
 ## 分发结构
 

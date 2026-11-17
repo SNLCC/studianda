@@ -1,7 +1,7 @@
 <!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <title>勘读 Studianda 第三方声明</title>
 <style>body{max-width:1000px;margin:40px auto;padding:0 20px;font:14px/1.7 system-ui,"Microsoft YaHei",sans-serif;color:#2c2a24;background:#f4eedf}h1,h2,h3{font-family:Georgia,serif}table{border-collapse:collapse;width:100%;font-size:12px}td,th{border:1px solid #d8cdb8;padding:5px 7px;text-align:left;vertical-align:top}pre{white-space:pre-wrap;word-break:break-word;background:#fbf7ed;border:1px solid #e3d9c5;padding:10px;font-size:11px;max-height:420px;overflow:auto}a{color:#4f765e}</style></head><body>
-<h1>勘读 Studianda 第三方组件与许可证声明</h1><p>生成时间：2026-11-15T10:24:30.016Z</p>
+<h1>勘读 Studianda 第三方组件与许可证声明</h1><p>生成时间：2026-11-17T16:56:36.794Z</p>
 <p>本项目的 Apache License 2.0 许可证仅适用于本项目原创代码；随包分发的第三方组件仍分别适用其自身许可证，本项目许可证不改变、不限制这些组件在其许可证下的权利。随包字体、PDF.js 包内的第三方资源（CMaps、标准字体、ICC、WASM 解码器）与 Electron 运行时文件（含 Chromium、FFmpeg、ICU 等）均分别按各自自身许可分发，均不属于本项目许可范围；逐项许可见 <a href="upstream/official/pdfjs-wasm/PDFJS-WASM-THIRD-PARTY.md">PDF.js 资源声明</a>、<a href="upstream/official/electron-runtime-dlls.md">Electron 运行时说明</a> 与本文件下方清单；随包字体的逐款许可、版权与保留名见 <a href="fonts.json">fonts.json</a> 与 <a href="font-licenses/README.md">font-licenses/README.md</a>。</p>
 <p>Electron 44.5.1 / Chromium：许可证见 <a href="electron/LICENSE.txt">electron/LICENSE.txt</a> 与 <a href="electron/LICENSES.chromium.html">Chromium 第三方声明</a>；Node.js 24.21.0：<a href="runtime/Node-LICENSE.txt">Node-LICENSE.txt</a>。</p>
 <table><thead><tr><th>组件</th><th>版本</th><th>许可证</th><th>许可证文件</th></tr></thead><tbody>
@@ -118,19 +118,30 @@
 <p>以下组件内嵌在二进制、WASM 或安装器中，不单独出现在 node_modules 表；原文见 <a href="upstream/">legal/upstream/</a>。</p>
 <ul>
 <li><a href="upstream/official/napi-canvas/NAPI-CANVAS-THIRD-PARTY.md">@napi-rs/canvas 原生二进制（Node-API native addon）</a>（Skia、ICU、libavif/libaom、libjpeg-turbo、MPL-2.0 等 142 个组件；<a href="upstream/official/napi-canvas/sbom.cdx.json">SBOM</a> / <a href="upstream/official/napi-canvas/COMPONENTS.md">组件清单</a> / <a href="upstream/official/napi-canvas/COMPONENT-LICENSES.md">许可证全文</a> / <a href="upstream/official/napi-canvas/COMPONENT-COMPLIANCE.md">合规矩阵</a> / <a href="upstream/official/napi-canvas/COMPONENT-LICENSES.md">许可证全文</a>）</li>
-<li><a href="upstream/Tesseract-core-THIRD-PARTY.md">Tesseract.js-core WASM</a>（Tesseract、Leptonica、libjpeg-turbo、libpng、libtiff、libwebp、giflib、openlibm、zlib）</li>
+<li><a href="upstream/Tesseract-core-THIRD-PARTY.md">Tesseract.js-core WASM</a>（Tesseract、Leptonica、libjpeg-turbo、libpng、libtiff、libwebp、giflib、openlibm、zlib；Tesseract 来自上游为 WebAssembly 适配而修改的分支，本项目未修改该 WASM，<a href="upstream/official/tesseract-core/README.md">修改说明</a>）</li>
 <li><a href="upstream/official/pdfjs-wasm/PDFJS-WASM-THIRD-PARTY.md">PDF.js WASM/资源</a>（JBIG2、OpenJPEG、QCMS、CMaps、标准字体、ICC）</li>
 <li><a href="upstream/official/tesseract-embedded/SOURCES.json">tesseract.js 预构建 dist</a>（buffer、ieee754、regenerator-runtime、zlib.js）</li>
 <li><a href="upstream/official/nsis-COPYING.txt">NSIS 安装器 stub</a>（zlib/libpng license）</li>
 <li><a href="upstream/official/nsis7z/README.md">nsis7z.dll</a>（NSIS 7z 解压插件，基于 7-Zip 19.00；7-Zip License / LGPL-2.1+，含 unRAR 限制；<a href="upstream/official/nsis7z/README.md">许可、来源与随包源码</a>）</li>
-<li><a href="upstream/official/nsis-plugins/stdutils/README.md">StdUtils.dll</a>（NSIS 插件，LoRd_MuldeR；GNU LGPL-2.1+；<a href="upstream/official/nsis-plugins/stdutils/">许可、澄清与随包源码</a>）</li>
+<li><a href="upstream/official/nsis-plugins/stdutils/README.md">StdUtils.dll</a>（NSIS 插件，LoRd_MuldeR；GNU LGPL-2.1+；版本 1.1.4.0，DLL SHA-256 B72E9013A6204E9F01076DC38DABBF30870D44DFC66962ADBF73619D4331601E；<a href="upstream/official/nsis-plugins/stdutils/">许可、澄清与随包源码</a>）</li>
 <li><a href="upstream/official/nsis-plugins/uac/README.md">UAC.dll</a>（NSIS 提权插件，Anders；ZLIB/LIBPNG；<a href="upstream/official/nsis-plugins/uac/">许可与源码</a>）</li>
+<li><a href="upstream/official/electron-builder-NOTICE.md">electron-builder / app-builder-lib</a>（MIT，构建期 NSIS 模板；<a href="upstream/official/repos/electron-userland_electron-builder-LICENSE.txt">LICENSE</a>；安装器脚本由模板生成）</li>
 <li><a href="upstream/official/nsis-plugins/winshell/README.md">WinShell.dll：已由脚本实现替代</a>（上游无许可文本，不随包分发；快捷方式 AUMID 仍由安装脚本写入）</li>
 <li><a href="upstream/official/elevate-MIT.txt">elevate.exe</a>（MIT，Copyright (c) 2007 Johannes Passing）</li>
 <li><a href="upstream/official/napi-canvas/mpl-sources/README.md">MPL-2.0 源码归档</a>（cssparser 0.38.0、cssparser-macros 0.7.0、dtoa-short 0.3.5、selectors 0.41.0，随包提供）</li>
 <li><a href="upstream/official/electron-runtime-dlls.md">Electron 运行时二进制</a>（ffmpeg/d3dcompiler/dxcompiler/dxil/vulkan/swiftshader/icu，来源与声明依据）</li>
-<li><a href="upstream/official/ffmpeg-LGPL-2.1.txt">FFmpeg（Electron 内置 ffmpeg.dll，LGPL-2.1-or-later）</a>；源代码与书面说明见 <a href="COMPATIBILITY.md">legal/COMPATIBILITY.md</a></li>
+<li><a href="upstream/official/ffmpeg-LGPL-2.1.txt">FFmpeg（Electron 内置 ffmpeg.dll，LGPL-2.1-or-later）</a>；<a href="upstream/official/ffmpeg-SOURCE-OFFER.md">对应源码书面要约</a>；源代码与书面说明见 <a href="COMPATIBILITY.md">legal/COMPATIBILITY.md</a></li>
+<li><a href="upstream/official/pako-zlib-README.txt">pako 的 zlib 兼容层</a>（MIT 根许可之外的 Zlib 通知全文）</li>
 </ul>
+<h2>运行时下载 / 构建期组件</h2>
+<ul>
+<li><a href="upstream/official/tessdata_fast-SOURCES.json">Tesseract tessdata_fast 语言包</a>（Apache-2.0；不随包分发，用户点击下载时从官方仓库获取；<a href="upstream/Tesseract-tessdata-APACHE-2.0.txt">许可全文</a>）</li>
+<li><a href="upstream/official/electron-builder-NOTICE.md">electron-builder / app-builder-lib</a>（MIT，构建期；<a href="upstream/official/repos/electron-userland_electron-builder-LICENSE.txt">LICENSE</a>）</li>
+<li><a href="upstream/official/ffmpeg-SOURCE-OFFER.md">FFmpeg 对应源码书面要约</a>（LGPL 2.1 §6(c)；三年有效，接收方无需预先回应）</li>
+<li><a href="upstream/official/tesseract-core/README.md">Tesseract.js-core 修改版 Tesseract fork 说明</a>（Apache-2.0）</li>
+</ul>
+<h2>pako 的 Zlib 声明（完整原文）</h2><pre>pako 根 LICENSE 为 MIT；其 lib/zlib 部分还适用 Zlib 许可。完整通知见 <a href="upstream/official/pako-zlib-README.txt">upstream/official/pako-zlib-README.txt</a>。</pre>
+
 <p><strong>强制署名：</strong>libjpeg-turbo（IJG）— This software is based in part on the work of the Independent JPEG Group.</p>
 <h2>许可证原文</h2><h3>Noto Sans@2.015 · font-noto-sans-latin-NotoLatin-OFL-1.1.txt</h3><pre>Copyright 2022 The Noto Project Authors (https://github.com/notofonts/latin-greek-cyrillic)
 
@@ -4248,5 +4259,291 @@ THE SOFTWARE.
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+</pre>
+<h3>pako · 1.0.11 · zlib notice · pako-zlib-README.txt</h3><pre>Content of this folder follows zlib C sources as close as possible.
+That's intended to simplify maintainability and guarantee equal API
+and result.
+
+Key differences:
+
+- Everything is in JavaScript.
+- No platform-dependent blocks.
+- Some things like crc32 rewritten to keep size small and make JIT
+  work better.
+- Some code is different due missed features in JS (macros, pointers,
+  structures, header files)
+- Specific API methods are not implemented (see notes in root readme)
+
+This port is based on zlib 1.2.8.
+
+This port is under zlib license (see below) with contribution and addition of javascript
+port under expat license (see LICENSE at root of project)
+
+Copyright:
+(C) 1995-2013 Jean-loup Gailly and Mark Adler
+(C) 2014-2017 Vitaly Puzrin and Andrey Tupitsin
+
+
+From zlib's README
+=============================================================================
+
+Acknowledgments:
+
+  The deflate format used by zlib was defined by Phil Katz.  The deflate and
+  zlib specifications were written by L.  Peter Deutsch.  Thanks to all the
+  people who reported problems and suggested various improvements in zlib; they
+  are too numerous to cite here.
+
+Copyright notice:
+
+ (C) 1995-2013 Jean-loup Gailly and Mark Adler
+
+Copyright (c) &lt;''year''&gt; &lt;''copyright holders''&gt;
+
+This software is provided 'as-is', without any express or implied
+warranty. In no event will the authors be held liable for any damages
+arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+
+1. The origin of this software must not be misrepresented; you must not
+   claim that you wrote the original software. If you use this software
+   in a product, an acknowledgment in the product documentation would be
+   appreciated but is not required.
+2. Altered source versions must be plainly marked as such, and must not be
+   misrepresented as being the original software.
+3. This notice may not be removed or altered from any source distribution.
+
+
+  Jean-loup Gailly        Mark Adler
+  jloup@gzip.org          madler@alumni.caltech.edu
+</pre>
+<h3>Tesseract tessdata_fast · Apache-2.0（运行时下载） · Tesseract-tessdata-APACHE-2.0.txt</h3><pre>
+                                 Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   1. Definitions.
+
+      "License" shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      "Licensor" shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      "Legal Entity" shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      "control" means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      "You" (or "Your") shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      "Source" form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      "Object" form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      "Work" shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      "Derivative Works" shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      "Contribution" shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, "submitted"
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as "Not a Contribution."
+
+      "Contributor" shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a "NOTICE" text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding those notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for reasonable and customary use in describing the
+      origin of the Work and reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an "AS IS" BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF TERMS AND CONDITIONS
+
+   APPENDIX: How to apply the Apache License to your work.
+
+      To apply the Apache License to your work, attach the following
+      boilerplate notice, with the fields enclosed by brackets "[]"
+      replaced with your own identifying information. (Don't include
+      the brackets!)  The text should be enclosed in the appropriate
+      comment syntax for the file format. We also recommend that a
+      file or class name and description of purpose be included on the
+      same "printed page" as the copyright notice for easier
+      identification within third-party archives.
+
+   Copyright [yyyy] [name of copyright owner]
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+</pre>
+<h3>electron-builder · 26.18.0 · MIT · electron-userland_electron-builder-LICENSE.txt</h3><pre>The MIT License (MIT)
+
+Copyright (c) 2015 Loopline Systems
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 </pre>
 </body></html>

@@ -1,0 +1,17 @@
+{
+  "component": "tesseract-ocr/tessdata_fast language models",
+  "officialRepository": "https://github.com/tesseract-ocr/tessdata_fast",
+  "officialRawUrl": "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/<language>.traineddata",
+  "fallbackApiUrl": "https://api.github.com/repos/tesseract-ocr/tessdata_fast/contents/<language>.traineddata?ref=main",
+  "license": "Apache-2.0",
+  "licenseFile": "upstream/Tesseract-tessdata-APACHE-2.0.txt",
+  "licenseOfficialUrl": "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/LICENSE",
+  "licenseSha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+  "fetchedAt": "2026-11-18T00:16:00.000Z",
+  "distribution": "not bundled; downloaded only after an explicit user action, cached under <dataDir>/ocr-tessdata/langs/",
+  "notes": [
+    "Language data is not included in the source repository, app.asar, or the NSIS installer.",
+    "The official raw URL and the GitHub Contents API both point to the same repository and file.",
+    "No third-party mirror is used as a default download source."
+  ]
+}

@@ -3,7 +3,7 @@
  * 只生成报告（dev-notes/legal-audit/UPSTREAM-AUDIT.*），不修改依赖或安装包。
  */
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 const root = process.cwd();
@@ -11,6 +11,12 @@ const legalDir = path.join(root, 'legal');
 const auditDir = path.join(root, 'dev-notes', 'legal-audit');
 const inventory = JSON.parse(readFileSync(path.join(legalDir, 'inventory.json'), 'utf8'));
 const sha256 = (text) => createHash('sha256').update(text).digest('hex');
+if (!process.env.GITHUB_TOKEN) {
+  console.warn(
+    '[legal:upstream] 未设置 GITHUB_TOKEN：raw.githubusercontent.com 不可达时可能退回 default-branch，' +
+      '本脚本会保留已按版本 tag 固定的旧条目，但新条目可能无法固定版本。建议在 CI 设置只读 GITHUB_TOKEN。'
+  );
+}
 
 const CANDIDATE_PATHS = [
   'LICENSE',
@@ -229,8 +235,17 @@ function saveOfficial(repoKey, official) {
   if (savedOfficial.has(repoKey)) return savedOfficial.get(repoKey);
   const safe = repoKey.replace(/[^A-Za-z0-9_.-]/g, '_');
   const file = path.join(officialDir, `${safe}-LICENSE.txt`);
-  writeFileSync(file, official.text, 'utf8');
   const relative = path.relative(legalDir, file).split(path.sep).join('/');
+  // 已有原文时，不用 default-branch/HEAD 的抓取结果覆盖：那会把版本固定的证据
+  // 换成未固定版本的内容，且旧 SOURCES.json 的哈希会与新文件不匹配。
+  if (
+    existsSync(file) &&
+    (official.ref === 'default-branch' || official.ref === 'HEAD')
+  ) {
+    savedOfficial.set(repoKey, relative);
+    return relative;
+  }
+  writeFileSync(file, official.text, 'utf8');
   savedOfficial.set(repoKey, relative);
   return relative;
 }
@@ -327,6 +342,19 @@ for (const result of results) {
   if (!result.officialLocalPath || !result.officialSha256) continue;
   const key = `${result.package}@${result.version}`;
   if (!current.has(key)) continue;
+  const previous = previousSources.get(key);
+  // raw.githubusercontent.com 不可达时脚本会退回 default-branch/HEAD。不能因此把
+  // 已经按版本 tag 固定的记录降级；保留旧条目，等下次能按 tag 取时再更新。
+  const pinnedNew =
+    Boolean(result.npmSha256) ||
+    Boolean(
+      result.officialRef &&
+        !['default-branch', 'HEAD', 'README'].includes(result.officialRef)
+    );
+  if (previous?.versionPinned && !pinnedNew) {
+    sourceEntries.set(key, previous);
+    continue;
+  }
   sourceEntries.set(key, {
     package: result.package,
     version: result.version,
@@ -336,8 +364,8 @@ for (const result of results) {
     file: result.officialFile,
     sha256: result.officialSha256,
     localPath: result.officialLocalPath,
-    versionPinned: Boolean(result.npmSha256) || Boolean(previousSources.get(key)?.versionPinned),
-    versionPinNote: previousSources.get(key)?.versionPinNote ?? '',
+    versionPinned: pinnedNew,
+    versionPinNote: previous?.versionPinNote ?? '',
     npmUrl: result.npmUrl,
     npmFile: result.npmFile,
     npmSha256: result.npmSha256
