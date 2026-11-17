@@ -87,6 +87,88 @@ function formatUsage(usage: NonNullable<ChatResponse['usage']>): string | null {
   );
 }
 
+/** 折叠摘要里的紧凑用量：只保留输入/输出，避免把 tokens 明细整行顶在回答下面。 */
+function formatUsageCompact(usage: NonNullable<ChatResponse['usage']>): string {
+  const count = (value?: number): string =>
+    typeof value === 'number' && Number.isFinite(value)
+      ? Math.max(0, Math.round(value)).toLocaleString('zh-CN')
+      : '';
+  const input = count(usage.input_tokens);
+  const output = count(usage.output_tokens);
+  if (input && output) return `输入 ${input} / 输出 ${output}`;
+  const total = count(usage.total_tokens);
+  return total ? `共 ${total} tokens` : '';
+}
+
+/**
+ * 「本轮记录」折叠时的摘要：回答方式、tokens、依据/引用/审计条数。
+ *
+ * 回答下方的诊断项很多（回答方式、用量、可答性、路由、覆盖、审计……），全部展开时
+ * 会把回答挤出屏幕。默认折叠，摘要里保留最常用的事实，展开后才是逐项明细。
+ */
+function turnRecordSummary(response: ChatResponse | undefined): string {
+  if (!response) return '';
+  const parts: string[] = [];
+  if (response.answer_mode) {
+    parts.push(ANSWER_MODE_LABELS[response.answer_mode] ?? response.answer_mode);
+  }
+  if (response.usage) {
+    const usage = formatUsageCompact(response.usage);
+    if (usage) parts.push(usage);
+  }
+  if (response.sources && response.sources.length > 0) {
+    parts.push(`依据 ${response.sources.length} 条`);
+  }
+  if (response.citation_support && response.citation_support.citations > 0) {
+    parts.push(`引用 ${response.citation_support.citations} 条`);
+  }
+  const claims = response.audit?.claims ?? [];
+  const unsupported = claims.filter((claim) => claim.verdict === 'unsupported').length;
+  if (unsupported > 0) parts.push(`缺证 ${unsupported} 段`);
+  else if (claims.length > 0) parts.push(`审计 ${claims.length} 段`);
+  if (response.audit?.status === '部分段落未完成复核') parts.push('审计部分未完成');
+  else if (response.audit && response.audit.status !== '已进行模型证据支持复核') {
+    parts.push('审计未完成');
+  }
+  return parts.join(' · ');
+}
+
+/** 审计异常或缺证时让折叠摘要变红，避免默认收起把风险提示一起藏掉。 */
+function turnRecordHasAlert(response: ChatResponse | undefined): boolean {
+  if (!response) return false;
+  const claims = response.audit?.claims ?? [];
+  return Boolean(
+    claims.some((claim) => claim.verdict === 'unsupported') ||
+      (response.audit && response.audit.status !== '已进行模型证据支持复核')
+  );
+}
+
+/** 是否有需要收进「本轮记录」的诊断字段（没有就不渲染空折叠项）。 */
+function hasTurnRecord(response: ChatResponse | undefined): boolean {
+  if (!response) return false;
+  return Boolean(
+    response.answer_mode ||
+      response.usage ||
+      response.route_note ||
+      response.answerability ||
+      response.evidence_accounting ||
+      response.source_routing ||
+      response.routing ||
+      response.chapter ||
+      response.plan ||
+      response.sources?.length ||
+      response.memory_sources?.length ||
+      response.memory_notice ||
+      response.coverage ||
+      response.coverage_ledger?.length ||
+      response.gap_search ||
+      response.citation_support ||
+      response.audit ||
+      response.falsify ||
+      response.unread_pages?.length
+  );
+}
+
 export interface ChatAskOptions {
   confirmSearch?: boolean;
   readingScope?: 'auto' | 'corpus';
@@ -1364,6 +1446,30 @@ export function ChatPanel({
                     sources={response?.sources ?? []}
                     onOpenSource={onOpenSource}
                   />
+                  {/* 说明/越界引用是回答可信度的一部分：常驻可见，不随折叠隐藏。 */}
+                  {response?.notice ? <p className="kr-chat__meta">{response.notice}</p> : null}
+                  {response?.invalid_citations && response.invalid_citations.length > 0 ? (
+                    <p className="kr-page-error">
+                      回答里有越界引用：
+                      {response.invalid_citations.map((number) => `[${number}]`).join('、')}
+                      ，这些编号没有对应来源，不能当作依据。
+                    </p>
+                  ) : null}
+                  {/*
+                    本轮记录：回答方式、用量、可答性、路由、依据、覆盖、审计等诊断项。
+                    默认折叠成一段摘要，避免十几行元信息把回答本身挤出屏幕；展开后逐项仍在。
+                  */}
+                  {hasTurnRecord(response) ? (
+                    <details
+                      className={`kr-chat__record${
+                        turnRecordHasAlert(response) ? ' kr-chat__record--alert' : ''
+                      }`}
+                    >
+                      <summary>
+                        本轮记录
+                        {turnRecordSummary(response) ? ` · ${turnRecordSummary(response)}` : ''}
+                      </summary>
+                      <div className="kr-chat__record-body">
                   {response?.answer_mode ? (
                     <p className="kr-chat__meta kr-chat__answer-mode">
                       本轮回答方式：
@@ -1378,7 +1484,6 @@ export function ChatPanel({
                       {formatUsage(response.usage)}
                     </p>
                   ) : null}
-                  {response?.notice ? <p className="kr-chat__meta">{response.notice}</p> : null}
                   {response?.route_note ? (
                     <p className="kr-chat__meta">{response.route_note}</p>
                   ) : null}
@@ -1678,14 +1783,6 @@ export function ChatPanel({
                     {response.citation_support.page_only.length} 条。
                   </p>
                 ) : null}
-                {response?.invalid_citations && response.invalid_citations.length > 0 ? (
-                  <p className="kr-page-error">
-                    回答里有越界引用：
-                    {response.invalid_citations.map((number) => `[${number}]`).join('、')}
-                    ，这些编号没有对应来源，不能当作依据。
-                  </p>
-                ) : null}
-
                 {response?.audit ? (
                   <div className="kr-chat__details">
                     <p
@@ -1821,6 +1918,9 @@ export function ChatPanel({
                     {response.unread_pages.length > 20 ? '…' : ''}
                   </p>
                 ) : null}
+                      </div>
+                    </details>
+                  ) : null}
 
                 <div className="kr-chat__message-actions">
                   {message.content ? (

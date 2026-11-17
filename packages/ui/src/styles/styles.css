@@ -6004,6 +6004,48 @@ font-weight: 500;
   font-size: var(--kr-fs-caption);
   line-height: 1.7;
 }
+/* 本轮记录：回答方式、用量、路由、覆盖、审计等诊断默认收起，只留一行摘要。 */
+.kr-chat__record {
+  margin-top: 10px;
+  padding-top: 7px;
+  border-top: 1px dashed var(--kr-line);
+  color: var(--kr-ink-soft);
+  font-size: var(--kr-fs-caption);
+}
+.kr-chat__record > summary {
+  position: relative;
+  padding: 2px 0 2px 13px;
+  color: var(--kr-ink-faint);
+  font-size: var(--kr-fs-caption);
+  line-height: 1.7;
+  cursor: pointer;
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+.kr-chat__record > summary::-webkit-details-marker {
+  display: none;
+}
+.kr-chat__record > summary::before {
+  content: "▸";
+  position: absolute;
+  left: 0;
+  top: 2px;
+  color: var(--kr-celadon);
+  font-size: var(--kr-fs-micro);
+  transition: transform 0.15s ease;
+}
+.kr-chat__record[open] > summary::before {
+  transform: rotate(90deg);
+}
+.kr-chat__record[open] > summary {
+  margin-bottom: 2px;
+}
+.kr-chat__record--alert > summary {
+  color: var(--kr-vermilion-deep);
+}
+.kr-chat__record-body .kr-chat__meta:first-child {
+  margin-top: 2px;
+}
 .kr-chat__message-quote {
   margin: 2px 0 8px;
   padding: 6px 9px;

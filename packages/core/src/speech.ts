@@ -180,14 +180,48 @@ function speechProtocol(baseUrl: string): 'mimo' | 'minimax' | 'deepseek' | 'ope
   }
   if (host === 'api.xiaomimimo.com') return 'mimo';
   if (host === 'api.deepseek.com') return 'deepseek';
+  // 与平台预设一致：国内站是 api.minimax.cn（早期还用过 api.minimax.chat）。
+  // 漏掉国内站会让语音识别/播报回落到 OpenAI 兼容路径 /audio/transcriptions 并 404。
   if (
-    ['api.minimax.io', 'api.minimaxi.com', 'api.minimax.chat', 'api-uw.minimax.io'].includes(
-      host
-    )
+    [
+      'api.minimax.io',
+      'api.minimaxi.com',
+      'api.minimax.cn',
+      'api.minimax.chat',
+      'api-uw.minimax.io'
+    ].includes(host)
   ) {
     return 'minimax';
   }
   return 'openai';
+}
+
+/**
+ * 语音接口地址 = 根地址 + 路径。
+ *
+ * 平台预设的根地址本身带 `/v1`（例如 `https://api.deepseek.com/v1`），而 DeepSeek 语音
+ * 接口的全路径是 `/v1/tools/asr`；直接拼接会得到 `/v1/v1/tools/asr` → 404。
+ * 这里只去掉重复的版本段，其它路径原样保留（自建服务的子路径不受影响）。
+ */
+function speechEndpoint(baseUrl: string, path: string): string {
+  const base = baseUrl.trim().replace(/\/+$/, '');
+  const suffix = path.startsWith('/') ? path : `/${path}`;
+  if (/\/v1$/i.test(base) && suffix.toLowerCase().startsWith('/v1/')) {
+    return `${base}${suffix.slice(3)}`;
+  }
+  return `${base}${suffix}`;
+}
+
+/** OpenAI 兼容语音接口的 HTTP 错误 → 可执行的中文提示（不回显上游响应体）。 */
+function openAiSpeechError(status: number, action: '语音识别' | '语音播报'): string {
+  if (status === 404) {
+    return `${action}返回 HTTP 404：这个服务上找不到对应接口。请检查「服务地址」是否为接口根地址（例如 https://…/v1），不要带 /audio/… 等具体路径；也确认该平台确实提供${action}。`;
+  }
+  if (status === 401 || status === 403) {
+    return `${action}鉴权失败（HTTP ${status}）：请检查 API Key 是否属于当前服务。`;
+  }
+  if (status === 429) return `${action}请求过于频繁（HTTP 429），请稍后重试。`;
+  return `${action}返回 HTTP ${status}`;
 }
 
 function mimoLanguage(language: string): string {
@@ -882,7 +916,9 @@ function deepseekSpeechError(status: number, action: '语音识别' | '语音合
       action === '语音识别'
         ? '音频格式不受支持或缺少文件：需要 16 位 PCM WAV 或 Ogg Opus。'
         : '没有可朗读的文本，或文本未通过内容审核。',
+    401: `${action}鉴权失败（HTTP 401）：请检查 DeepSeek API Key 是否有效。`,
     402: 'DeepSeek 账号余额不足，请充值后重试。',
+    404: `${action}返回 HTTP 404：接口路径不存在。请检查「服务地址」是否为官方根地址（例如 https://api.deepseek.com），不要带具体接口路径。`,
     408: `${action}上传超时，请重试。`,
     413:
       action === '语音识别'
@@ -935,7 +971,7 @@ async function deepseekTranscribe(
     new Blob([new Uint8Array(bytes)], { type: mimeType || 'audio/wav' }),
     filename || 'speech.wav'
   );
-  const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/v1/tools/asr`, {
+  const response = await fetch(speechEndpoint(baseUrl, '/v1/tools/asr'), {
     method: 'POST',
     headers: key ? { Authorization: `Bearer ${key}` } : {},
     body: form,
@@ -961,7 +997,7 @@ async function deepseekSynthesize(
   }
   const spoken = truncateSpeechText(text.trim());
   if (!spoken) throw new Error('没有可朗读的文本');
-  const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/v1/tools/tts`, {
+  const response = await fetch(speechEndpoint(baseUrl, '/v1/tools/tts'), {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -1015,9 +1051,9 @@ export async function streamSpeech(
   }
   const spoken = truncateSpeechText(text.trim());
   if (!spoken) throw new Error('没有可朗读的文本');
-  const base = config.baseUrl.replace(/\/+$/, '').replace(/^http/, 'ws');
+  const base = speechEndpoint(config.baseUrl, '/v1/tools/tts').replace(/^http/i, 'ws');
   const url =
-    `${base}/v1/tools/tts?voice_id=${encodeURIComponent(voiceId)}` +
+    `${base}?voice_id=${encodeURIComponent(voiceId)}` +
     '&format=pcm&filter_markdown=true';
   const socket = new WebSocketCtor(url, ['tts', `bearer.${config.key}`]);
   socket.binaryType = 'arraybuffer';
@@ -1112,7 +1148,7 @@ export async function transcribeAudio(
     body: form,
     signal: AbortSignal.timeout(90_000)
   });
-  if (!response.ok) throw new Error(`语音识别返回 HTTP ${response.status}`);
+  if (!response.ok) throw new Error(openAiSpeechError(response.status, '语音识别'));
   const payload = (await response.json()) as { text?: unknown; confidence?: unknown };
   const text = typeof payload.text === 'string' ? payload.text.trim() : '';
   if (!text) throw new Error('语音识别没有返回文字');
@@ -1157,7 +1193,7 @@ export async function synthesizeSpeech(
     }),
     signal: AbortSignal.timeout(90_000)
   });
-  if (!response.ok) throw new Error(`语音播报返回 HTTP ${response.status}`);
+  if (!response.ok) throw new Error(openAiSpeechError(response.status, '语音播报'));
   const contentType = response.headers.get('content-type') || 'audio/wav';
   const bytes = new Uint8Array(await response.arrayBuffer());
   if (bytes.byteLength === 0) throw new Error('语音播报没有返回音频');

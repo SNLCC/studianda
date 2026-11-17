@@ -297,6 +297,78 @@ describe('DeepSeek 语音（ASR / TTS / 流式可用性）', () => {
     }
   });
 
+  it('识别/合成：平台预设的 /v1 根地址不会拼成 /v1/v1 而 404', async () => {
+    useDeepseekSpeech();
+    // 设置里选 DeepSeek 预设时保存的就是带 /v1 的地址。
+    saveSpeechConfig(store, secrets, {
+      asr_url: 'https://api.deepseek.com/v1',
+      tts_url: 'https://api.deepseek.com/v1'
+    });
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', async (input: unknown) => {
+      urls.push(String(input));
+      if (urls.length === 1) {
+        return new Response(JSON.stringify({ text: 'hi' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        });
+      }
+      return new Response(new Uint8Array([82, 73, 70, 70]), {
+        status: 200,
+        headers: { 'content-type': 'audio/wav' }
+      });
+    });
+    try {
+      await transcribeAudio(store, secrets, new Uint8Array([1, 2, 3]));
+      await synthesizeSpeech(store, secrets, 'hello');
+      expect(urls[0]).toBe('https://api.deepseek.com/v1/tools/asr');
+      expect(urls[1]).toBe('https://api.deepseek.com/v1/tools/tts');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('MiniMax 国内站（api.minimax.cn）走 speech_to_text，不落到 /audio/transcriptions', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', async (input: unknown) => {
+      urls.push(String(input));
+      return new Response(JSON.stringify({ text: 'cn transcript' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      });
+    });
+    saveSpeechConfig(store, secrets, {
+      asr_mode: 'custom',
+      asr_url: 'https://api.minimax.cn/v1',
+      asr_model: 'asr-1.0',
+      asr_key: 'key'
+    });
+    try {
+      const result = await transcribeAudio(store, secrets, new Uint8Array([1, 2]));
+      expect(result.source).toBe('minimax');
+      expect(urls[0]).toBe('https://api.minimax.cn/v1/speech_to_text');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('OpenAI 兼容服务 404 时提示检查服务地址，而不是只给状态码', async () => {
+    vi.stubGlobal('fetch', async () => new Response('not found', { status: 404 }));
+    saveSpeechConfig(store, secrets, {
+      asr_mode: 'custom',
+      asr_url: 'https://asr.example.com/v1',
+      asr_model: 'whisper-1',
+      clear_asr: true
+    });
+    try {
+      await expect(
+        transcribeAudio(store, secrets, new Uint8Array([1, 2]))
+      ).rejects.toThrow('服务地址');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('合成：voice_id/format/filter_markdown 正确，超长按计费字符截断', async () => {
     useDeepseekSpeech('tide');
     const bodies: Array<Record<string, unknown>> = [];
