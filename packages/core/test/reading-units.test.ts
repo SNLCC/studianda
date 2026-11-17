@@ -287,7 +287,7 @@ describe('第 ④ 级：边界带交给模型裁决', () => {
       1,
       '甲',
       embed,
-      async () => '{"drop":[1]}'
+      async () => '{"drop":[1],"rescue":[]}'
     );
     const dropped = (planned.excluded ?? []).find((row) => row.title === '乙');
     expect(dropped).toBeTruthy();
@@ -333,7 +333,7 @@ describe('第 ④ 级：边界带交给模型裁决', () => {
       1,
       '甲',
       embed,
-      async () => '{"drop":[1]}',
+      async () => '{"drop":[1],"rescue":[]}',
       'full'
     );
     expect(planned.excluded ?? []).toHaveLength(0);
@@ -350,7 +350,7 @@ describe('第 ④ 级：边界带交给模型裁决', () => {
       1,
       '甲',
       embed,
-      async () => '{"drop":[1]}',
+      async () => '{"drop":[1],"rescue":[]}',
       'prune'
     );
     // 整篇本来装得下；因为是"只读相关部分"，仍然跑了裁决并排掉了乙。

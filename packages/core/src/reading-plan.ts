@@ -2,12 +2,14 @@ import type { ReadingPlan } from './planning.js';
 import { cost, batches, splitSources, type ReadingSource } from './reading.js';
 import { checkIntegrity, decompose, pack } from './reading-units.js';
 import {
+  MAX_RESCUE_UNITS,
   MAX_VERDICT_UNITS,
+  parseSpotcheck,
   parseVerdict,
   pruneUnits,
+  reviewRequest,
+  spotCheckCandidates,
   unitText,
-  verdictMaterial,
-  VERDICT_INSTRUCTION,
   type ExcludedUnit
 } from './reading-prune.js';
 import { cosine } from './embeddings.js';
@@ -39,6 +41,13 @@ export interface PlannedReading {
   readRatio?: number;
   /** 裁决过程中的降级说明（如未启用语义通道）。 */
   pruneDegraded?: string[];
+  /**
+   * 对"已判不读"单元的抽检（薄读复核）：抽了几节、恢复几节、因恢复上限转为"未读"几节。
+   *
+   * 只在本轮真的裁剪出排除项、且做了复核时出现。抽检失败不会自动全恢复——
+   * 失败原因写进 `pruneDegraded`（`spotcheck_*`），由上层如实告知。
+   */
+  spotcheck?: { checked: number; rescued: number; capped: number };
   /**
    * 结构装带没能生效的原因（降级必须可见，不能静默退回字符切）。
    * - `page_exceeds_budget`：单页原文就超过预算（超大字页/扫描页），按页装不下；
@@ -126,8 +135,9 @@ export async function planReadingWithStructure(
    */
   embed?: (texts: string[]) => Promise<number[][] | null>,
   /**
-   * 第 ④ 级消歧回调：边界带交给模型做二元裁决（keep/drop）。
-   * 不传时边界带按"宁滥勿缺"保留，并在 `pruneDegraded` 里标 `verdict_model_unavailable`。
+   * 复核回调（第 ④ 级 + 排除抽检）：边界带做 keep/drop、已排除单元做 rescue，一次调用完成。
+   * 不传时边界带按"宁滥勿缺"保留、排除项不抽检，并分别在 `pruneDegraded` 里标
+   * `verdict_model_unavailable` / `spotcheck_unavailable`。
    */
   askVerdict?: (instruction: string, material: string) => Promise<string>,
   /**
@@ -202,6 +212,7 @@ export async function planReadingWithStructure(
   let kept = units;
   let excluded: ExcludedUnit[] = [];
   let pruneDegraded: string[] = [];
+  let spotcheck: { checked: number; rescued: number; capped: number } | undefined;
   const allUnitPages = new Set<number>();
   for (const unit of units) for (const page of unitPages(unit)) allUnitPages.add(page);
   const pagesCost = pagesCostOf(allUnitPages);
@@ -253,39 +264,74 @@ export async function planReadingWithStructure(
       const band = pruned.ambiguous.slice(0, MAX_VERDICT_UNITS);
       const overflow = pruned.ambiguous.slice(MAX_VERDICT_UNITS);
       kept = [...kept, ...overflow.map((row) => row.unit)];
-      if (band.length > 0) {
+      // 排除抽检：只抽"最接近阈值"的几个已判不读单元。结构排除不抽——那类几乎不会错。
+      const spots = spotCheckCandidates(pruned.excluded);
+      const keepBand = (): void => {
+        kept = [...kept, ...band.map((row) => row.unit)];
+      };
+      if (band.length > 0 || spots.length > 0) {
         if (!askVerdict) {
-          kept = [...kept, ...band.map((row) => row.unit)];
+          keepBand();
+          if (spots.length > 0) pruneDegraded.push('spotcheck_unavailable');
         } else {
-          const hitsOf = new Map(band.map((row) => [row.unit, row.hits]));
           try {
-            const raw = await askVerdict(
-              VERDICT_INSTRUCTION,
-              verdictMaterial(query, band.map((row) => row.unit), document.blocks, (unit) =>
-                hitsOf.get(unit) ?? []
-              )
-            );
-            const parsed = parseVerdict(raw, band.length);
-            if (!parsed) {
-              pruneDegraded.push('verdict_parse_failed');
-              kept = [...kept, ...band.map((row) => row.unit)];
-            } else {
-              // 真的裁决过：去掉"消歧不可用"的标记，如实换成裁决结果。
-              pruneDegraded = pruneDegraded.filter((item) => item !== 'verdict_model_unavailable');
-              band.forEach((row, index) => {
-                if (parsed.drop.has(index)) {
-                  excluded = [
-                    ...excluded,
-                    { unit: row.unit, score: row.score, hits: row.hits, reason: 'verdict_model:drop' }
-                  ];
-                } else {
-                  kept = [...kept, row.unit];
-                }
-              });
+            // 一次调用同时做两件事：边界带 keep/drop、排除项 rescue。
+            const request = reviewRequest({
+              question: query,
+              band: band.map((row) => ({ unit: row.unit, hits: row.hits })),
+              spot: spots.map((row) => ({ unit: row.unit, hits: row.hits })),
+              blocks: document.blocks
+            });
+            const raw = await askVerdict(request.instruction, request.material);
+            // 复核真的跑过：去掉"消歧不可用"的标记，如实换成复核结果。
+            pruneDegraded = pruneDegraded.filter((item) => item !== 'verdict_model_unavailable');
+            if (band.length > 0) {
+              const parsed = parseVerdict(raw, band.length);
+              if (!parsed) {
+                pruneDegraded.push('verdict_parse_failed');
+                keepBand();
+              } else {
+                band.forEach((row, index) => {
+                  if (parsed.drop.has(index)) {
+                    excluded = [
+                      ...excluded,
+                      { unit: row.unit, score: row.score, hits: row.hits, reason: 'verdict_model:drop' }
+                    ];
+                  } else {
+                    kept = [...kept, row.unit];
+                  }
+                });
+              }
+            }
+            if (spots.length > 0) {
+              const rescuedIndexes = parseSpotcheck(raw, spots.length);
+              if (!rescuedIndexes) {
+                // 模型没答抽检那一段：排除结论维持原判，但必须承认"这轮没复核成"。
+                pruneDegraded.push('spotcheck_parse_failed');
+              } else {
+                const hits = spots.filter((_, index) => rescuedIndexes.has(index));
+                const restore = hits.slice(0, MAX_RESCUE_UNITS);
+                const skipped = hits.slice(MAX_RESCUE_UNITS);
+                const restoredUnits = new Set(restore.map((row) => row.unit));
+                const skippedUnits = new Set(skipped.map((row) => row.unit));
+                // 抽检命中却超出恢复上限：不能再算"排除"（否则等于说它无关），
+                // 从排除账里撤掉，让它落进"未读"，由用户在"继续阅读"里读。
+                excluded = excluded.filter(
+                  (row) => !restoredUnits.has(row.unit) && !skippedUnits.has(row.unit)
+                );
+                kept = [...kept, ...restore.map((row) => row.unit)];
+                spotcheck = {
+                  checked: spots.length,
+                  rescued: restore.length,
+                  capped: skipped.length
+                };
+                if (skipped.length > 0) pruneDegraded.push('spotcheck_rescue_capped');
+              }
             }
           } catch {
             pruneDegraded.push('verdict_model_failed');
-            kept = [...kept, ...band.map((row) => row.unit)];
+            if (spots.length > 0) pruneDegraded.push('spotcheck_failed');
+            keepBand();
           }
         }
       }
@@ -358,6 +404,7 @@ export async function planReadingWithStructure(
         }
       : {}),
     ...(totalCharacters > 0 ? { readRatio: keptCharacters / totalCharacters } : {}),
-    ...(pruneDegraded.length > 0 ? { pruneDegraded } : {})
+    ...(pruneDegraded.length > 0 ? { pruneDegraded } : {}),
+    ...(spotcheck ? { spotcheck } : {})
   };
 }

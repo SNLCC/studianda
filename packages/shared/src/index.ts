@@ -1770,8 +1770,13 @@ export interface CoverageSummary {
       hits: string[];
       reason: string;
     }>;
-    /** 裁决过程中的降级说明（如未启用语义通道、无可用查询词）。 */
+    /** 裁决过程中的降级说明（如未启用语义通道、抽检失败）。 */
     degraded: string[];
+    /**
+     * 对"已判不读"单元的抽检（薄读复核）：checked 抽了几节，rescued 复核后恢复了几节，
+     * capped 因单轮恢复上限转成"未读"几节。出现即表示排除结论经过一次独立复核。
+     */
+    spotcheck?: { checked: number; rescued: number; capped: number };
   };
   /** 多遍阅读时实际送入综合的本轮材料（单遍为空串）。 */
   final_context?: string;

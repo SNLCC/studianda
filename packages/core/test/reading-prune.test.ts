@@ -10,10 +10,13 @@ import { decompose } from '../src/reading-units.js';
 import {
   excludedPages,
   exclusionSummary,
+  MAX_RESCUE_UNITS,
+  MAX_SPOTCHECK_UNITS,
+  parseSpotcheck,
   parseVerdict,
   pruneUnits,
-  verdictMaterial,
-  VERDICT_INSTRUCTION
+  reviewRequest,
+  spotCheckCandidates
 } from '../src/reading-prune.js';
 
 const charCost = (text: string): number => text.length;
@@ -257,7 +260,7 @@ describe('第 ④ 级：边界带模型消歧', () => {
     expect(parseVerdict('{"keep":[],"drop":[]}', 3)).toBeNull();
   });
 
-  it('消歧载荷只含标题 + 开头 + 命中词（不把整节塞给模型）', () => {
+  it('复核载荷只含标题 + 首段/末段 + 命中词（不把整节塞给模型）', () => {
     const units = [
       {
         sectionIndex: 0,
@@ -271,15 +274,89 @@ describe('第 ④ 级：边界带模型消歧', () => {
       }
     ];
     const blocks = [makeBlock(0, 1, '制度 变迁 的 路径 依赖。'.repeat(40))];
-    const material = verdictMaterial('制度变迁是什么', units, blocks, () => ['制度', '变迁']);
+    const { instruction, material } = reviewRequest({
+      question: '制度变迁是什么',
+      band: [{ unit: units[0]!, hits: ['制度', '变迁'] }],
+      spot: [{ unit: units[0]!, hits: [] }],
+      blocks
+    });
     expect(material).toContain('制度变迁是什么');
     expect(material).toContain('标题：制度变迁');
     expect(material).toContain('命中词：制度、变迁');
-    // 开头截到 150 字：载荷是"摘要级"，不是原文。
-    const head = material.split('开头：')[1]!.split('\n')[0]!;
+    expect(material).toContain('第二段：本轮已判为不读');
+    // 首段/末段各截到 150 字：载荷是"薄样本"，不是原文。
+    const head = material.split('首段：')[1]!.split('\n')[0]!;
     expect(head.length).toBeLessThanOrEqual(150);
-    expect(VERDICT_INSTRUCTION).toContain('READING_VERDICT');
-    expect(VERDICT_INSTRUCTION).toContain('拿不准就放进 keep');
+    const tail = material.split('末段：')[1]!.split('\n')[0]!;
+    expect(tail.length).toBeLessThanOrEqual(150);
+    expect(instruction).toContain('READING_VERDICT');
+    expect(instruction).toContain('拿不准就放进 keep');
+    expect(instruction).toContain('rescue');
+    // 只有一个段时，另一段的键与说明都不该出现（别让模型去答不存在的那段）。
+    const bandOnly = reviewRequest({
+      question: '制度变迁是什么',
+      band: [{ unit: units[0]!, hits: [] }],
+      spot: [],
+      blocks
+    });
+    expect(bandOnly.instruction).not.toContain('rescue');
+    expect(bandOnly.material).not.toContain('第二段');
+    const spotOnly = reviewRequest({
+      question: '制度变迁是什么',
+      band: [],
+      spot: [{ unit: units[0]!, hits: [] }],
+      blocks
+    });
+    expect(spotOnly.instruction).toContain('rescue');
+    expect(spotOnly.instruction).not.toContain('"drop"');
+    expect(spotOnly.material).not.toContain('第一段');
+  });
+});
+
+describe('排除抽检', () => {
+  const unit = (blockStart: number, title: string) => ({
+    sectionIndex: blockStart,
+    title,
+    blockStart,
+    blockEnd: blockStart,
+    pagesFrom: blockStart + 1,
+    pagesTo: blockStart + 1,
+    cost: 10,
+    characters: 100
+  });
+  const excludedRow = (blockStart: number, score: number, reason: string) => ({
+    unit: unit(blockStart, `节${blockStart}`),
+    score,
+    hits: [],
+    reason
+  });
+
+  it('只抽"可能判错"的理由，按分数从高到低取前 N 个（结构排除与刚判 drop 的不抽）', () => {
+    const rows = [
+      excludedRow(0, 0.1, 'relevance_below_threshold'),
+      excludedRow(1, 0.4, 'relevance_below_threshold'),
+      excludedRow(2, 0.2, 'verdict_model:drop'),
+      excludedRow(3, 0.9, 'structural:references'),
+      excludedRow(4, 0, 'lexical:no_terms')
+    ];
+    const picked = spotCheckCandidates(rows);
+    expect(picked.map((row) => row.unit.blockStart)).toEqual([1, 0, 4]);
+    expect(MAX_SPOTCHECK_UNITS).toBeGreaterThanOrEqual(picked.length);
+    // 上限生效，且同分按块起点排序（确定性）。
+    const capped = spotCheckCandidates(rows, 2);
+    expect(capped.map((row) => row.unit.blockStart)).toEqual([1, 0]);
+    expect(MAX_RESCUE_UNITS).toBeLessThanOrEqual(MAX_SPOTCHECK_UNITS);
+  });
+
+  it('抽检解析：没有 rescue 键 = 解析失败，不能当成"全部保持排除"的默认值', () => {
+    // 模型只答了边界带那一段：这轮抽检等于没做，必须如实标失败。
+    expect(parseSpotcheck('{"keep":[1],"drop":[]}', 3)).toBeNull();
+    expect(parseSpotcheck('not json', 3)).toBeNull();
+    expect(parseSpotcheck('{"rescue":"1"}', 3)).toBeNull();
+    // 空数组是合法结果：明确表示"没有明显误判"。
+    expect([...parseSpotcheck('{"rescue":[]}', 3)!]).toEqual([]);
+    // 越界与非法值忽略。
+    expect([...parseSpotcheck('混在文字里 {"rescue":[2,9,"x"]} 结束', 3)!]).toEqual([1]);
   });
 });
 

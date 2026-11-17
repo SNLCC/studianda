@@ -306,6 +306,7 @@ function readingPlanField(planned: {
     reason: string;
   }>;
   pruneDegraded?: string[];
+  spotcheck?: { checked: number; rescued: number; capped: number };
 }): Pick<NonNullable<ChatResponse['coverage']>, 'reading_plan'> | Record<string, never> {
   if (!planned.fromUnits) return {};
   return {
@@ -314,7 +315,8 @@ function readingPlanField(planned: {
       bands: planned.batchCount,
       read_ratio: planned.readRatio ?? 1,
       excluded: planned.excluded ?? [],
-      degraded: planned.pruneDegraded ?? []
+      degraded: planned.pruneDegraded ?? [],
+      ...(planned.spotcheck ? { spotcheck: planned.spotcheck } : {})
     }
   };
 }
@@ -330,6 +332,43 @@ function exclusionNotice(planned: { excluded?: Array<{ title: string; pages: [nu
   return `已排除 ${excluded.length} 个与问题无关的单元：${labels}${
     excluded.length > 3 ? ' 等' : ''
   }（可在阅读范围里重读）。`;
+}
+
+/**
+ * 排除抽检的如实说明：抽过就说抽过、没抽成就说没抽成。
+ *
+ * 抽检是"被排除的内容"唯一的独立复核，所以它的状态不能沉默：
+ * 恢复了几节要写（说明原判断被推翻），没抽成也要写（说明排除结论只是"相信打分"）。
+ */
+export function spotcheckNotice(planned: {
+  spotcheck?: { checked: number; rescued: number; capped: number };
+  pruneDegraded?: string[];
+}): string {
+  const degraded = planned.pruneDegraded ?? [];
+  const parts: string[] = [];
+  const info = planned.spotcheck;
+  if (info) {
+    parts.push(
+      info.rescued > 0
+        ? `已抽检 ${info.checked} 个被判为不读的单元，其中 ${info.rescued} 个复核后发现误判、已补读。`
+        : `已抽检 ${info.checked} 个被判为不读的单元，未发现明显误判。`
+    );
+    if (info.capped > 0) {
+      parts.push(
+        `另有 ${info.capped} 个抽检发现相关的单元超出本轮恢复上限，已列入未读（可继续阅读）。`
+      );
+    }
+  }
+  if (degraded.includes('spotcheck_unavailable')) {
+    parts.push('本轮没有可用的复核模型，被判为不读的单元未经抽检。');
+  }
+  if (degraded.includes('spotcheck_failed')) {
+    parts.push('抽检调用失败，被判为不读的单元未经复核。');
+  }
+  if (degraded.includes('spotcheck_parse_failed')) {
+    parts.push('抽检结果无法解析，排除结论按原判保留、未经复核。');
+  }
+  return parts.join('');
 }
 
 /** 结构装带没能生效时的如实说明（降级必须可见，不能静默退回字符切）。 */
@@ -3355,6 +3394,8 @@ export async function answerWithReading(
         if (excludedNotice) notices.push(excludedNotice);
         const degradeNotice = planDegradeNotice(planned);
         if (degradeNotice) notices.push(degradeNotice);
+        const spotcheckNote = spotcheckNotice(planned);
+        if (spotcheckNote) notices.push(spotcheckNote);
         if (sanitized.removed.length > 0) {
           notices.push(`已删除无来源支持的页码表述：${sanitized.removed.join('、')}`);
         }
@@ -3857,6 +3898,8 @@ export async function answerWithReading(
       if (excludedNotice) notices.push(excludedNotice);
       const degradeNotice = planDegradeNotice(planned);
       if (degradeNotice) notices.push(degradeNotice);
+      const spotcheckNote = spotcheckNotice(planned);
+      if (spotcheckNote) notices.push(spotcheckNote);
       if (sanitized.removed.length > 0) {
         notices.push(`已删除无来源支持的页码表述：${sanitized.removed.join('、')}`);
       }
