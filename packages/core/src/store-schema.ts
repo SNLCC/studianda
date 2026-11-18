@@ -28,7 +28,12 @@ export const SCHEMA_SQL = `      CREATE TABLE IF NOT EXISTS schema_meta(
         path TEXT DEFAULT '',
         doc_type TEXT DEFAULT '',
         folder_id TEXT DEFAULT '',
-        manual_order REAL DEFAULT 0
+        manual_order REAL DEFAULT 0,
+        -- schema_version 26：题录来源 + Zotero collection 同步状态（都能为 NULL/默认值）。
+        metadata_source TEXT DEFAULT '',
+        zotero_item_key TEXT DEFAULT '',
+        zotero_collection_key TEXT DEFAULT '',
+        zotero_missing INTEGER DEFAULT 0
       );
 
       -- 单层文件夹：文献只归属一个文件夹；folder_id '' 表示「未分类」。

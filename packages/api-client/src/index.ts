@@ -117,6 +117,7 @@ import type {
   SpeechTranscription,
   ZoteroConfigRecord,
   ZoteroCollection,
+  ZoteroCollectionSyncReport,
   ZoteroItem,
   ZoteroAnnotationImportReport,
   ZoteroProbeResult
@@ -711,6 +712,12 @@ export interface ApiClient {
     suggested_library_id?: string;
   }>;
   listZoteroCollections(): Promise<ZoteroCollection[]>;
+  /**
+   * 增量同步一个 Zotero collection 到本地文献库（只读 Zotero，不写回）。
+   * 新增插入、已有条目按 key 就地更新；Zotero 侧删除只标记 `zotero_missing`，
+   * 不删除本地文献/标签/笔记/批注；连续调用幂等。
+   */
+  syncZoteroCollection(collectionKey: string): Promise<ZoteroCollectionSyncReport>;
   listZoteroItems(collection?: string, start?: number, q?: string): Promise<ZoteroItem[]>;
   openZoteroItem(itemKey: string, confirmDuplicate?: boolean): Promise<DocumentDetail>;
   snapshotZoteroDocument(documentId: string): Promise<DocumentDetail>;
@@ -2082,6 +2089,11 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         suggested_library_id?: string;
       }>('/zotero/diagnose'),
     listZoteroCollections: () => request<ZoteroCollection[]>('/zotero/collections'),
+    syncZoteroCollection: (collectionKey) =>
+      request<ZoteroCollectionSyncReport>(
+        `/zotero/collections/${encodeURIComponent(collectionKey)}/sync`,
+        { method: 'POST', body: '{}' }
+      ),
     listZoteroItems: (collection, start, q) => {
       const params = new URLSearchParams();
       params.set('collection', collection ?? '');

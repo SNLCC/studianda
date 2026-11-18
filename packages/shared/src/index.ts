@@ -286,6 +286,37 @@ export const DOCUMENT_CATEGORY_LABELS: Record<DocumentCategory, string> = {
   unknown: '未分类'
 };
 
+/**
+ * 题录字段（标题/作者/发表处/DOI）的来源（schema_version 26）。
+ *
+ * 记录的是**当前题录值的最高优先级来源**，而不是每个字段各存一份：
+ * - `zotero`：来自 Zotero 条目字段（父条目 title/creators/publicationTitle/DOI）；
+ * - `pdf_xmp`：来自 PDF 内嵌元数据（Info 字典 / XMP，如 Title/Author/prism:doi）；
+ * - `pdf_first_page`：来自 PDF 首页正文里识别到的 DOI；
+ * - `filename`：只有文件名（标题即文件名）；
+ * - `network`：联网补全得到（当前版本没有启用这条路径，保留枚举）；
+ * - `manual`：用户手动改过题录字段（改名/改作者），自动同步不得再覆盖。
+ *
+ * 旧库迁移后该字段为空（`NULL`），读取接口按 `null` 返回，**不猜**成某个来源。
+ */
+export type MetadataSource =
+  | 'zotero'
+  | 'pdf_xmp'
+  | 'pdf_first_page'
+  | 'filename'
+  | 'network'
+  | 'manual';
+
+/** 题录来源优先级：数值越大越可信；自动补全不得用低优先级覆盖高优先级。 */
+export const METADATA_SOURCE_PRIORITY: Record<MetadataSource, number> = {
+  manual: 5,
+  zotero: 4,
+  network: 3,
+  pdf_xmp: 2,
+  pdf_first_page: 1,
+  filename: 0
+};
+
 export interface DocumentSummary {
   id: string;
   name: string;
@@ -301,6 +332,18 @@ export interface DocumentSummary {
   fileState: FileState;
   /** 附件（应用内副本或 Zotero 外部路径）当前是否缺失；列表可直接显示提示。 */
   missing_file?: boolean;
+  /**
+   * 题录来源；未知（迁移前的老记录或手工构造的数据）为 `null`。
+   * 服务端 DTO 总会带上该字段，未知时明确返回 `null`，不猜来源。
+   */
+  metadataSource?: MetadataSource | null;
+  /**
+   * 最近一次 Zotero collection 同步时确认该条目已从 Zotero 侧删除。
+   *
+   * 只是标记：本地文献、标签、笔记、批注都保留，不自动删除。不是 Zotero
+   * 来源的文献（或从未同步过的文献）恒为 `false`。
+   */
+  zoteroMissing?: boolean;
   /** 文献体裁（Zotero itemType 原文）；空串 = 未分类。服务端 DTO 总会带上。 */
   docType?: DocumentType;
   /** 分栏粗分类（服务端按 docType 算好）；空 = 未分类。 */
@@ -1020,6 +1063,58 @@ export interface ZoteroItem {
   publication: string;
   date: string;
   itemType: string;
+}
+
+/**
+ * Zotero collection 增量同步的逐条结果（schema_version 26）。
+ *
+ * 语义：新增条目插入；已有条目按 Zotero 顶层 item key 就地更新（不重复插入，
+ * 不触碰用户标签/笔记/批注）；Zotero 侧已删除的条目只在本地标记
+ * `zotero_missing`，**不自动删除本地文献**。
+ */
+export interface ZoteroCollectionSyncItem {
+  /** Zotero 顶层条目 key（父条目；独立附件就是附件自身）。 */
+  itemKey: string;
+  title: string;
+  action: 'inserted' | 'updated' | 'skippedDuplicate' | 'skippedDeleted' | 'error';
+  /** 本地文献 id；跳过/失败时为空。 */
+  documentId: string;
+  /** 跳过或失败的原因；成功时为空。 */
+  message: string;
+}
+
+/** 一次 Zotero collection 同步的汇总报告。 */
+export interface ZoteroCollectionSyncReport {
+  collectionKey: string;
+  collectionName: string;
+  /** 从 Zotero 顶层条目列表中读到的条目数（含已删除条目）。 */
+  fetched: number;
+  inserted: number;
+  /** 已存在、按 key 就地更新的条目数（内容无变化的重写也计入）。 */
+  updated: number;
+  /** 本地已有相同/高度相似文献、为避免重复插入而跳过的条目数。 */
+  skippedDuplicates: number;
+  /** Zotero 侧已删除（trashed）而跳过的条目数。 */
+  skippedDeleted: number;
+  failed: number;
+  /**
+   * 本次同步中新条目以外、因 `zotero.sync_preserve_local_title` 开关开启而
+   * **保留本地标题**（未采用 Zotero 传入标题）的条目数。
+   *
+   * 开关关闭时恒为 0；新建条目不参与该计数（没有本地标题，仍用传入值）。
+   */
+  preserved_titles: number;
+  /** 本次在本地新标记为 `zotero_missing` 的文献数。 */
+  markedMissing: number;
+  /** 仍在 Zotero、但已不在该 collection 中的本地文献数（不删除、不标记缺失）。 */
+  removedFromCollection: number;
+  /**
+   * 是否完整覆盖了该集合：条目数超过单次同步上限时为 false；
+   * 此时不会做任何 `zotero_missing` 标记，避免把没读到当成已删除。
+   */
+  complete: boolean;
+  warnings: string[];
+  items: ZoteroCollectionSyncItem[];
 }
 
 export interface SpeechConfigRecord {

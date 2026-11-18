@@ -21,6 +21,11 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { SCHEMA_SQL } from './store-schema.js';
+import {
+  highestMetadataSource,
+  mergeMetadataField,
+  normalizeMetadataSource
+} from './metadata-provenance.js';
 import { looksLikeAiContent } from '@studianda/shared';
 import { buildMarkedMarkdownExport } from './export-marker.js';
 import {
@@ -63,6 +68,7 @@ import type {
   FolderOverview,
   FolderSummary,
   LegacyMigrationReport,
+  MetadataSource,
   NoteAssetRecord,
   NoteAssetGcReport,
   NoteAssetReindexJob,
@@ -271,6 +277,14 @@ interface DocumentRow {
   doc_type: string;
   folder_id: string;
   manual_order: number;
+  /** 题录来源；''（含迁移前老行）= 未知，读取接口返回 null。 */
+  metadata_source: string;
+  /** Zotero 顶层条目 key；'' = 不是 Zotero 来源（或迁移前的记录）。 */
+  zotero_item_key: string;
+  /** 最近一次同步的 Zotero collection key；'' = 未记录。 */
+  zotero_collection_key: string;
+  /** 1 = 最近同步确认已在 Zotero 侧删除（本地文献保留）。 */
+  zotero_missing: number;
 }
 
 function fileStateOf(row: DocumentRow, dataDir: string): FileState {
@@ -367,7 +381,11 @@ function toSummary(row: DocumentRow, dataDir: string): DocumentSummary {
     docCategory: documentCategoryOf(docType),
     folderId: row.folder_id ?? '',
     // 默认排序位置：越小越靠前；只由拖拽（moveDocument）改变。
-    manualOrder: Number(row.manual_order ?? 0)
+    manualOrder: Number(row.manual_order ?? 0),
+    // 题录来源：未知（老库/手工构造）明确返回 null，不猜来源。
+    metadataSource: normalizeMetadataSource(row.metadata_source),
+    // Zotero 侧删除标记：只提示，不删除本地文献。
+    zoteroMissing: Number(row.zotero_missing ?? 0) === 1
   };
 }
 
@@ -528,6 +546,11 @@ interface ParsedPdf {
   publication: string;
   title: string;
   doi: string;
+  /**
+   * 题录字段的实际来源（文件名/PDF 内嵌元数据/首页 DOI）。
+   * 供 `importDocument` 落 `documents.metadata_source`；Zotero 导入会覆盖成 `zotero`。
+   */
+  metadataSource: MetadataSource;
   chunks: ParsedChunk[];
 }
 
@@ -983,21 +1006,24 @@ export async function parsePdf(bytes: Uint8Array): Promise<ParsedPdf> {
   let publication = '';
   let title = '';
   let doi = '';
+  let metadataDoi = '';
   try {
     const metadata = await pdf.getMetadata();
     const info = metadata.info as { Author?: unknown; Title?: unknown } | undefined;
     if (info && typeof info.Author === 'string') author = info.Author.trim().slice(0, 200);
     if (info && typeof info.Title === 'string') title = info.Title.trim().slice(0, 240);
     publication = publicationFromMetadata(metadata);
-    doi = normalizeDoi(
+    metadataDoi = normalizeDoi(
       metadataString(metadata, ['prism:doi', 'prism:DOI', 'dc:identifier', 'dc:source'])
     );
-    if (doi && !/^10\.\d{4,9}\//.test(doi)) doi = '';
+    if (metadataDoi && !/^10\.\d{4,9}\//.test(metadataDoi)) metadataDoi = '';
+    doi = metadataDoi;
   } catch {
     author = '';
     publication = '';
     title = '';
     doi = '';
+    metadataDoi = '';
   }
 
   const chunks: ParsedChunk[] = [];
@@ -1081,7 +1107,15 @@ export async function parsePdf(bytes: Uint8Array): Promise<ParsedPdf> {
       if (doi) break;
     }
   }
-  return { pages, author, publication, title, doi, chunks };
+  // 来源按「实际被 importDocument 使用的字段」判断：作者/发表处/DOI 来自 PDF 内嵌元数据
+  // （Info 字典或 XMP）→ pdf_xmp；只用首页正文识别到 DOI → pdf_first_page；否则只有文件名。
+  const metadataSource: MetadataSource =
+    author || publication || metadataDoi
+      ? 'pdf_xmp'
+      : doi
+        ? 'pdf_first_page'
+        : 'filename';
+  return { pages, author, publication, title, doi, metadataSource, chunks };
 }
 
 function makeSnippet(text: string, query: string, radius = 80): string {
@@ -1114,6 +1148,17 @@ export class ImportCancelledError extends Error {
     super('导入已取消');
     this.name = 'ImportCancelledError';
   }
+}
+
+/**
+ * Zotero 文献导入结果。
+ *
+ * 只有本次调用按 `zotero.sync_preserve_local_title` 开关**确实保留了本地标题**时，
+ * 才附带 `localTitlePreserved: true`；其余情况与 `DocumentDetail` 完全一致，
+ * 不给直接打开附件等普通导入响应增加无意义字段。
+ */
+export interface ZoteroDocumentImportResult extends DocumentDetail {
+  localTitlePreserved?: boolean;
 }
 
 export class Store {
@@ -2487,7 +2532,11 @@ export class Store {
     //     不存正文/完整响应）。旧消息默认 scope_kind='document'、audit_summary=NULL。
     // 25：corpus_sessions 新增 source_project_id / source_project_name（来源项目快照；项目删除后
     //     id 允许悬空、不建外键，name 存建会话时的项目名）。都只是加列，不重建表。
-    const currentVersion = 25;
+    // 26：documents 新增 metadata_source（题录来源；''=未知，读取接口返回 null）、
+    //     zotero_item_key（Zotero 顶层条目 key，collection 增量同步按它就地更新）、
+    //     zotero_collection_key（最近同步的 collection）、zotero_missing（Zotero 侧已删除标记，
+    //     只标记不删本地文献）。都只是加列 + 一个索引，不重建表、不动旧行。
+    const currentVersion = 26;
     if (previousVersion > 0 && previousVersion < currentVersion) {
       this.backupBeforeMigration(previousVersion);
     }
@@ -2530,7 +2579,14 @@ export class Store {
       ['doc_type', "TEXT DEFAULT ''"],
       ['folder_id', "TEXT DEFAULT ''"],
       // schema_version 8 → 9：默认排序位置（越小越靠前，拖拽只改这一列）。
-      ['manual_order', 'REAL DEFAULT 0']
+      ['manual_order', 'REAL DEFAULT 0'],
+      // schema_version 25 → 26：题录来源与 Zotero collection 同步状态。
+      // 老库升级后 metadata_source 为 ''（读取接口按 NULL/未知返回），
+      // zotero_item_key 为 ''（老记录没有 Zotero 条目 key，不猜）。
+      ['metadata_source', "TEXT DEFAULT ''"],
+      ['zotero_item_key', "TEXT DEFAULT ''"],
+      ['zotero_collection_key', "TEXT DEFAULT ''"],
+      ['zotero_missing', 'INTEGER DEFAULT 0']
     ];
     for (const [name, ddl] of additions) {
       if (!columns.has(name)) {
@@ -2542,6 +2598,7 @@ export class Store {
       CREATE INDEX IF NOT EXISTS document_title_key ON documents(title_key);
       CREATE INDEX IF NOT EXISTS document_folder ON documents(folder_id);
       CREATE INDEX IF NOT EXISTS document_folder_type ON documents(folder_id, doc_type);
+      CREATE INDEX IF NOT EXISTS document_zotero_item ON documents(zotero_item_key);
     `);
     // schema_version 8 → 9：给旧库回填默认排序位置。
     // 列刚 ALTER 出来时所有行都是 0；按当前列表的展示顺序（created DESC, rowid DESC）
@@ -2671,7 +2728,7 @@ export class Store {
     }
     this.db
       .prepare('INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)')
-      .run('schema_version', '25');
+      .run('schema_version', '26');
       this.db.exec('COMMIT');
     } catch (error) {
       // 整体回滚：schema、回填、schema_version 一起回到迁移前；迁移前快照仍保留在
@@ -3594,7 +3651,8 @@ export class Store {
       .prepare(
         `SELECT id, name, pages, current_page, created, author, publication, size_bytes, sha256, path,
                 deleted, tags, storage_kind, file_stamp, external_path, external_key,
-                doc_type, folder_id, manual_order
+                doc_type, folder_id, manual_order, metadata_source,
+                zotero_item_key, zotero_collection_key, zotero_missing
          FROM documents WHERE deleted = ? ORDER BY created DESC, rowid DESC`
       )
       .all(trash ? 1 : 0) as unknown as DocumentRow[];
@@ -3606,7 +3664,8 @@ export class Store {
       .prepare(
         `SELECT id, name, pages, current_page, created, author, publication, size_bytes, sha256, path,
                 deleted, tags, storage_kind, file_stamp, external_path, external_key,
-                doc_type, folder_id, manual_order
+                doc_type, folder_id, manual_order, metadata_source,
+                zotero_item_key, zotero_collection_key, zotero_missing
          FROM documents WHERE id = ? AND deleted = 0`
       )
       .get(id) as unknown as DocumentRow | undefined;
@@ -3618,6 +3677,97 @@ export class Store {
       .prepare('SELECT external_key FROM documents WHERE id = ? AND deleted = 0')
       .get(id) as { external_key?: string } | undefined;
     return String(row?.external_key ?? '');
+  }
+
+  /**
+   * 查找已存在的 Zotero 本地文献（collection 增量同步用）。
+   *
+   * 命中顺序：外部身份（含升级前旧身份）→ Zotero 顶层条目 key。返回文献 id；
+   * 找不到返回 null。只查未删除文献（回收站里的文献由导入路径自己报错，避免误恢复）。
+   */
+  findZoteroDocumentId(input: {
+    identity?: string;
+    legacyIdentity?: string;
+    zoteroItemKey?: string;
+  }): string | null {
+    const identity = String(input.identity ?? '').trim();
+    const legacy = String(input.legacyIdentity ?? '').trim();
+    const zoteroKey = String(input.zoteroItemKey ?? '').trim();
+    if (identity || legacy) {
+      const row = this.db
+        .prepare(
+          `SELECT id FROM documents WHERE deleted = 0
+             AND external_key IN (?, ?) AND external_key <> '' LIMIT 1`
+        )
+        .get(identity, legacy) as { id?: string } | undefined;
+      if (row?.id) return String(row.id);
+    }
+    if (zoteroKey) {
+      const row = this.db
+        .prepare(
+          `SELECT id FROM documents WHERE deleted = 0 AND zotero_item_key = ?
+           ORDER BY rowid ASC LIMIT 1`
+        )
+        .get(zoteroKey) as { id?: string } | undefined;
+      if (row?.id) return String(row.id);
+    }
+    return null;
+  }
+
+  /**
+   * 最近一次同步记录为「属于该 Zotero collection」的本地文献。
+   *
+   * 只用于判断 Zotero 侧删除/移出：不是全局 Zotero 文献清单。
+   */
+  listZoteroCollectionDocuments(collectionKey: string): Array<{
+    documentId: string;
+    zoteroItemKey: string;
+    zoteroMissing: boolean;
+  }> {
+    const key = String(collectionKey ?? '').trim();
+    if (!key) return [];
+    const rows = this.db
+      .prepare(
+        `SELECT id, zotero_item_key, zotero_missing FROM documents
+         WHERE deleted = 0 AND zotero_collection_key = ?
+         ORDER BY rowid ASC`
+      )
+      .all(key) as unknown as Array<{
+      id?: string;
+      zotero_item_key?: string;
+      zotero_missing?: number;
+    }>;
+    return rows.map((row) => ({
+      documentId: String(row.id ?? ''),
+      zoteroItemKey: String(row.zotero_item_key ?? ''),
+      zoteroMissing: Number(row.zotero_missing ?? 0) === 1
+    }));
+  }
+
+  /**
+   * 标记/取消「Zotero 侧已删除」。只改标记，不删除文献、标签、笔记、批注。
+   * 返回标记是否发生变化（重复同步幂等）。
+   */
+  setZoteroMissing(documentId: string, missing: boolean): boolean {
+    const result = this.db
+      .prepare(
+        `UPDATE documents SET zotero_missing = ?
+         WHERE id = ? AND deleted = 0 AND zotero_missing <> ?`
+      )
+      .run(missing ? 1 : 0, documentId, missing ? 1 : 0);
+    return Number(result.changes ?? 0) > 0;
+  }
+
+  /**
+   * 清理 collection 归属：条目仍在 Zotero、只是被移出了这个 collection。
+   * 文献本身、`zotero_item_key` 与缺失标记都不动（不删除用户数据）。
+   */
+  clearZoteroCollectionKey(documentId: string): void {
+    this.db
+      .prepare(
+        "UPDATE documents SET zotero_collection_key = '' WHERE id = ? AND deleted = 0"
+      )
+      .run(documentId);
   }
 
   annotationExternalKeys(documentId: string): Set<string> {
@@ -3990,8 +4140,8 @@ export class Store {
       .prepare(
         `INSERT INTO documents
          (id, name, pages, current_page, created, deleted, storage_kind, tags, author,
-          publication, doi, title_key, sha256, size_bytes, path, manual_order)
-         VALUES (?, ?, ?, 1, ?, 0, 'copy', '[]', ?, ?, ?, ?, ?, ?, ?, ?)`
+          publication, doi, title_key, sha256, size_bytes, path, metadata_source, manual_order)
+         VALUES (?, ?, ?, 1, ?, 0, 'copy', '[]', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -4005,6 +4155,7 @@ export class Store {
         sha256,
         stats.size,
         relativePath,
+        parsed.metadataSource,
         this.nextManualOrder()
       );
 
@@ -4027,10 +4178,27 @@ export class Store {
     doi?: string;
     /** 父条目的 Zotero itemType 原文（如 book / journalArticle / thesis）；独立附件为空串。 */
     docType?: string;
+    /**
+     * 顶层 Zotero 条目 key（父条目；独立附件就是附件自身）。
+     *
+     * collection 增量同步按它命中已有本地文献并就地更新；直接打开附件时也写下来，
+     * 这样之后把该条目纳入 collection 同步仍能对上。旧记录没有该列时为空串。
+     */
+    zoteroItemKey?: string;
+    /** 本次导入所属的 Zotero collection key（collection 同步用）；不传则保留原值。 */
+    zoteroCollectionKey?: string;
+    /**
+     * 是否保留本地已存在的标题（`zotero.sync_preserve_local_title` 开关）。
+     *
+     * 仅作用于**已存在**的本地文献：本地标题非空、不是占位标题、且与传入标题
+     * 不同时，保留本地标题（其余字段仍按来源优先级合并）；新建条目没有本地标题，
+     * 一律使用传入值。
+     */
+    preserveLocalTitle?: boolean;
     externalPath?: string;
     bytes?: Uint8Array;
     confirmDuplicate?: boolean;
-  }): Promise<DocumentDetail> {
+  }): Promise<ZoteroDocumentImportResult> {
     const bytes = input.externalPath
       ? new Uint8Array(readFileSync(input.externalPath))
       : input.bytes;
@@ -4045,7 +4213,8 @@ export class Store {
       ? `${statSync(input.externalPath).size}:${Math.trunc(statSync(input.externalPath).mtimeMs)}`
       : `${bytes.byteLength}:${Date.now()}`;
     const legacy = input.legacyIdentity?.trim() ?? '';
-    const old = (
+    const zoteroKey = input.zoteroItemKey?.trim() ?? '';
+    let old = (
       legacy && legacy !== input.identity
         ? this.db
             .prepare(
@@ -4056,15 +4225,26 @@ export class Store {
             .prepare('SELECT * FROM documents WHERE external_key = ?')
             .get(input.identity)
     ) as Record<string, unknown> | undefined;
+    // 附件被 Zotero 重建/换路径后 identity 会变：再按 Zotero 顶层条目 key 兜底，
+    // 保证 collection 增量同步永远就地更新同一行，而不是插入重复文献。
+    if (!old && zoteroKey) {
+      old = this.db
+        .prepare(
+          'SELECT * FROM documents WHERE zotero_item_key = ? ORDER BY deleted ASC, rowid ASC LIMIT 1'
+        )
+        .get(zoteroKey) as Record<string, unknown> | undefined;
+    }
     if (old && Number(old.deleted ?? 0) === 1) {
       throw new Error('该附件已在应用回收站，请先恢复或彻底移除其应用记录');
     }
     const generic = new Set(['full text pdf', 'full text', 'pdf', '全文']);
+    const incomingTitle = input.title || 'Zotero 文献';
     const title =
       old && !generic.has(String(old.name ?? '').trim().toLowerCase())
         ? String(old.name)
-        : input.title || 'Zotero 文献';
-    const doi = normalizeDoi(input.doi ?? '') || parsed.doi;
+        : incomingTitle;
+    const incomingDoi = normalizeDoi(input.doi ?? '') || parsed.doi;
+    const doi = old ? String(old.doi ?? '') || incomingDoi : incomingDoi;
     // 父条目 itemType 原文；独立附件/父条目不可读时为空串（= 未分类）。
     const docType = input.docType ? this.documentTypeOf(input.docType) : '';
     if (old && !input.confirmDuplicate) {
@@ -4085,8 +4265,8 @@ export class Store {
       );
     }
     const candidates = this.findImportDuplicates({
-      doi,
-      title,
+      doi: incomingDoi,
+      title: incomingTitle,
       author: input.author,
       publication: input.publication ?? '',
       pages: parsed.pages
@@ -4094,6 +4274,52 @@ export class Store {
     if (candidates.length > 0 && !input.confirmDuplicate) {
       throw new DuplicateImportError(candidates, true);
     }
+    // 题录合并：Zotero 来源（优先级高于 PDF 元数据/首页/文件名），但绝不覆盖
+    // 用户手动改过的值（metadata_source='manual'）；未知来源按最低处理。
+    const existingSource = normalizeMetadataSource(old?.metadata_source);
+    // 「保留本地标题」开关只作用于已存在且带有真实标题的文献：本地标题为空或是
+    // 占位标题（Full Text PDF 等）时视为没有本地标题，一律用传入值。
+    const localTitle = String(old?.name ?? '');
+    const localTitleUsable =
+      Boolean(old) &&
+      Boolean(localTitle.trim()) &&
+      !generic.has(localTitle.trim().toLowerCase());
+    const preserveTitle =
+      Boolean(input.preserveLocalTitle) &&
+      localTitleUsable &&
+      localTitle.trim() !== incomingTitle.trim();
+    const mergedTitle = preserveTitle
+      ? { value: localTitle, applied: false }
+      : localTitleUsable
+        ? mergeMetadataField(localTitle, existingSource, incomingTitle, 'zotero')
+        : { value: incomingTitle, applied: true };
+    const mergedAuthor = mergeMetadataField(
+      String(old?.author ?? ''),
+      existingSource,
+      input.author,
+      'zotero'
+    );
+    const mergedPublication = mergeMetadataField(
+      String(old?.publication ?? ''),
+      existingSource,
+      input.publication ?? '',
+      'zotero'
+    );
+    const mergedDoi = mergeMetadataField(
+      String(old?.doi ?? ''),
+      existingSource,
+      incomingDoi,
+      'zotero'
+    );
+    const zoteroApplied =
+      mergedTitle.applied ||
+      mergedAuthor.applied ||
+      mergedPublication.applied ||
+      mergedDoi.applied;
+    const metadataSource = highestMetadataSource(existingSource, zoteroApplied ? 'zotero' : null);
+    const storedZoteroItemKey = zoteroKey || String(old?.zotero_item_key ?? '');
+    const storedCollectionKey =
+      input.zoteroCollectionKey?.trim() || String(old?.zotero_collection_key ?? '');
     const id = old ? String(old.id) : randomUUID();
     let storedPath = '';
     if (!external) {
@@ -4110,34 +4336,34 @@ export class Store {
           .prepare(
             `UPDATE documents SET name = ?, pages = ?, current_page = MIN(current_page, ?),
                storage_kind = ?, external_path = ?, external_key = ?, file_stamp = ?,
-               author = CASE WHEN ? <> '' THEN ? ELSE author END,
-               publication = CASE WHEN ? <> '' THEN ? ELSE publication END,
-               doi = CASE WHEN ? <> '' THEN ? ELSE doi END,
+               author = ?, publication = ?, doi = ?,
                doc_type = CASE WHEN doc_type = '' AND ? <> '' THEN ? ELSE doc_type END,
                title_key = ?,
-               sha256 = ?, size_bytes = ?, path = ?
+               sha256 = ?, size_bytes = ?, path = ?,
+               metadata_source = ?, zotero_item_key = ?, zotero_collection_key = ?,
+               zotero_missing = 0
              WHERE id = ?`
           )
           .run(
-            title,
+            mergedTitle.value,
             parsed.pages,
             parsed.pages,
             external ? 'zotero' : 'zotero_cache',
             input.externalPath ?? '',
             input.identity,
             stamp,
-            input.author,
-            input.author,
-            input.publication ?? '',
-            input.publication ?? '',
-            doi,
-            doi,
+            mergedAuthor.value,
+            mergedPublication.value,
+            mergedDoi.value,
             docType,
             docType,
-            normalizeKey(title),
+            normalizeKey(mergedTitle.value),
             sha256,
             bytes.byteLength,
             storedPath,
+            metadataSource ?? '',
+            storedZoteroItemKey,
+            storedCollectionKey,
             id
           );
       } else {
@@ -4146,26 +4372,30 @@ export class Store {
             `INSERT INTO documents
                (id, name, pages, current_page, created, deleted, storage_kind, external_path,
                 external_key, file_stamp, tags, author, publication, doi, title_key, sha256,
-                size_bytes, path, doc_type, manual_order)
-             VALUES (?, ?, ?, 1, ?, 0, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                size_bytes, path, doc_type, metadata_source, zotero_item_key,
+                zotero_collection_key, zotero_missing, manual_order)
+             VALUES (?, ?, ?, 1, ?, 0, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`
           )
           .run(
             id,
-            title,
+            mergedTitle.value,
             parsed.pages,
             new Date().toISOString(),
             external ? 'zotero' : 'zotero_cache',
             input.externalPath ?? '',
             input.identity,
             stamp,
-            input.author,
-            input.publication ?? '',
-            doi,
-            normalizeKey(title),
+            mergedAuthor.value,
+            mergedPublication.value,
+            mergedDoi.value,
+            normalizeKey(mergedTitle.value),
             sha256,
             bytes.byteLength,
             storedPath,
             docType,
+            'zotero',
+            storedZoteroItemKey,
+            storedCollectionKey,
             this.nextManualOrder()
           );
       }
@@ -4178,16 +4408,23 @@ export class Store {
     this.invalidateReferenceGraphCache();
     const document = this.getDocument(id);
     if (!document) throw new Error('导入 Zotero 文献后无法读取');
-    return document;
+    return preserveTitle ? { ...document, localTitlePreserved: true } : document;
   }
 
   async snapshotZoteroDocument(documentId: string): Promise<DocumentDetail> {
     const row = this.db
       .prepare(
-        'SELECT storage_kind, external_path, author FROM documents WHERE id = ? AND deleted = 0'
+        `SELECT storage_kind, external_path, author, publication, metadata_source
+         FROM documents WHERE id = ? AND deleted = 0`
       )
       .get(documentId) as
-      | { storage_kind?: string; external_path?: string; author?: string }
+      | {
+          storage_kind?: string;
+          external_path?: string;
+          author?: string;
+          publication?: string;
+          metadata_source?: string;
+        }
       | undefined;
     if (!row) throw new Error('文献不存在');
     if (row.storage_kind !== 'zotero') {
@@ -4207,6 +4444,24 @@ export class Store {
     const destination = path.join(this.dataDir, relative);
     mkdirSync(path.dirname(destination), { recursive: true });
     if (!existsSync(destination)) writeFileSync(destination, bytes);
+    // 保存副本只补空缺：题录已由 Zotero（更高优先级）写入时，不用 PDF 元数据覆盖。
+    const existingSource = normalizeMetadataSource(row.metadata_source);
+    const mergedAuthor = mergeMetadataField(
+      String(row.author ?? ''),
+      existingSource,
+      parsed.author,
+      'pdf_xmp'
+    );
+    const mergedPublication = mergeMetadataField(
+      String(row.publication ?? ''),
+      existingSource,
+      parsed.publication,
+      'pdf_xmp'
+    );
+    const metadataSource = highestMetadataSource(
+      existingSource,
+      mergedAuthor.applied || mergedPublication.applied ? 'pdf_xmp' : null
+    );
     this.db.exec('BEGIN IMMEDIATE');
     try {
       this.db
@@ -4214,8 +4469,7 @@ export class Store {
           `UPDATE documents SET pages = ?, current_page = MIN(current_page, ?),
              storage_kind = 'copy', external_path = '', external_key = '',
              file_stamp = '', sha256 = ?, size_bytes = ?, path = ?,
-             author = CASE WHEN ? <> '' THEN ? ELSE author END,
-             publication = CASE WHEN ? <> '' THEN ? ELSE publication END
+             author = ?, publication = ?, metadata_source = ?
            WHERE id = ?`
         )
         .run(
@@ -4224,10 +4478,9 @@ export class Store {
           sha256,
           bytes.byteLength,
           relative,
-          parsed.author,
-          parsed.author,
-          parsed.publication,
-          parsed.publication,
+          mergedAuthor.value,
+          mergedPublication.value,
+          metadataSource ?? '',
           documentId
         );
       this.writeChunks(documentId, parsed.chunks);
@@ -4282,6 +4535,24 @@ export class Store {
     const destination = path.join(this.dataDir, relativePath);
     mkdirSync(path.dirname(destination), { recursive: true });
     if (!existsSync(destination)) copyFileSync(resolved, destination);
+    // 题录按来源优先级合并：relink 来自 PDF 元数据，不能覆盖 Zotero / 用户手改的值。
+    const existingSource = existing.metadataSource ?? null;
+    const mergedAuthor = mergeMetadataField(
+      existing.author,
+      existingSource,
+      parsed.author,
+      'pdf_xmp'
+    );
+    const mergedPublication = mergeMetadataField(
+      existing.publication,
+      existingSource,
+      parsed.publication,
+      'pdf_xmp'
+    );
+    const metadataSource = highestMetadataSource(
+      existingSource,
+      mergedAuthor.applied || mergedPublication.applied ? 'pdf_xmp' : null
+    );
 
     try {
       this.db.exec('BEGIN IMMEDIATE');
@@ -4289,8 +4560,7 @@ export class Store {
         .prepare(
           `UPDATE documents SET pages = ?, current_page = MIN(current_page, ?), sha256 = ?,
              size_bytes = ?, path = ?, storage_kind = 'copy', external_path = '', external_key = '',
-             file_stamp = '', author = CASE WHEN ? <> '' THEN ? ELSE author END,
-             publication = CASE WHEN ? <> '' THEN ? ELSE publication END
+             file_stamp = '', author = ?, publication = ?, metadata_source = ?
            WHERE id = ? AND deleted = 0`
         )
         .run(
@@ -4299,10 +4569,9 @@ export class Store {
           sha256,
           stats.size,
           relativePath,
-          parsed.author,
-          parsed.author,
-          parsed.publication,
-          parsed.publication,
+          mergedAuthor.value,
+          mergedPublication.value,
+          metadataSource ?? '',
           id
         );
       this.writeChunks(id, parsed.chunks);
@@ -4380,11 +4649,18 @@ export class Store {
     if (input.name != null) {
       const name = input.name.trim();
       if (!name) throw new Error('请输入文献名称');
-      this.db.prepare('UPDATE documents SET name = ? WHERE id = ? AND deleted = 0').run(name, id);
+      // 用户手动改名 = 题录来源变 manual：之后的 Zotero 同步不得覆盖。
+      this.db
+        .prepare(
+          "UPDATE documents SET name = ?, metadata_source = 'manual' WHERE id = ? AND deleted = 0"
+        )
+        .run(name, id);
     }
     if (input.author != null) {
       this.db
-        .prepare('UPDATE documents SET author = ? WHERE id = ? AND deleted = 0')
+        .prepare(
+          "UPDATE documents SET author = ?, metadata_source = 'manual' WHERE id = ? AND deleted = 0"
+        )
         .run(input.author.trim(), id);
     }
     if (input.docType != null) {

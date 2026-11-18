@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import type {
   ZoteroAnnotationImportReport,
   ZoteroCollection,
+  ZoteroCollectionSyncItem,
+  ZoteroCollectionSyncReport,
   ZoteroConfigRecord,
   ZoteroItem,
   ZoteroNoteImportItem,
@@ -23,6 +25,7 @@ import {
   type ZoteroPageGeometry
 } from './zotero-annotations.js';
 import type { SecretStore } from './secrets.js';
+import { DuplicateImportError } from './store.js';
 import type { Store } from './store.js';
 
 const LOCAL_BASE = 'http://127.0.0.1:23119/api';
@@ -264,6 +267,11 @@ export interface ZoteroAttachment {
    * 分类由 shared 的 `documentCategoryOf` 统一计算。
    */
   docType: string;
+  /**
+   * 顶层 Zotero 条目 key：从父条目打开附件时是父条目 key，直接打开附件时是
+   * 附件自身的 parentItem，独立附件则为附件自身。collection 增量同步按它命中本地记录。
+   */
+  zoteroItemKey: string;
   /** 稳定身份：`mode:library_type:library_id:server_id:item_key[:path]`。 */
   identity: string;
   /** 旧版身份（不含 Server-ID / 路径），用于兼容升级前的 external_key。 */
@@ -410,6 +418,9 @@ export async function zoteroAttachment(
   overrideCloudBase?: string
 ): Promise<ZoteroAttachment> {
   if (!/^[A-Z0-9]{8}$/.test(itemKey)) throw new Error('Zotero 条目标识无效');
+  // 记住请求的 key：从父条目打开时它就是顶层条目；直接打开附件时它是附件 key，
+  // 顶层条目 key 再下面按 parentItem 解析。
+  const requestedItemKey = itemKey;
   const config = getZoteroConfig(store, secrets);
   const key = secrets.get('zotero.api_key')?.trim() ?? '';
   const base =
@@ -471,6 +482,11 @@ export async function zoteroAttachment(
       docType = String(parent.data?.itemType ?? '').trim();
     }
   }
+  // 顶层条目 key：父条目（从条目列表打开）或附件自身的 parentItem；独立附件退回请求 key。
+  const zoteroItemKey =
+    typeof data.parentItem === 'string' && data.parentItem.trim()
+      ? data.parentItem.trim()
+      : requestedItemKey;
   if (config.mode === 'webdav') {
     const password = secrets.get('zotero.webdav_password')?.trim() ?? '';
     if (!config.webdav_user || !password) {
@@ -499,6 +515,7 @@ export async function zoteroAttachment(
       publication,
       doi,
       docType,
+      zoteroItemKey,
       identity: attachmentIdentity(config, serverId, itemKey),
       legacyIdentity: legacyAttachmentIdentity(config, itemKey),
       bytes
@@ -523,6 +540,7 @@ export async function zoteroAttachment(
       publication,
       doi,
       docType,
+      zoteroItemKey,
       identity: attachmentIdentity(config, serverId, itemKey, filePath),
       legacyIdentity: legacyAttachmentIdentity(config, itemKey, filePath),
       externalPath: filePath
@@ -565,9 +583,252 @@ export async function zoteroAttachment(
     publication,
     doi,
     docType,
+    zoteroItemKey,
     identity: attachmentIdentity(config, serverId, itemKey),
     legacyIdentity: legacyAttachmentIdentity(config, itemKey),
     bytes
+  };
+}
+
+/** collection 单次增量同步最多处理的顶层条目数；超出时不做缺失标记。 */
+export const MAX_ZOTERO_SYNC_ITEMS = 1000;
+const ZOTERO_SYNC_PAGE_SIZE = 100;
+
+interface ZoteroSyncContext {
+  base: string;
+  headers: Record<string, string>;
+}
+
+/** collection 同步用的 API 上下文（本地 mock 地址只影响 local 模式，与 attachment 一致）。 */
+function zoteroSyncContext(
+  store: Store,
+  secrets: SecretStore,
+  overrideLocalBase?: string
+): ZoteroSyncContext {
+  const config = getZoteroConfig(store, secrets);
+  const base =
+    config.mode === 'local'
+      ? `${(overrideLocalBase ?? LOCAL_BASE).replace(/\/+$/, '')}/${config.library_type}/${config.library_id || '0'}`
+      : `${CLOUD_BASE}/${config.library_type}/${config.library_id}`;
+  const key = secrets.get('zotero.api_key')?.trim() ?? '';
+  if (config.mode !== 'local' && !key) throw new Error('云端模式需要先保存 Zotero API Key');
+  return {
+    base,
+    headers: {
+      'Zotero-API-Version': '3',
+      ...(config.mode !== 'local' ? { 'Zotero-API-Key': key } : {})
+    }
+  };
+}
+
+/** 只读确认顶层条目在 Zotero 侧是否还存在；网络/未知错误返回 unknown，绝不猜删除。 */
+async function zoteroItemPresence(
+  base: string,
+  headers: Record<string, string>,
+  itemKey: string
+): Promise<'deleted' | 'present' | 'unknown'> {
+  try {
+    const response = await fetch(`${base}/items/${itemKey}?format=json`, {
+      headers,
+      signal: AbortSignal.timeout(30_000)
+    });
+    if (response.status === 404) return 'deleted';
+    if (!response.ok) return 'unknown';
+    const payload = (await response.json()) as { data?: Record<string, unknown> } | null;
+    const deleted = payload?.data?.deleted;
+    if (deleted === true || deleted === 1) return 'deleted';
+    return 'present';
+  } catch {
+    return 'unknown';
+  }
+}
+
+/**
+ * 增量同步一个 Zotero collection 到本地文献库（只读 Zotero，不写回）。
+ *
+ * 语义（schema_version 26）：
+ * 1. 新增条目插入；已有条目按 Zotero 顶层条目 key **就地更新**（不重复插入）。
+ * 2. 只更新题录字段与附件关联：用户标签、笔记、批注都不动；题录按来源优先级合并，
+ *    用户手改过的值（metadata_source='manual'）不被 Zotero 覆盖。
+ * 3. Zotero 里已删除（或已进回收站）的条目：本地文献**不删除**，只标
+ *    `zotero_missing=true`，标签/笔记/批注全部保留。
+ * 4. 条目仍在 Zotero、只是被移出该 collection：不改文献、不标缺失，只清掉
+ *    collection 归属并计入报告（`removedFromCollection`）。
+ * 5. 幂等：连续同步两次不会产生重复行；内容无变化的条目按「updated」重写一遍
+ *    （索引重建），但行数与用户数据不变。
+ *
+ * 超过 `MAX_ZOTERO_SYNC_ITEMS` 时不完整，此时不做任何缺失标记，避免把没读到的
+ * 条目误当成已删除。
+ */
+export async function syncZoteroCollection(
+  store: Store,
+  secrets: SecretStore,
+  collectionKey: string,
+  overrideLocalBase?: string
+): Promise<ZoteroCollectionSyncReport> {
+  const key = String(collectionKey ?? '').trim();
+  if (!/^[A-Z0-9]{8}$/.test(key)) throw new Error('Zotero 分类标识无效');
+  const { base, headers } = zoteroSyncContext(store, secrets, overrideLocalBase);
+
+  // 分类名只用于报告；读不到名字不阻塞同步。
+  let collectionName = '';
+  {
+    const response = await fetch(`${base}/collections/${key}?format=json`, {
+      headers,
+      signal: AbortSignal.timeout(30_000)
+    });
+    if (response.status === 404) {
+      throw new Error('Zotero 里没有这个分类（HTTP 404），请刷新分类列表后重试。');
+    }
+    if (!response.ok) throw new Error(`读取 Zotero 分类返回 HTTP ${response.status}`);
+    const payload = (await response.json()) as { data?: { name?: unknown } } | null;
+    collectionName = String(payload?.data?.name ?? '').trim();
+  }
+
+  const warnings: string[] = [];
+  const topItems: Array<{ key: string; title: string }> = [];
+  let fetched = 0;
+  let skippedDeleted = 0;
+  let complete = true;
+  for (let start = 0; ; start += ZOTERO_SYNC_PAGE_SIZE) {
+    const response = await fetch(
+      `${base}/collections/${encodeURIComponent(key)}/items/top?format=json&limit=${ZOTERO_SYNC_PAGE_SIZE}&start=${start}`,
+      { headers, signal: AbortSignal.timeout(30_000) }
+    );
+    if (!response.ok) throw new Error(`读取 Zotero 分类条目返回 HTTP ${response.status}`);
+    const page = (await response.json()) as Array<{
+      key?: string;
+      data?: Record<string, unknown>;
+    }>;
+    if (!Array.isArray(page)) throw new Error('Zotero 返回的分类条目不是数组');
+    for (const row of page) {
+      fetched += 1;
+      const itemKey = String(row.key ?? '').trim();
+      const data = row.data ?? {};
+      // Zotero 已进回收站的条目：不导入、不删除本地记录（缺失检测按 key 兜底）。
+      if (data.deleted === true || data.deleted === 1) {
+        skippedDeleted += 1;
+        continue;
+      }
+      if (!/^[A-Z0-9]{8}$/.test(itemKey)) {
+        if (warnings.length < 20) warnings.push('Zotero 返回的条目缺少有效 key，已跳过。');
+        continue;
+      }
+      topItems.push({
+        key: itemKey,
+        title: String(data.title ?? '').trim() || itemKey
+      });
+    }
+    if (page.length < ZOTERO_SYNC_PAGE_SIZE) break;
+    if (start + ZOTERO_SYNC_PAGE_SIZE >= MAX_ZOTERO_SYNC_ITEMS) {
+      complete = false;
+      break;
+    }
+  }
+
+  let inserted = 0;
+  let updated = 0;
+  let skippedDuplicates = 0;
+  let failed = 0;
+  // 设置键缺省视为 true（保留本地标题）；只有显式写入 'false' 才按原 provenance 覆盖。
+  // 开关关闭 ≠ 强制覆盖 manual：manual 的保护在题录合并规则里，始终生效。
+  const preserveLocalTitle = store.getSettings()['zotero.sync_preserve_local_title'] !== 'false';
+  let preservedTitles = 0;
+  const items: ZoteroCollectionSyncItem[] = [];
+  for (const item of topItems) {
+    const reportItem: ZoteroCollectionSyncItem = {
+      itemKey: item.key,
+      title: item.title,
+      action: 'error',
+      documentId: '',
+      message: ''
+    };
+    try {
+      const attachment = await zoteroAttachment(store, secrets, item.key, overrideLocalBase);
+      // 同步以分类顶层条目列表里的 key 为准（它就是「是否还在该 collection」的判据）；
+      // 直接打开附件时才会用到 attachment.zoteroItemKey。
+      const zoteroItemKey = item.key;
+      const existingId = store.findZoteroDocumentId({
+        identity: attachment.identity,
+        legacyIdentity: attachment.legacyIdentity,
+        zoteroItemKey
+      });
+      const document = await store.importZoteroDocument({
+        ...attachment,
+        zoteroItemKey,
+        zoteroCollectionKey: key,
+        preserveLocalTitle,
+        // 已存在 → 就地更新；新条目 → 先走查重，命中已有文献时不重复插入。
+        confirmDuplicate: existingId !== null
+      });
+      reportItem.documentId = document.id;
+      if (document.localTitlePreserved) preservedTitles += 1;
+      if (existingId) {
+        reportItem.action = 'updated';
+        updated += 1;
+      } else {
+        reportItem.action = 'inserted';
+        inserted += 1;
+      }
+    } catch (error) {
+      if (error instanceof DuplicateImportError) {
+        reportItem.action = 'skippedDuplicate';
+        reportItem.message =
+          '本地已有相同或高度相似的文献，本次没有重复插入（如确认是同一篇，请手动用 Zotero 打开）';
+        skippedDuplicates += 1;
+      } else {
+        const message = error instanceof Error ? error.message : '未知错误';
+        reportItem.action = 'error';
+        reportItem.message = message;
+        failed += 1;
+        if (warnings.length < 20) warnings.push(`Zotero 条目 ${item.key} 同步失败：${message}`);
+      }
+    }
+    items.push(reportItem);
+  }
+
+  // 缺失检测只在完整覆盖时做：只标记「上次属于该 collection、这次读不到」的本地文献。
+  let markedMissing = 0;
+  let removedFromCollection = 0;
+  if (!complete) {
+    warnings.push(
+      `该分类顶层条目数超过单次同步上限（${MAX_ZOTERO_SYNC_ITEMS}），本次未做 Zotero 删除标记，以免误标。`
+    );
+  } else {
+    const presentKeys = new Set(topItems.map((item) => item.key));
+    for (const row of store.listZoteroCollectionDocuments(key)) {
+      if (!row.zoteroItemKey || presentKeys.has(row.zoteroItemKey)) continue;
+      const presence = await zoteroItemPresence(base, headers, row.zoteroItemKey);
+      if (presence === 'deleted') {
+        // 本地文献、标签、笔记、批注一律保留，只打标记。
+        if (store.setZoteroMissing(row.documentId, true)) markedMissing += 1;
+      } else if (presence === 'present') {
+        if (row.zoteroMissing) store.setZoteroMissing(row.documentId, false);
+        store.clearZoteroCollectionKey(row.documentId);
+        removedFromCollection += 1;
+      } else if (warnings.length < 20) {
+        warnings.push(
+          `无法确认 Zotero 条目 ${row.zoteroItemKey} 是否已删除，本次保留原标记（不猜）。`
+        );
+      }
+    }
+  }
+
+  return {
+    collectionKey: key,
+    collectionName,
+    fetched,
+    inserted,
+    updated,
+    skippedDuplicates,
+    skippedDeleted,
+    failed,
+    preserved_titles: preservedTitles,
+    markedMissing,
+    removedFromCollection,
+    complete,
+    warnings,
+    items
   };
 }
 

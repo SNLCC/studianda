@@ -303,7 +303,7 @@ describe('schema_version 21 → 24 迁移', () => {
       try {
         afterVersion = readVersion(afterDb) ?? '';
         afterObjects = schemaObjectNames(afterDb);
-        expect(afterVersion).toBe('25');
+        expect(afterVersion).toBe('26');
         expect(tableExists(afterDb, 'projects')).toBe(true);
         expect(tableExists(afterDb, 'project_documents')).toBe(true);
         expect(afterObjects).toEqual(
@@ -390,7 +390,7 @@ describe('schema_version 21 → 24 迁移', () => {
       }
       const afterReopenDb = readOnlyDb(dir);
       try {
-        expect(readVersion(afterReopenDb)).toBe('25');
+        expect(readVersion(afterReopenDb)).toBe('26');
         expect(schemaObjectNames(afterReopenDb)).toEqual(afterObjects);
       } finally {
         afterReopenDb.close();

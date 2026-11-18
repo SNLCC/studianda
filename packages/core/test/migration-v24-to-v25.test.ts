@@ -16,7 +16,7 @@ import { Store } from '../src/store.js';
  * 夹具用 node:sqlite 手工构造 v24 旧库（documents/messages/document_chat_sessions/触发器/
  * projects/project_documents/corpus_sessions/corpus_session_documents 都是 v24 真实形态，
  * corpus_sessions **没有**来源项目两列），塞入固定数据后关库，再交给 `new Store(dir)` 触发真实迁移。
- * 断言覆盖：补两列且可空、版本升到 25、旧会话逐字不变且新列为 NULL、迁移前快照是 v24、
+ * 断言覆盖：补两列且可空、版本升到 26、旧会话逐字不变且新列为 NULL、迁移前快照是 v24、
  * 重复迁移幂等、迁移后来源项目快照落库（项目改名/删除后不变）以及不用项目建会话时为 NULL。
  */
 
@@ -278,7 +278,7 @@ function migrationBackups(dir: string): string[] {
 }
 
 describe('schema_version 24 → 25 迁移', () => {
-  it('corpus_sessions 加来源项目两列，版本升到 25，来源快照可落库且项目改名/删除后不变', () => {
+  it('corpus_sessions 加来源项目两列，版本升到 26，来源快照可落库且项目改名/删除后不变', () => {
     const dir = mkdtempSync(path.join(root, 'v24-'));
     let store: Store | null = null;
     try {
@@ -333,7 +333,7 @@ describe('schema_version 24 → 25 迁移', () => {
       const afterDb = readOnlyDb(dir);
       let afterObjects: string[] = [];
       try {
-        expect(readVersion(afterDb)).toBe('25');
+        expect(readVersion(afterDb)).toBe('26');
         afterObjects = schemaObjectNames(afterDb);
         // 只加列不重建表：v24 已有的项目/语料会话两表与索引仍在。
         expect(afterObjects).toEqual(
@@ -461,7 +461,7 @@ describe('schema_version 24 → 25 迁移', () => {
       store = null;
       const reopenedDb = readOnlyDb(dir);
       try {
-        expect(readVersion(reopenedDb)).toBe('25');
+        expect(readVersion(reopenedDb)).toBe('26');
         expect(schemaObjectNames(reopenedDb)).toEqual(afterObjects);
       } finally {
         reopenedDb.close();

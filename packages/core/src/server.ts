@@ -115,6 +115,7 @@ import {
   listZoteroItems,
   probeZotero,
   saveZoteroConfig,
+  syncZoteroCollection,
   zoteroAttachment
 } from './zotero.js';
 import {
@@ -2006,6 +2007,19 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       return await listZoteroCollections(options.store, options.secrets);
     } catch (error) {
       return badRequest(reply, error instanceof Error ? error.message : '读取 Zotero 分类失败');
+    }
+  });
+
+  // 增量同步一个 Zotero collection 到本地文献库（只读 Zotero，不写回）。
+  // 新增条目插入、已有条目按条目标识就地更新；Zotero 侧删除只标记 zotero_missing，
+  // 绝不自动删除本地文献/标签/笔记/批注。幂等：重复调用不产生重复行。
+  app.post(`${API_PREFIX}/zotero/collections/:key/sync`, async (request, reply) => {
+    const { key } = request.params as { key: string };
+    if (!/^[A-Z0-9]{8}$/.test(key)) return badRequest(reply, '分类标识无效');
+    try {
+      return await syncZoteroCollection(options.store, options.secrets, key);
+    } catch (error) {
+      return badRequest(reply, error instanceof Error ? error.message : '同步 Zotero 分类失败');
     }
   });
 
