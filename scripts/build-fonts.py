@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 
@@ -14,9 +15,26 @@ from fontTools import subset
 from fontTools.ttLib import TTFont
 from fontTools.varLib import instancer
 
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 KAI_OLD_FAMILY = 'LXGW WenKai GB'
 KAI_NEW_FAMILY = 'Studianda Kai'
 KAI_NEW_PS = 'StudiandaKaiSC-Regular'
+
+# tier 的合法取值（写在 fonts.manifest.json 的 tier 字段里）：
+#   full     宋/黑 CJK 字体全部码位
+#   gb2312   文楷 GB2312 + 常用符号子集
+#   latin    拉丁伴随字体（只补 CJK 字体缺的区段）
+#   watermark 水印专用子集：唯一一份 TTF（canvas 读不了 woff2），只收中文水印文案用到的码位
+WATERMARK_TIER = 'watermark'
+WATERMARK_FILE = 'StudiandaWatermark.ttf'
+WATERMARK_TEXTS_PATH = os.path.join(
+    REPO_ROOT, 'packages', 'shared', 'src', 'ai-marker.ts')
+# 水印 TTF 固定写入的 head.modified（SFNT 纪元 1904-01-01 起算，即 2024-01-01Z）。
+# fontTools 保存时默认 recalcTimestamp=True，会把 head.modified 写成"当前时间"，
+# 同一份源字体连续构建两次也会得到不同的 sha256。水印 TTF 要求可复现，所以这里
+# 显式关掉时间戳重算并钉死 modified；created 保留上游字体自带值（随版本固定）。
+WATERMARK_FIXED_MODIFIED = 3786912000
 
 # 楷体子集：GB2312 汉字 + 常用符号块 + 拉丁/希腊/数学
 SYMBOL_RANGES = [
@@ -86,6 +104,25 @@ def gb2312_chars() -> set[int]:
     return chars
 
 
+def watermark_texts() -> list[str]:
+    """从 packages/shared/src/ai-marker.ts 读取中文水印文案（单一事实来源，避免文案漂移）。"""
+    with open(WATERMARK_TEXTS_PATH, 'r', encoding='utf-8') as fh:
+        source = fh.read()
+    match = re.search(r'IMAGE_WATERMARK_ZH\s*:[^=]*=\s*\{(.*?)\n\s*\};', source, re.S)
+    if not match:
+        raise SystemExit('无法从 %s 解析 IMAGE_WATERMARK_ZH' % WATERMARK_TEXTS_PATH)
+    texts = re.findall(r"'([^']*)'", match.group(1))
+    if not texts:
+        raise SystemExit('IMAGE_WATERMARK_ZH 中没有解析到文案：%s' % WATERMARK_TEXTS_PATH)
+    return texts
+
+
+def watermark_codepoints() -> list[int]:
+    # 纯 ASCII 兜底文案由平台默认 sans-serif 渲染（见 watermark.ts），不需要随包字形；
+    # 随包水印字体只覆盖中文文案用到的码位（与改动前手工生成的 24 个码位一致）。
+    return sorted({ord(ch) for text in watermark_texts() for ch in text})
+
+
 def build_charset(font: TTFont, tier: str) -> list[int]:
     available = cmap_codepoints(font)
     if tier == 'full':
@@ -95,6 +132,14 @@ def build_charset(font: TTFont, tier: str) -> list[int]:
         for start, end in LATIN_RANGES:
             chars |= set(range(start, end + 1))
         return sorted(c for c in chars if c in available)
+    if tier == WATERMARK_TIER:
+        # 水印专用子集：文案码位在源字体里必须齐全，缺一个就失败，避免产出画方框的水印字体。
+        wanted = watermark_codepoints()
+        missing = [c for c in wanted if c not in available]
+        if missing:
+            raise SystemExit('水印字体缺少码位：%s'
+                             % ', '.join('U+%04X' % c for c in missing))
+        return wanted
     chars = set(gb2312_chars())
     for start, end in SYMBOL_RANGES:
         chars |= set(range(start, end + 1))
@@ -143,6 +188,33 @@ def subset_font(src: str, chars: list[int], out: str) -> None:
     font.close()
 
 
+def subset_ttf(src: str, chars: list[int], out: str) -> None:
+    """生成水印专用 TTF 子集（canvas 读不了 woff2）。
+
+    与 woff2 子集刻意不同的地方：
+    - 不设 layout_features（保持 fontTools 默认特性集合，而不是 woff2 用的 '*'）：
+      canvas fillText 不做复杂布局，默认闭包比 '*' 少带 36 个替换字形；这样字形集合
+      也与改动前手工生成的 TTF 一致（同样的 34 个字形）；
+    - recommended_glyphs=False：只按码位取字形，不额外带推荐字形；
+    - TTFont(recalcTimestamp=False) + 钉死 head.modified：保证连续两次构建字节完全一致
+      （fontTools 默认会把 head.modified 写成当前时间，导致 sha256 每次都变）。
+    """
+    options = subset.Options()
+    options.flavor = None
+    options.hinting = False
+    options.name_IDs = ['*']
+    options.name_languages = ['*']
+    options.notdef_outline = True
+    options.recommended_glyphs = False
+    font = TTFont(src, recalcTimestamp=False)
+    subsetter = subset.Subsetter(options=options)
+    subsetter.populate(unicodes=chars)
+    subsetter.subset(font)
+    font['head'].modified = WATERMARK_FIXED_MODIFIED
+    font.save(out)
+    font.close()
+
+
 def rename_kai(path: str) -> None:
     """把文楷的「主名称」改成 Studianda Kai；版权/许可/作者字段原样保留。"""
     font = TTFont(path)
@@ -167,23 +239,32 @@ def rename_kai(path: str) -> None:
 
 
 def main() -> int:
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    repo_root = REPO_ROOT
     ap = argparse.ArgumentParser()
-    ap.add_argument('--serif', required=True, help='NotoSerifCJKsc-VF.ttf')
+    # --only watermark 只重建水印 TTF，不需要宋体/文楷源文件；其余模式仍然要求三者齐全。
+    ap.add_argument('--serif', required=False, help='NotoSerifCJKsc-VF.ttf')
     ap.add_argument('--sans', required=True, help='NotoSansCJKsc-VF.ttf')
-    ap.add_argument('--kai', required=True, help='LXGWWenKaiGB-Regular.ttf')
+    ap.add_argument('--kai', required=False, help='LXGWWenKaiGB-Regular.ttf')
     ap.add_argument('--serif-latin', default=None,
                     help='可选：NotoSerif 变量字体（latin-greek-cyrillic），用于补 CJK 字体缺失的拉丁/IPA/希腊/西里尔')
     ap.add_argument('--sans-latin', default=None,
                     help='可选：NotoSans 变量字体（latin-greek-cyrillic），同上')
     ap.add_argument('--out', default=os.path.join(
         repo_root, 'packages', 'ui', 'src', 'styles', 'assets', 'fonts'))
+    ap.add_argument('--watermark-out', default=os.path.join(
+        repo_root, 'packages', 'core', 'assets', 'fonts'),
+        help='水印 TTF 的输出目录（默认 packages/core/assets/fonts）')
     ap.add_argument('--cache', default=os.path.join(repo_root, '.font-build-cache'))
     ap.add_argument('--tier', default='full', choices=['full', 'gb2312'],
                     help='宋/黑的覆盖档位；full=字体全部码位（默认）')
-    ap.add_argument('--only', default='all', choices=['all', 'companions'],
-                    help='all=全部字体；companions=只重建拉丁伴随字体')
+    ap.add_argument('--only', default='all', choices=['all', 'companions', 'watermark'],
+                    help='all=全部字体；companions=只重建拉丁伴随字体；'
+                         'watermark=只重建水印 TTF（不碰 woff2）')
     args = ap.parse_args()
+    if args.only != 'watermark':
+        for flag, value in (('--serif', args.serif), ('--kai', args.kai)):
+            if not value:
+                ap.error('%s 在 --only %s 时必须提供' % (flag, args.only))
 
     os.makedirs(args.out, exist_ok=True)
     os.makedirs(args.cache, exist_ok=True)
@@ -196,7 +277,7 @@ def main() -> int:
         (args.sans, 500, 'StudiandaSansSC-Medium.woff2', args.tier, False),
         (args.kai, None, 'StudiandaKaiSC-Regular.woff2', 'gb2312', True),
     ]
-    if args.only == 'companions':
+    if args.only in ('companions', 'watermark'):
         jobs = []
     # 拉丁伴随字体（可选）：只覆盖 CJK 字体里缺失的区段，通过 unicode-range 局部生效
     if args.serif_latin and args.only in ('all', 'companions'):
@@ -257,15 +338,51 @@ def main() -> int:
             'renamed': rename,
         })
 
+    if args.only in ('all', 'watermark'):
+        # 水印 TTF：与 woff2 同源（Noto Sans CJK SC 400），但 canvas 只认 TTF。
+        # 单独写到 packages/core/assets/fonts，manifest 里仍登记在 UI 字体清单下。
+        t0 = time.time()
+        print('=' * 74)
+        print('%s  wght=400  tier=%s' % (WATERMARK_FILE, WATERMARK_TIER))
+        sys.stdout.flush()
+        staged = instantiate(args.sans, 400, args.cache)
+        font = TTFont(staged, lazy=True)
+        chars = build_charset(font, WATERMARK_TIER)
+        font.close()
+        print('  码位 %d' % len(chars))
+        sys.stdout.flush()
+        os.makedirs(args.watermark_out, exist_ok=True)
+        tmp_out = os.path.join(args.cache, 'watermark.tmp.ttf')
+        subset_ttf(staged, chars, tmp_out)
+        final = os.path.join(args.watermark_out, WATERMARK_FILE)
+        with open(tmp_out, 'rb') as fh:
+            data = fh.read()
+        with open(final, 'wb') as fh:
+            fh.write(data)
+        size = len(data)
+        digest = sha256(final)
+        print('  -> %s  %s  %.0fs' % (final, fmt_size(size), time.time() - t0))
+        sys.stdout.flush()
+        manifest.append({
+            'file': WATERMARK_FILE,
+            'bytes': size,
+            'sha256': digest,
+            'weight': 400,
+            'tier': WATERMARK_TIER,
+            'codepoints': len(chars),
+            'renamed': False,
+        })
+
     manifest_path = os.path.join(args.out, 'fonts.manifest.json')
-    if args.only == 'companions' and os.path.exists(manifest_path):
-        # 增量重建：保留 CJK 字体条目，只替换本次产出的条目
+    if args.only in ('companions', 'watermark') and os.path.exists(manifest_path):
+        # 增量重建：保留未参与本次构建的条目，只替换本次产出的条目
         with open(manifest_path, 'r', encoding='utf-8') as fh:
             existing = json.load(fh)
         built = {item['file'] for item in manifest}
         manifest = [item for item in existing if item['file'] not in built] + manifest
     with open(manifest_path, 'w', encoding='utf-8') as fh:
         json.dump(manifest, fh, ensure_ascii=False, indent=2)
+        fh.write('\n')
     total = sum(item['bytes'] for item in manifest)
     print('=' * 74)
     print('共 %d 个文件，合计 %s' % (len(manifest), fmt_size(total)))

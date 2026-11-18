@@ -102,12 +102,85 @@ export function withAiNoteHeader(markdown: string): string {
   return `${aiGeneratedMarkdownComment()}${markdown}`;
 }
 
-/**
- * 在 Markdown 正文前插入导出文件头；`containsAi` 为 false 时不加（纯用户内容的导出件）。
+/** 在 Markdown 正文前插入导出文件头；`containsAi` 为 false 时不加（纯用户内容的导出件）。
  *
  * 默认 true 是为了兼容仍按"总是加标识"调用的宿主；数据层的 `store.exportMarkdown()`
  * 会先检测笔记/批注里是否真的带 AI 标识，再决定是否写入。
  */
 export function withAiExportHeader(markdown: string, containsAi = true): string {
   return containsAi ? `${exportedMarkdownComment()}${markdown}` : markdown;
+}
+
+/**
+ * 图像产物的标识类型。
+ *
+ * - `generated`：AI 生成的图（将来生成图表/示意图时用）；
+ * - `translation`：把译文版式页导出成图片时用；
+ * - `vision`：视觉模型对页面的转录/解读结果被渲染成图片时用；
+ * - `local_ocr`：本机 Tesseract 或 PDF 文本层——**不是生成式 AI**，但也要烧**来源水印**，
+ *   让用户能分辨"本机 OCR 的图"与"原页扫描图"；文案与元数据都不标 AI。
+ */
+export type ImageWatermarkKind = 'generated' | 'translation' | 'vision' | 'local_ocr';
+
+/** 中文水印文案：短，缩略图尺寸下仍可辨认，且带产品署名。 */
+const IMAGE_WATERMARK_ZH: Record<ImageWatermarkKind, string> = {
+  generated: 'AI 生成 · 勘读 Studianda',
+  translation: '机器翻译 · 由 AI 生成',
+  vision: 'AI 模型识别 · 勘读 Studianda',
+  // 本机 OCR 不是生成式 AI：不写「AI 生成」，只说明来源与"请核对原图"。
+  local_ocr: 'OCR 识别 · 本机 Tesseract · 请核对原图'
+};
+
+/** 纯 ASCII 文案：字体缺中文字形时退回这一组，保证水印一定画得出来。 */
+const IMAGE_WATERMARK_ASCII: Record<ImageWatermarkKind, string> = {
+  generated: 'AI-generated · Studianda',
+  translation: 'Machine translation · AI',
+  vision: 'AI vision transcription · Studianda',
+  local_ocr: 'OCR · local engine · verify against original'
+};
+
+/**
+ * 该图像水印类型是否属于 **AI 生成/模型识别** 内容。
+ *
+ * 只有 `local_ocr`（本机 Tesseract / PDF 文本层）不是生成式 AI；
+ * 它仍会烧水印，但元数据写来源标记而不是 `AIGC`。
+ */
+export function isAiWatermarkKind(kind: ImageWatermarkKind): boolean {
+  return kind !== 'local_ocr';
+}
+
+/** 图像水印的显式标识文案（四种类型都有；`local_ocr` 是来源水印，不含 AI 字样）。 */
+export function imageWatermarkText(kind: ImageWatermarkKind): string {
+  return IMAGE_WATERMARK_ZH[kind];
+}
+
+/** 图像水印的 ASCII 兜底文案（四种类型都有）。 */
+export function imageWatermarkAsciiText(kind: ImageWatermarkKind): string {
+  return IMAGE_WATERMARK_ASCII[kind];
+}
+
+/**
+ * 图像产品的 PNG `tEXt` 元数据（隐式标识），由 core 逐条写入，避免 core 自己拼关键字。
+ *
+ * - AI 类（generated / translation / vision）：写 `AIGC=<实际烧录文案>` + `Software=Studianda`；
+ * - 本机 OCR：**不写 `AIGC`**（写了会把非生成式内容误标成 AI），改写来源标记
+ *   `Source=Studianda OCR (local engine)` + `Software=Studianda`。
+ *
+ * `visibleText` 是实际烧录到图上的文案（可能因字体缺字退回 ASCII），
+ * 用于让 `AIGC` 的值与可见水印保持一致；`local_ocr` 的来源标记与文案无关，不需要它。
+ */
+export function imageWatermarkMetadata(
+  kind: ImageWatermarkKind,
+  visibleText: string = imageWatermarkText(kind)
+): Array<{ keyword: string; value: string }> {
+  if (!isAiWatermarkKind(kind)) {
+    return [
+      { keyword: 'Source', value: 'Studianda OCR (local engine)' },
+      { keyword: 'Software', value: 'Studianda' }
+    ];
+  }
+  return [
+    { keyword: 'AIGC', value: visibleText },
+    { keyword: 'Software', value: 'Studianda' }
+  ];
 }

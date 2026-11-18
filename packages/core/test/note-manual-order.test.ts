@@ -68,7 +68,7 @@ describe('schema 18 → 19：notes.manual_order 迁移与回填', () => {
           .prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'")
           .get() as { value?: string } | undefined
       )?.value;
-      expect(version).toBe('19');
+      expect(version).toBe('20');
       const columns = (db.prepare('PRAGMA table_info(notes)').all() as Array<{ name: string }>).map(
         (column) => column.name
       );
@@ -90,7 +90,7 @@ describe('schema 18 → 19：notes.manual_order 迁移与回填', () => {
           .prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'")
           .get() as { value?: string } | undefined
       )?.value;
-      expect(version).toBe('19');
+      expect(version).toBe('20');
       expect(reopened.listStandaloneNotes().map((note) => note.id)).toEqual(['m1', 'm2', 'm3']);
     } finally {
       reopened.close();

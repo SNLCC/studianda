@@ -11,9 +11,9 @@ import { USAGE_NOTICE_DOC_URL, openExternalLink } from './external-links.js';
 import type { RuntimeAdapter } from './runtime.js';
 
 /** 须知版本：与 docs/USAGE-NOTICE.md 的「文档版本」保持一致。 */
-export const USAGE_NOTICE_VERSION = 'v1.20';
+export const USAGE_NOTICE_VERSION = 'v1.21';
 /** 生效日期：与 docs/USAGE-NOTICE.md 保持一致。 */
-export const USAGE_NOTICE_EFFECTIVE_DATE = '2026-11-16';
+export const USAGE_NOTICE_EFFECTIVE_DATE = '2026-11-18';
 /** 适用的应用版本。 */
 export const USAGE_NOTICE_APPLICABLE_VERSION = '勘读 Studianda 0.1.x';
 
@@ -82,7 +82,7 @@ export const USAGE_NOTICE_SECTIONS: UsageNoticeSection[] = [
     bullets: [
       '会话/精读/翻译/摘要（含全书摘要）：问题、检索命中片段或所选页面/章节原文、勾选的笔记与批注正文等 → 你配置的模型服务；全书摘要还会发送分块原文、分块摘要与合并材料；不含 PDF 原件。',
       '视觉读页/在线解析：该页渲染图片或相应 PDF → 你配置或选择的视觉/解析服务。',
-      'Embedding/重排：需要向量化或重排的检索文本与候选片段 → 配置的远程模型；默认使用本机 TF-IDF 与本地重排规则。',
+      'Embedding/重排：需要向量化或重排的检索文本与候选片段 → 配置的远程模型；问答补读候选在词法检索完全没有命中时也会走这条语义兜底，会发送该文献的文本块与问题术语；默认使用本机 TF-IDF 与本地重排规则。',
       '联网搜索：搜索词 → 你配置的相应服务，默认「每次询问」；把「搜索规划隐私策略」改为交给模型规划时，按所选范围把问题/选文等发给你配置的会话模型。',
       '语音：录音音频或待朗读文字 → 配置的语音服务；默认使用本机系统语音组件。',
       '语音转写纠错：开启语音输入后，识别出的文本会发给你配置的会话模型做纠错（默认开启，可在语音设置关闭）；开启「参考当前页」还会带上当前页术语与近期上下文。',

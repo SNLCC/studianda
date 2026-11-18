@@ -100,6 +100,45 @@ function formatUsageCompact(usage: NonNullable<ChatResponse['usage']>): string {
   return total ? `共 ${total} tokens` : '';
 }
 
+/** shared 的 `audit.claims` 是内联结构：这里取同一份字段类型，避免手写重复定义。 */
+type AuditClaim = NonNullable<ChatResponse['audit']>['claims'][number];
+
+/**
+ * 缺证归因：`source_changed` = 提问时冻结的选区文字在当前页已找不到（OCR 重跑/页校订
+ * 改写所致），这类“缺证”只是原文变了，**不是模型编造**。
+ */
+function isSourceChangedClaim(claim: AuditClaim): boolean {
+  return claim.verdict === 'unsupported' && claim.evidence_status === 'source_changed';
+}
+
+/** 把核验不过的论断按归因拆开：普通缺证 / 原文已变更（两者要分别计数展示）。 */
+function splitUnsupportedClaims(response: ChatResponse | undefined): {
+  plain: AuditClaim[];
+  sourceChanged: AuditClaim[];
+} {
+  const unsupported = (response?.audit?.claims ?? []).filter(
+    (claim) => claim.verdict === 'unsupported'
+  );
+  return {
+    plain: unsupported.filter((claim) => !isSourceChangedClaim(claim)),
+    sourceChanged: unsupported.filter(isSourceChangedClaim)
+  };
+}
+
+/**
+ * 选区快照的「原文已变更」提示：只有当前页确实找不到提问时的选区时才需要提示，
+ * 状态为 current/unknown 时不额外占一行。
+ */
+function changedSelectionSnapshot(
+  response: ChatResponse | undefined
+): NonNullable<ChatResponse['selection_snapshot']> | null {
+  const snapshot = response?.selection_snapshot;
+  if (!snapshot) return null;
+  if (snapshot.status === 'source_changed') return snapshot;
+  if ((snapshot.source_changed_claims ?? []).length > 0) return snapshot;
+  return null;
+}
+
 /**
  * 「本轮记录」折叠时的摘要：回答方式、tokens、依据/引用/审计条数。
  *
@@ -122,10 +161,18 @@ function turnRecordSummary(response: ChatResponse | undefined): string {
   if (response.citation_support && response.citation_support.citations > 0) {
     parts.push(`引用 ${response.citation_support.citations} 条`);
   }
+  // 缺证按归因分开计数：原文已变更造成的缺证不能混进「缺证」当成模型编造。
   const claims = response.audit?.claims ?? [];
-  const unsupported = claims.filter((claim) => claim.verdict === 'unsupported').length;
-  if (unsupported > 0) parts.push(`缺证 ${unsupported} 段`);
-  else if (claims.length > 0) parts.push(`审计 ${claims.length} 段`);
+  const { plain, sourceChanged } = splitUnsupportedClaims(response);
+  if (plain.length > 0 && sourceChanged.length > 0) {
+    parts.push(`缺证 ${plain.length} 段 · 原文已变更 ${sourceChanged.length} 段`);
+  } else if (sourceChanged.length > 0) {
+    parts.push(`原文已变更 ${sourceChanged.length} 段`);
+  } else if (plain.length > 0) {
+    parts.push(`缺证 ${plain.length} 段`);
+  } else if (claims.length > 0) {
+    parts.push(`审计 ${claims.length} 段`);
+  }
   if (response.audit?.status === '部分段落未完成复核') parts.push('审计部分未完成');
   else if (response.audit && response.audit.status !== '已进行模型证据支持复核') {
     parts.push('审计未完成');
@@ -133,12 +180,12 @@ function turnRecordSummary(response: ChatResponse | undefined): string {
   return parts.join(' · ');
 }
 
-/** 审计异常或缺证时让折叠摘要变红，避免默认收起把风险提示一起藏掉。 */
+/** 审计异常或普通缺证时让折叠摘要变红，避免默认收起把风险提示一起藏掉。 */
 function turnRecordHasAlert(response: ChatResponse | undefined): boolean {
   if (!response) return false;
-  const claims = response.audit?.claims ?? [];
+  // 「原文已变更」的缺证不是模型编造，不按错误级别标红；只有普通缺证/审计异常才标红。
   return Boolean(
-    claims.some((claim) => claim.verdict === 'unsupported') ||
+    splitUnsupportedClaims(response).plain.length > 0 ||
       (response.audit && response.audit.status !== '已进行模型证据支持复核')
   );
 }
@@ -1300,6 +1347,9 @@ export function ChatPanel({
 
         {messages.map((message, messageIndex) => {
           const response = message.response;
+          // 缺证归因拆开渲染：普通缺证 vs 提问时原文已变更（不是模型编造）。
+          const auditClaims = splitUnsupportedClaims(response);
+          const changedSnapshot = changedSelectionSnapshot(response);
           const isLast = messageIndex === messages.length - 1;
           const noteSaveState = noteSaveStates[message.id];
           const canSaveNote =
@@ -1448,6 +1498,32 @@ export function ChatPanel({
                   />
                   {/* 说明/越界引用是回答可信度的一部分：常驻可见，不随折叠隐藏。 */}
                   {response?.notice ? <p className="kr-chat__meta">{response.notice}</p> : null}
+                  {/*
+                    原文已变更的归因提示：提问时的选区快照文字在当前页已找不到，
+                    所以部分段落核验不过可能只是原文改写，不是模型编造。
+                    默认收起，只占一行；样式复用现有提示条（kr-chat__notice）。
+                  */}
+                  {changedSnapshot ? (
+                    <details className="kr-chat__record">
+                      <summary>
+                        原文已变更：提问时的选区在当前页已找不到
+                        {(changedSnapshot.source_changed_claims ?? []).length > 0
+                          ? ` · ${changedSnapshot.source_changed_claims!.length} 段缺证可能不是模型编造`
+                          : ''}
+                      </summary>
+                      <p className="kr-chat__notice">
+                        {`本轮提问时冻结了第 ${changedSnapshot.page} 页的选区（快照 ${changedSnapshot.id.slice(0, 8)}…，revision ${changedSnapshot.revision.slice(0, 12)}…）。` +
+                          '当前页文本里已找不到这段选区文字，因此标为「原文已变更」的段落核验不过，' +
+                          '可能只是 OCR 重跑/页校订改写了原文，不代表模型编造；请对照当前原文核对。'}
+                      </p>
+                      {(changedSnapshot.source_changed_claims ?? []).length > 0 ? (
+                        <p className="kr-chat__meta">
+                          涉及段落：第{' '}
+                          {changedSnapshot.source_changed_claims!.join('、')} 段
+                        </p>
+                      ) : null}
+                    </details>
+                  ) : null}
                   {response?.invalid_citations && response.invalid_citations.length > 0 ? (
                     <p className="kr-page-error">
                       回答里有越界引用：
@@ -1801,33 +1877,45 @@ export function ChatPanel({
                       <p className="kr-chat__meta">
                         支持 {response.audit_summary.supported} · 推断{' '}
                         {response.audit_summary.inference} · 缺证{' '}
-                        {response.audit_summary.unsupported} · 标题{' '}
-                        {response.audit_summary.heading}
+                        {/* 服务端 unsupported 含两种归因：这里扣掉「原文已变更」单列，避免当成同一回事。 */}
+                        {Math.max(
+                          0,
+                          response.audit_summary.unsupported - auditClaims.sourceChanged.length
+                        )}
+                        {auditClaims.sourceChanged.length > 0
+                          ? ` · 原文已变更 ${auditClaims.sourceChanged.length}`
+                          : ''}{' '}
+                        · 标题 {response.audit_summary.heading}
                       </p>
                     ) : null}
-                    {(response.audit.claims ?? []).some(
-                      (claim) => claim.verdict === 'unsupported'
-                    ) ? (
+                    {auditClaims.plain.length > 0 ? (
+                      <details className="kr-chat__audit">
+                        <summary>未支持段落 {auditClaims.plain.length} 条</summary>
+                        <ul>
+                          {auditClaims.plain.slice(0, 8).map((claim) => (
+                            <li key={claim.claim}>
+                              第 {claim.claim} 段：{claim.text?.slice(0, 120)}
+                              {claim.reason ? `（${claim.reason}）` : ''}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    ) : null}
+                    {/* 原文已变更：单独列，明确不是模型编造，也不按错误级别标红。 */}
+                    {auditClaims.sourceChanged.length > 0 ? (
                       <details className="kr-chat__audit">
                         <summary>
-                          未支持段落{' '}
-                          {
-                            response.audit.claims.filter(
-                              (claim) => claim.verdict === 'unsupported'
-                            ).length
-                          }{' '}
-                          条
+                          原文已变更 · {auditClaims.sourceChanged.length}{' '}
+                          段（可能因原文改写而缺证，非模型编造）
                         </summary>
                         <ul>
-                          {(response.audit.claims ?? [])
-                            .filter((claim) => claim.verdict === 'unsupported')
-                            .slice(0, 8)
-                            .map((claim) => (
-                              <li key={claim.claim}>
-                                第 {claim.claim} 段：{claim.text?.slice(0, 120)}
-                                {claim.reason ? `（${claim.reason}）` : ''}
-                              </li>
-                            ))}
+                          {auditClaims.sourceChanged.slice(0, 8).map((claim) => (
+                            <li key={claim.claim}>
+                              第 {claim.claim} 段：{claim.text?.slice(0, 120)}
+                              {claim.reason ? `（${claim.reason}）` : ''}
+                              ；提问时的选区文字已不在当前页，不按模型编造处理
+                            </li>
+                          ))}
                         </ul>
                       </details>
                     ) : null}
@@ -1841,6 +1929,9 @@ export function ChatPanel({
                           return (
                           <li key={claim.claim}>
                             第 {claim.claim} 段：{claim.verdict}
+                            {claim.evidence_status === 'source_changed'
+                              ? ' · 原文已变更（非模型编造）'
+                              : ''}
                             {claim.claim_type
                               ? ` · ${CLAIM_TYPE_LABELS[claim.claim_type] ?? claim.claim_type}`
                               : ''}

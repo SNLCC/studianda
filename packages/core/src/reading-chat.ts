@@ -1,4 +1,4 @@
-﻿import { randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type {
   ChatResponse,
   ChatSource,
@@ -34,6 +34,7 @@ import {
 import { citationBindings, citationSupport, invalidCitations } from './citations.js';
 import { answerAnchors } from './citation.js';
 import { stripUnsupportedPages } from './review.js';
+import { gapChunkRows, gapPageHits, gapSearchTerms, gapSelectionPages } from './gap-match.js';
 import {
   auditAnswer,
   auditClaimsList,
@@ -2704,20 +2705,17 @@ export async function answerWithReading(
         new Set([...prior.pagesRead, ...execution.readPages]).size >= allPages.length &&
         allPages.every((pageNumber) => !textQuality(store.getPageText(documentId, pageNumber)).suspect);
       // 缺口检索是否查全：术语非空、本机可搜、补读后无剩余命中页。
-      const resumeGapTerms = [
-        ...new Set([
-          ...(question.match(/[\u3400-\u9fff]{2,6}|[A-Za-z]{3,}/g) ?? []),
-          ...(continuePlan.queries ?? [])
-        ])
-      ].filter((term) => term.length >= 2);
+      const resumeGapTerms = gapSearchTerms(question, continuePlan.queries ?? []);
+      const resumeGapHits = gapPageHits(
+        gapChunkRows(store, documentId, allPages),
+        resumeGapTerms
+      );
       const resumeGapRan =
         !notSearchable &&
         resumeGapTerms.length > 0 &&
-        !allPages.some(
-          (pageNumber) =>
-            !execution.readPages.includes(pageNumber) &&
-            readablePageSet.has(pageNumber) &&
-            resumeGapTerms.some((term) => store.getPageText(documentId, pageNumber).includes(term))
+        !resumeGapHits.some(
+          (hit) =>
+            !execution.readPages.includes(hit.page) && readablePageSet.has(hit.page)
         );
       onStage?.('正在综合回答');
   const synthesized = await synthesize(
@@ -3075,23 +3073,24 @@ export async function answerWithReading(
     }
   }
   // 读后缺口检索的公共口径：问题术语 + 规划查询词。
-  const gapTerms = [
-    ...new Set([
-      ...(question.match(/[\u3400-\u9fff]{2,6}|[A-Za-z]{3,}/g) ?? []).map((term) =>
-        term.trim()
-      ),
-      ...(Array.isArray(plan.queries) ? plan.queries : [])
-    ])
-  ].filter((term) => term.length >= 2);
+  const gapTerms = gapSearchTerms(
+    question,
+    Array.isArray(plan.queries) ? plan.queries : []
+  );
+  // 检索分词 + 词项覆盖率判定，替代原先整页文本上的 includes（中文断句一变就漏判）。
+  // 只在本次回答里算一次，后面补读页与「是否查全」都复用它。
+  const gapHits = gapPageHits(gapChunkRows(store, documentId, allPages), gapTerms);
   let lexicalGapPages: number[] = [];
   // 单遍阅读：未读但问题术语命中的页也补进来再生成（只增不减）。
-  if (planned.batchCount === 1 && gapTerms.length > 0) {
-    for (const pageNumber of allPages) {
-      if (readPages.has(pageNumber) || !readablePageSet.has(pageNumber)) continue;
-      const text = store.getPageText(documentId, pageNumber);
-      if (gapTerms.some((term) => text.includes(term))) lexicalGapPages.push(pageNumber);
-      if (lexicalGapPages.length >= 6) break;
-    }
+  if (planned.batchCount === 1 && gapHits.length > 0) {
+    // 补读候选：词法命中优先；词法完全空手时才用语义兜底（仅在用户配置了 embedding 时）。
+    const selection = await gapSelectionPages(store, secrets, documentId, gapTerms, {
+      anchorPage: planned.pages[0] ?? 1,
+      pages: allPages
+    });
+    lexicalGapPages = selection.pages
+      .filter((pageNumber) => !readPages.has(pageNumber) && readablePageSet.has(pageNumber))
+      .slice(0, 6);
     for (const pageNumber of lexicalGapPages) {
       planned.sources.push({
         document_id: documentId,
@@ -3117,12 +3116,9 @@ export async function answerWithReading(
   // 且补读后没有剩余未读的命中页。answerability 的 searched 只能用这个，不能用 full_extracted_text。
   const gapSearched = !notSearchable && gapTerms.length > 0;
   const remainingGapHits = gapSearched
-    ? allPages.filter(
-        (pageNumber) =>
-          !readPages.has(pageNumber) &&
-          readablePageSet.has(pageNumber) &&
-          gapTerms.some((term) => store.getPageText(documentId, pageNumber).includes(term))
-      )
+    ? gapHits
+        .map((hit) => hit.page)
+        .filter((pageNumber) => !readPages.has(pageNumber) && readablePageSet.has(pageNumber))
     : [];
   const gapRan = gapSearched && remainingGapHits.length === 0;
 

@@ -295,6 +295,9 @@ for (const artifact of [
 rmSync(path.join(outCoreDir, 'node_modules', '.pnpm'), { recursive: true, force: true });
 // 清理历史 deploy 试验目录，避免被打进 asar。
 rmSync(path.join(outCoreDir, 'apps'), { recursive: true, force: true });
+// 随包字体走 extraResources（<resources>/assets/fonts）；deploy 顺带复制出来的 assets/ 不进 asar：
+// 原生 libfont 读不了 asar 虚拟路径，留着只是冗余，还可能被误读成"已经打进包了"。
+rmSync(path.join(outCoreDir, 'assets'), { recursive: true, force: true });
 for (const entry of existsSync(path.join(desktopDir, 'out'))
   ? readdirSync(path.join(desktopDir, 'out'))
   : []) {

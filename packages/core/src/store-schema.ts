@@ -311,6 +311,25 @@ export const SCHEMA_SQL = `      CREATE TABLE IF NOT EXISTS schema_meta(
       );
       CREATE INDEX IF NOT EXISTS book_summaries_document ON book_summaries(document_id);
 
+      -- schema_version 20：选区冻结快照（不可变）。
+      -- 用户带选中原文提问时落一条 {text, text_hash, page, revision}；之后 OCR 重跑/页校订
+      -- 改写导致旧回答对不上原文时，核验可以把“缺证”归因为「原文已变更」而不是模型编造。
+      -- revision = 提问时该页文本的 sha256；原文变化会产生新 revision 的新快照，旧快照不更新。
+      CREATE TABLE IF NOT EXISTS selection_snapshots(
+        id TEXT PRIMARY KEY,
+        document_id TEXT NOT NULL,
+        page INTEGER NOT NULL DEFAULT 0,
+        text TEXT NOT NULL,
+        text_hash TEXT NOT NULL,
+        revision TEXT NOT NULL DEFAULT '',
+        question TEXT DEFAULT '',
+        created TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS selection_snapshots_unique
+        ON selection_snapshots(document_id, text_hash, revision);
+      CREATE INDEX IF NOT EXISTS selection_snapshots_document
+        ON selection_snapshots(document_id, created);
+
       CREATE TABLE IF NOT EXISTS structure_pages(
         path TEXT,
         page INTEGER,

@@ -173,6 +173,7 @@ import {
   startMarkdownScan,
   subscribeMarkdownJobChanges
 } from './markdown-import.js';
+import { isAiExportRefused } from './export-marker.js';
 
 export interface ServerOptions {
   token: string;
@@ -2628,7 +2629,12 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         .header('content-disposition', 'attachment; filename="reading-notes.md"')
         .send(exported.markdown);
     } catch (error) {
-      return notFound(reply, error instanceof Error ? error.message : '导出失败');
+      const message = error instanceof Error ? error.message : '导出失败';
+      // fail-closed：含 AI 内容却写不进标识头 → 明确 4xx，不产出“去标识”文件。
+      if (isAiExportRefused(error)) {
+        return reply.code(422).send({ error: API_ERROR_CODES.exportFailed, message });
+      }
+      return notFound(reply, message);
     }
   });
 
@@ -2649,6 +2655,10 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         .send(Buffer.from(exported.bytes));
     } catch (error) {
       const message = error instanceof Error ? error.message : '导出 PDF 失败';
+      // fail-closed：含 AI 内容却写不进 AI 元数据 → 明确 4xx，不产出“去标识”副本。
+      if (isAiExportRefused(error)) {
+        return reply.code(422).send({ error: API_ERROR_CODES.exportFailed, message });
+      }
       // 打不开/写不出/加密等文件级失败：用 409 表明"原文件未改动"，与参数错误区分。
       if (/未改动|写入|打开|占用|加密|锁定/.test(message)) {
         return reply.code(409).send({ error: API_ERROR_CODES.exportFailed, message });

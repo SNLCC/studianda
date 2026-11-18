@@ -57,6 +57,10 @@ import {
 } from './memory-sources.js';
 import { citationSupport, invalidCitations } from './citations.js';
 import { inputCost, messages as budgetMessages } from './request-budget.js';
+import {
+  attributeUnsupportedClaims,
+  type SelectionSnapshotRecord
+} from './selection-snapshot.js';
 
 interface ChatConfig {
   baseUrl: string;
@@ -598,6 +602,23 @@ async function answerQuestionInner(
   // 都没有 = 全部文献。放在联网判断之前：corpus 没有「当前文献」上下文，不能按文献优先。
   const corpusScope = input.reading_scope === 'corpus' || Boolean(corpusResume);
 
+  // 选区冻结快照：只要这一轮真的带选中原文向本机文献提问，就把选区落成不可变快照
+  // （不因之后 OCR 重跑/页校订改写而变），供审计把“缺证”归因为「原文已变更」。
+  // 写快照失败不影响回答（审计归因退化为普通缺证），所以吞掉异常而不是中断提问。
+  let selectionSnapshot: SelectionSnapshotRecord | null = null;
+  if (selection && input.documentId && !corpusScope) {
+    try {
+      selectionSnapshot = store.saveSelectionSnapshot({
+        documentId: input.documentId,
+        page: input.page,
+        text: selection,
+        question
+      });
+    } catch {
+      selectionSnapshot = null;
+    }
+  }
+
   // 问「全书/整本书」时优先用已生成的分层摘要：缓存命中就不再把整本书重读一遍。
   // 是否"在要整篇概述"交给路由模型判断（summaryIntent），不按固定问法正则匹配：
   // 换一种说法也能覆盖；模型判断不可用时退回正常阅读。
@@ -923,6 +944,42 @@ async function answerQuestionInner(
       );
       if (readingAnswer) {
         let finalReading = readingAnswer;
+        // 「验不过」的归因层：不改逐字核验判定，只在缺证时检查“选区快照还在不在当前页文本里”。
+        // 不在 → 该条标 evidence_status='source_changed'（原文已变更，不是模型编造）。
+        let selectionSnapshotView: ChatResponse['selection_snapshot'];
+        let sourceChangedClaimNumbers: number[] = [];
+        if (selectionSnapshot) {
+          const evidence = store.selectionSnapshotEvidence(selectionSnapshot);
+          const claimsForSnapshot = finalReading.audit?.claims ?? [];
+          const attribution =
+            evidence.status === 'unknown'
+              ? { claims: claimsForSnapshot, sourceChangedClaims: [] as number[] }
+              : attributeUnsupportedClaims(
+                  claimsForSnapshot,
+                  selectionSnapshot.text,
+                  evidence.currentPageText,
+                  { page: selectionSnapshot.page }
+                );
+          sourceChangedClaimNumbers = attribution.sourceChangedClaims;
+          if (finalReading.audit && attribution.sourceChangedClaims.length > 0) {
+            finalReading = {
+              ...finalReading,
+              audit: { ...finalReading.audit, claims: attribution.claims }
+            };
+          }
+          selectionSnapshotView = {
+            id: selectionSnapshot.id,
+            page: selectionSnapshot.page,
+            text_hash: selectionSnapshot.textHash,
+            revision: selectionSnapshot.revision,
+            created: selectionSnapshot.created,
+            status: evidence.status,
+            ...(attribution.sourceChangedClaims.length > 0
+              ? { source_changed_claims: attribution.sourceChangedClaims }
+              : {})
+          };
+          finalReading = { ...finalReading, selection_snapshot: selectionSnapshotView };
+        }
         const routes = finalReading.audit?.routing ?? [];
         const externalClaims = routes.filter(
           (route) => route.suggested === '联网搜索' || route.suggested === '学术资料'
@@ -1249,6 +1306,16 @@ async function answerQuestionInner(
         }
         if (searchFollowup && searchFollowup.rounds > 1) {
           noticeParts.push('联网补查已追加一轮（共 2 轮），仍无法确认的结论请以文献原文为准。');
+        }
+        if (
+          selectionSnapshotView?.status === 'source_changed' &&
+          sourceChangedClaimNumbers.length > 0
+        ) {
+          noticeParts.push(
+            `提问时的选区原文已变更：当前页文本里已找不到这段选区，` +
+              `有 ${sourceChangedClaimNumbers.length} 条核验不过的段落可能因此缺证，` +
+              '不代表模型编造；请对照当前原文核对。'
+          );
         }
         const coverage: NonNullable<ChatResponse['coverage']> = {
           dimensions: finalReading.coverage?.dimensions ?? [],

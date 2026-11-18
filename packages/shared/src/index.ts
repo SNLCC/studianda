@@ -1939,6 +1939,25 @@ export interface ChatResponse {
     stopped_reason?: string;
   };
   coverage_ledger?: CoverageLedgerRowRecord[];
+  /**
+   * 本轮提问时冻结的选区快照（不可变）及其相对**当前**原文的状态。
+   *
+   * - `current`：提问时的选区文字仍在当前页文本中；
+   * - `source_changed`：当前页文本里已找不到这段文字（OCR 重跑/页校订改写），
+   *   因此核验不过的段落可能只是原文变了，不是模型编造；
+   * - `unknown`：快照没有页号，无法判定。
+   *
+   * `source_changed_claims` 是被标为 `evidence_status: 'source_changed'` 的论断编号。
+   */
+  selection_snapshot?: {
+    id: string;
+    page: number;
+    text_hash: string;
+    revision: string;
+    created: string;
+    status: 'current' | 'source_changed' | 'unknown';
+    source_changed_claims?: number[];
+  };
   unread_pages?: number[];
   /** 本轮因批次上限没有执行的批次数；剩余页已存入阅读任务，可继续阅读。 */
   deferred_batches?: number;
@@ -1985,6 +2004,12 @@ export interface ChatResponse {
       evidence?: Array<{ source: number; quote: string; evidence_key?: string; page?: number }>;
       review_problem?: string;
       candidate_text?: string;
+      /**
+       * 缺证归因：`source_changed` = 提问时的选区快照文字在当前页已不存在，
+       * 这段“缺证”可能是原文被 OCR 重跑/页校订改写所致，不是模型编造。
+       * 只有 verdict=unsupported 且快照文本确已不在当前页时才出现。
+       */
+      evidence_status?: 'source_changed';
     }>;
     /** 审计后删除的无证据页码表述。 */
     page_mentions_removed?: Array<{ claim: number; text: string }>;

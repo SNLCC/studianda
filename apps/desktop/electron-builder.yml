@@ -25,6 +25,9 @@ files:
   - "!**/*.map"
   - "!**/*.test.*"
   - "!**/out/core/src/**"
+  # 水印字体不随 pnpm deploy 的 out/core/assets 进 asar：canvas 原生模块（libfont）读不了
+  # asar 内的虚拟路径，统一由 extraResources 放到 resources/assets/fonts 再读。
+  - "!**/out/core/assets/**"
   - "!**/test/**"
   - "!**/tests/**"
   - "!**/docs/**"
@@ -49,6 +52,11 @@ extraResources:
     to: LICENSE
   - from: ../../NOTICE
     to: NOTICE
+  # 水印字体（Noto Sans CJK SC 的水印子集 TTF，约 11 KB，canvas 读不了 woff2）：
+  # Core 是独立子进程，按 <resources>/assets/fonts/ 读取，见 packages/core/src/watermark.ts
+  # 的 bundledWatermarkFont()。不要改成打包进 asar 的路径：原生 canvas 读不了 asar 内文件。
+  - from: ../../packages/core/assets/fonts/StudiandaWatermark.ttf
+    to: assets/fonts/StudiandaWatermark.ttf
   # 运行期窗口 / 任务栏图标（开卷版）；ico 给 Windows 用，png 作为其它平台/兜底。
   - from: build/icon-open.ico
     to: icon-open.ico

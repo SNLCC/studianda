@@ -21,7 +21,17 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { SCHEMA_SQL } from './store-schema.js';
-import { looksLikeAiContent, withAiExportHeader } from '@studianda/shared';
+import { looksLikeAiContent } from '@studianda/shared';
+import { buildMarkedMarkdownExport } from './export-marker.js';
+import {
+  normalizeSnapshotText,
+  pageTextRevision,
+  selectionSnapshotStatus,
+  snapshotStillPresent,
+  snapshotTextHash,
+  type SelectionSnapshotRecord,
+  type SelectionSnapshotStatus
+} from './selection-snapshot.js';
 import { purgeDocumentRetrievalCaches } from './retrieval.js';
 import { loadImage } from '@napi-rs/canvas';
 import type {
@@ -441,6 +451,30 @@ interface ParsedChunk {
   page: number;
   text: string;
   bbox: string;
+}
+
+interface SelectionSnapshotRow {
+  id: string;
+  document_id: string;
+  page: number;
+  text: string;
+  text_hash: string;
+  revision: string;
+  question: string | null;
+  created: string;
+}
+
+function toSelectionSnapshot(row: SelectionSnapshotRow): SelectionSnapshotRecord {
+  return {
+    id: row.id,
+    documentId: row.document_id,
+    page: Number(row.page ?? 0),
+    text: row.text ?? '',
+    textHash: row.text_hash ?? '',
+    revision: row.revision ?? '',
+    question: row.question ?? '',
+    created: row.created ?? ''
+  };
 }
 
 interface ParsedPdf {
@@ -2179,7 +2213,8 @@ export class Store {
       previousVersion = 0;
     }
     // 备份必须在 BEGIN 之前（VACUUM INTO 不能在事务内执行）。
-    const currentVersion = 19;
+    // 20：基线新增全书摘要缓存 + 选区冻结快照（selection_snapshots）。
+    const currentVersion = 20;
     if (previousVersion > 0 && previousVersion < currentVersion) {
       this.backupBeforeMigration(previousVersion);
     }
@@ -2313,7 +2348,7 @@ export class Store {
     }
     this.db
       .prepare('INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)')
-      .run('schema_version', '19');
+      .run('schema_version', '20');
       this.db.exec('COMMIT');
     } catch (error) {
       // 整体回滚：schema、回填、schema_version 一起回到迁移前；迁移前快照仍保留在
@@ -5021,7 +5056,8 @@ export class Store {
     return buildAnnotatedPdf(bytes, this.listAnnotations(documentId));
   }
 
-  exportMarkdown(documentId: string): { markdown: string; filename: string } {    const document = this.getDocument(documentId);
+  exportMarkdown(documentId: string): { markdown: string; filename: string } {
+    const document = this.getDocument(documentId);
     if (!document) throw new Error('文档不存在');
     const notes = this.listNotes(documentId);
     const annotations = this.listAnnotations(documentId);
@@ -5047,14 +5083,15 @@ export class Store {
         if (annotation.content) parts.push(annotation.content, '');
       }
     }
+    // 只有内容里确实带 AI 标识（存为笔记的文件头 / 复制粘贴的标识文字）时才写文件头；
+    // 纯用户自己的笔记与批注导出不加 AI 元数据。含 AI 内容却写不进标识头时，
+    // `buildMarkedMarkdownExport` 会拒绝产出（fail-closed），异常由路由返回 4xx。
+    const containsAi =
+      notes.some((note) => looksLikeAiContent(note.content)) ||
+      annotations.some((annotation) => looksLikeAiContent(annotation.content));
+    const body = parts.filter((part) => part != null).join('\n').replace(/\n{3,}/g, '\n\n') + '\n';
     return {
-      // 只有内容里确实带 AI 标识（存为笔记的文件头 / 复制粘贴的标识文字）时才写文件头；
-      // 纯用户自己的笔记与批注导出不加 AI 元数据。
-      markdown: withAiExportHeader(
-        parts.filter((part) => part != null).join('\n').replace(/\n{3,}/g, '\n\n') + '\n',
-        notes.some((note) => looksLikeAiContent(note.content)) ||
-          annotations.some((annotation) => looksLikeAiContent(annotation.content))
-      ),
+      markdown: buildMarkedMarkdownExport(body, containsAi),
       filename: `${document.name.replace(/\.pdf$/i, '')}-批注.md`
     };
   }
@@ -7875,6 +7912,132 @@ export class Store {
       .prepare('SELECT text FROM chunks WHERE document_id = ? AND page = ? ORDER BY rowid')
       .all(documentId, target) as unknown as Array<{ text: string }>;
     return reflowPageLines(rows.map((row) => row.text));
+  }
+
+  /**
+   * 落一条**不可变**的选区快照（用户带选中原文提问时调用）。
+   *
+   * - `text` 保留用户选中的原文（首尾裁剪）；比较时再做空白归一化，避免 OCR 换行差异误判；
+   * - `page` 优先用调用方给的当前页，页文本对不上时再按页找一次（用户可能翻页后提问）；
+   * - `revision` 是提问时该页文本的 sha256：OCR 重跑/页校订改写后 revision 必变，
+   *   同一选区会落成新快照，旧快照原样保留（不 UPDATE）。
+   *
+   * 同一 (document, text_hash, revision) 幂等：重复提问不会重复落行。
+   * 文献不存在/选区为空时返回 null（调用方按“无快照”处理，不影响回答）。
+   */
+  saveSelectionSnapshot(input: {
+    documentId: string;
+    text: string;
+    page?: number;
+    question?: string;
+  }): SelectionSnapshotRecord | null {
+    const document = this.getDocument(input.documentId);
+    const text = String(input.text ?? '').trim();
+    if (!document || !normalizeSnapshotText(text)) return null;
+    const page = this.resolveSelectionSnapshotPage(document.id, text, input.page, document.pages);
+    const revision = page > 0 ? pageTextRevision(this.getPageText(document.id, page)) : '';
+    const textHash = snapshotTextHash(text);
+    const existing = this.db
+      .prepare(
+        `SELECT id, document_id, page, text, text_hash, revision, question, created
+         FROM selection_snapshots
+         WHERE document_id = ? AND text_hash = ? AND revision = ?`
+      )
+      .get(document.id, textHash, revision) as unknown as SelectionSnapshotRow | undefined;
+    if (existing) return toSelectionSnapshot(existing);
+    const record: SelectionSnapshotRecord = {
+      id: randomUUID(),
+      documentId: document.id,
+      page,
+      text,
+      textHash,
+      revision,
+      question: String(input.question ?? '').trim(),
+      created: new Date().toISOString()
+    };
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO selection_snapshots
+           (id, document_id, page, text, text_hash, revision, question, created)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        record.id,
+        record.documentId,
+        record.page,
+        record.text,
+        record.textHash,
+        record.revision,
+        record.question,
+        record.created
+      );
+    // 并发插入同一条快照时以库里的为准（INSERT OR IGNORE 之后回查一次）。
+    const stored = this.db
+      .prepare(
+        `SELECT id, document_id, page, text, text_hash, revision, question, created
+         FROM selection_snapshots
+         WHERE document_id = ? AND text_hash = ? AND revision = ?`
+      )
+      .get(document.id, textHash, revision) as unknown as SelectionSnapshotRow | undefined;
+    return stored ? toSelectionSnapshot(stored) : record;
+  }
+
+  /** 选区快照定位到的页码：优先调用方给的页；该页文本不含选区时再逐页找一遍。 */
+  private resolveSelectionSnapshotPage(
+    documentId: string,
+    normalizedText: string,
+    preferredPage: number | undefined,
+    totalPages: number
+  ): number {
+    const preferred =
+      typeof preferredPage === 'number' &&
+      Number.isInteger(preferredPage) &&
+      preferredPage >= 1 &&
+      preferredPage <= totalPages
+        ? preferredPage
+        : 0;
+    if (preferred > 0 && snapshotStillPresent(normalizedText, this.getPageText(documentId, preferred))) {
+      return preferred;
+    }
+    for (let pageNumber = 1; pageNumber <= totalPages; pageNumber += 1) {
+      if (pageNumber === preferred) continue;
+      if (snapshotStillPresent(normalizedText, this.getPageText(documentId, pageNumber))) {
+        return pageNumber;
+      }
+    }
+    // 找不到（例如选区跨页）：保留调用方给的页号，revision 记当时的页文本。
+    return preferred;
+  }
+
+  /** 某文献最近的选区快照（新的在前）；供审计/界面溯源。 */
+  listSelectionSnapshots(documentId: string, limit = 20): SelectionSnapshotRecord[] {
+    const safeLimit = Number.isInteger(limit) ? Math.min(Math.max(limit, 1), 200) : 20;
+    const rows = this.db
+      .prepare(
+        `SELECT id, document_id, page, text, text_hash, revision, question, created
+         FROM selection_snapshots WHERE document_id = ?
+         ORDER BY created DESC, rowid DESC LIMIT ?`
+      )
+      .all(documentId, safeLimit) as unknown as SelectionSnapshotRow[];
+    return rows.map(toSelectionSnapshot);
+  }
+
+  /**
+   * 快照相对**当前**页文本的状态：`current` 命中、`source_changed` 原文已变更、
+   * `unknown` 快照没有页号。同时返回当前页文本，供归因逻辑判断“缺证”是否为原文变化所致。
+   */
+  selectionSnapshotEvidence(snapshot: Pick<SelectionSnapshotRecord, 'text' | 'page' | 'documentId'>): {
+    status: SelectionSnapshotStatus;
+    currentPageText: string | null;
+  } {
+    if (!snapshot.page || snapshot.page <= 0) {
+      return { status: 'unknown', currentPageText: null };
+    }
+    const currentPageText = this.getPageText(snapshot.documentId, snapshot.page);
+    return {
+      status: selectionSnapshotStatus(snapshot, currentPageText),
+      currentPageText
+    };
   }
 
   /** 解析 page_edits.boxes（归一化 0..1 的 OCR 行框）；坏数据按空处理。 */

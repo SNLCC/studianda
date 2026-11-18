@@ -63,6 +63,11 @@ export interface AuditClaim {
   evidence?: AuditEvidence[];
   review_problem?: string;
   candidate_text?: string;
+  /**
+   * 缺证归因（只在上层拿到选区快照后标注，不改变 verdict）。
+   * `source_changed` = 提问时的选区文字在当前页已不存在，缺证可能源于原文变更。
+   */
+  evidence_status?: 'source_changed';
 }
 
 export interface ClaimRoute {

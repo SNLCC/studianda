@@ -8,6 +8,7 @@ import {
   type PDFPage
 } from 'pdf-lib';
 import { looksLikeAiContent, markdownPlainText, type AnnotationRecord } from '@studianda/shared';
+import { AI_EXPORT_REFUSED_MESSAGE, isAiExportRefused } from './export-marker.js';
 
 export interface AnnotatedPdfUnplacedDetail {
   id: string;
@@ -373,6 +374,30 @@ function markAiMetadata(pdf: PDFDocument): void {
   setOnce('AIContent', 'annotations contain AI-generated text pasted by the user');
 }
 
+/** Info 字典里是否已带可识别的 AI 标识（用于导出前核验，不只看“调用过写入”）。 */
+function aiMetadataMarked(pdf: PDFDocument): boolean {
+  const current = pdf.context.trailerInfo.Info;
+  const info =
+    current instanceof PDFDict
+      ? current
+      : current instanceof PDFRef
+        ? pdf.context.lookup(current, PDFDict)
+        : null;
+  if (!(info instanceof PDFDict)) return false;
+  return ['AIGC', 'AIGenerated', 'AITool'].every((key) => info.has(PDFName.of(key)));
+}
+
+/**
+ * 导出前的 fail-closed 核验：含 AI 内容时必须确认 AI 元数据真的写进了 Info 字典。
+ *
+ * 导出为测试与调用方都保留这个检查：只写一次 `markAiMetadata` 就相信它成功，
+ * 正是“写失败/漏写仍产出文件”的漏洞来源。核验不过抛中文拒绝错误，不产出 bytes。
+ * 导出以便单测直接验证核验逻辑。
+ */
+export function assertAiMetadataWritten(pdf: PDFDocument): void {
+  if (!aiMetadataMarked(pdf)) throw new Error(AI_EXPORT_REFUSED_MESSAGE);
+}
+
 /** 生成带批注的 PDF 副本；原文件字节不改。文件级失败包成中文 409 话术。 */
 export async function buildAnnotatedPdf(
   original: Uint8Array | null | undefined,
@@ -563,9 +588,15 @@ export async function buildAnnotatedPdf(
   let bytes: Uint8Array;
   try {
     // 批注里若含 AI 回答/译文（带复制标识），副本一并写入 AI 元数据，与 Markdown 导出口径一致。
-    if (hasAiContentInAnnotations(annotations)) markAiMetadata(pdf);
+    // 写入后必须核验元数据真的存在：写不进就拒绝产出（fail-closed），绝不生成无标识副本。
+    if (hasAiContentInAnnotations(annotations)) {
+      markAiMetadata(pdf);
+      assertAiMetadataWritten(pdf);
+    }
     bytes = await pdf.save({ useObjectStreams: false });
   } catch (error) {
+    // 拒绝导出是明确的产品决定：保留原中文文案，不包成“文件级失败”。
+    if (isAiExportRefused(error)) throw error;
     throw fileLevelExportError(error);
   }
   return {

@@ -79,5 +79,14 @@
     "tier": "latin",
     "codepoints": 1847,
     "renamed": false
+  },
+  {
+    "file": "StudiandaWatermark.ttf",
+    "bytes": 14696,
+    "sha256": "8A3DDB1C1F4A02AE1ABFFDAEC373C8F23B83C6CA5387E89860F6E455F832FA74",
+    "weight": 400,
+    "tier": "watermark",
+    "codepoints": 38,
+    "renamed": false
   }
 ]
