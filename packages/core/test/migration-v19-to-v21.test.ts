@@ -483,7 +483,7 @@ function columnByName(columns: SchemaColumn[], name: string): SchemaColumn | und
 }
 
 describe.each([19, 20] as const)('schema_version %i → 24 迁移', (version) => {
-  it('补建表/列、版本升到 24，旧行数与内容/时间戳逐字不变，老行 origin=user，重复迁移幂等', () => {
+  it('补建表/列、版本升到 25，旧行数与内容/时间戳逐字不变，老行 origin=user，重复迁移幂等', () => {
     const dir = mkdtempSync(path.join(root, `v${version}-`));
     let store: Store | null = null;
     try {
@@ -543,7 +543,7 @@ describe.each([19, 20] as const)('schema_version %i → 24 迁移', (version) =>
 
       // ---- 迁移后：版本、表、列 ----
       const after = readState(dir);
-      expect(after.version).toBe('24');
+      expect(after.version).toBe('25');
       expect(tableNames(after)).toEqual(
         expect.arrayContaining([
           'book_summaries',
@@ -628,7 +628,7 @@ describe.each([19, 20] as const)('schema_version %i → 24 迁移', (version) =>
         }
       }
       const afterReopen = readState(dir);
-      expect(afterReopen.version).toBe('24');
+      expect(afterReopen.version).toBe('25');
       expect(afterReopen.schemaObjects).toEqual(schemaAfterFirstMigration);
       expect(afterReopen.rows).toEqual(after.rows);
       // 已是 23 的库不会再备份一次。

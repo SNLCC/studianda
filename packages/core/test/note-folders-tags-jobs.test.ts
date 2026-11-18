@@ -102,7 +102,7 @@ describe('schema 12：notes.tags + note_folders', () => {
 
     const store = new Store(dir);
     try {
-      expect(schemaVersion(store)).toBe('24');
+      expect(schemaVersion(store)).toBe('25');
       const db = (store as unknown as { db: DatabaseSync }).db;
       const columns = (db.prepare('PRAGMA table_info(notes)').all() as Array<{ name: string }>).map(
         (column) => column.name
@@ -119,7 +119,7 @@ describe('schema 12：notes.tags + note_folders', () => {
     // 幂等重开：版本仍是 13，tags 数据不会被重置。
     const reopened = new Store(dir);
     try {
-      expect(schemaVersion(reopened)).toBe('24');
+      expect(schemaVersion(reopened)).toBe('25');
       expect(reopened.listNoteFolders()).toHaveLength(4);
     } finally {
       reopened.close();

@@ -159,6 +159,17 @@ export {
   type ChatPanelProps,
   type ChatMessageView
 } from './ChatPanel.js';
+export {
+  PROJECT_SCOPE_EMPTY_NOTICE,
+  PROJECT_SCOPE_MISSING_NOTICE,
+  ProjectScopePane,
+  activeProjectOptions,
+  projectScopeAskPayload,
+  resolveProjectScope,
+  type ProjectScopeOption,
+  type ProjectScopeResolution,
+  type ProjectScopeState
+} from './project-scope.js';
 export { TranslationPanel, type TranslationPanelProps } from './TranslationPanel.js';
 export {
   TranslationLayoutView,

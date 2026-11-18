@@ -6,7 +6,8 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { Store } from '../src/store.js';
 
 /**
- * schema_version **23 → 24** 旧库升级验证（直接跑真实 `Store` 构造函数里的 migrate）。
+ * schema_version **23 → 24** 旧库升级验证（直接跑真实 `Store` 构造函数里的 migrate；
+ * 当前迁移终点已到 25，同时会补 24→25 的 corpus_sessions 来源项目两列）。
  *
  * 本轮迁移只给 `messages` 加两列（不重建表、不动既有行）：
  * - `scope_kind TEXT NOT NULL DEFAULT 'document'`：消息作用域显式化（'document' | 'corpus'），
@@ -14,10 +15,10 @@ import { Store } from '../src/store.js';
  * - `audit_summary TEXT`（可空 JSON）：assistant 消息的审计摘要（缺证/原文已变更/越界引用计数）。
  *
  * 夹具用 node:sqlite 手工构造 v23 旧库（documents/messages/document_chat_sessions/会话触发器/
- * corpus_sessions/corpus_session_documents 都是 v23 真实形态，messages **没有**新增两列），
- * 塞入固定数据后关库，再交给 `new Store(dir)` 触发真实迁移。断言覆盖：补两列与默认值、版本升到 24、
- * 旧行逐字不变且 scope_kind='document'/audit_summary=NULL、迁移前快照是 v23、重复迁移幂等、
- * 迁移后新旧消息都能正常读写（含审计摘要解析容错）。
+ * corpus_sessions/corpus_session_documents 都是 v23 真实形态，messages **没有**新增两列，
+ * corpus_sessions 也**没有**来源项目两列），塞入固定数据后关库，再交给 `new Store(dir)` 触发真实迁移。
+ * 断言覆盖：补两列与默认值、版本升到 25、旧行逐字不变且 scope_kind='document'/audit_summary=NULL、
+ * 迁移前快照是 v23、重复迁移幂等、迁移后新旧消息都能正常读写（含审计摘要解析容错）。
  */
 
 const root = mkdtempSync(path.join(tmpdir(), 'studianda-migration-v23-v24-'));
@@ -262,7 +263,7 @@ function migrationBackups(dir: string): string[] {
 }
 
 describe('schema_version 23 → 24 迁移', () => {
-  it('messages 加 scope_kind/audit_summary 两列，版本升到 24，旧行逐字不变且读取容错', () => {
+  it('messages 加 scope_kind/audit_summary 两列，版本升到 25，旧行逐字不变且读取容错', () => {
     const dir = mkdtempSync(path.join(root, 'v23-'));
     let store: Store | null = null;
     try {
@@ -333,7 +334,7 @@ describe('schema_version 23 → 24 迁移', () => {
         afterVersion = readVersion(afterDb) ?? '';
         afterObjects = schemaObjectNames(afterDb);
         afterMessageColumns = tableColumns(afterDb, 'messages');
-        expect(afterVersion).toBe('24');
+        expect(afterVersion).toBe('25');
         // 只加列不重建表：v23 已有的语料会话两表/索引仍在。
         expect(afterObjects).toEqual(
           expect.arrayContaining([
@@ -496,7 +497,7 @@ describe('schema_version 23 → 24 迁移', () => {
         store = null;
         const reopenedDb = readOnlyDb(dir);
         try {
-          expect(readVersion(reopenedDb)).toBe('24');
+          expect(readVersion(reopenedDb)).toBe('25');
           expect(schemaObjectNames(reopenedDb)).toEqual(afterObjects);
         } finally {
           reopenedDb.close();

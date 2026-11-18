@@ -209,7 +209,12 @@ export const SCHEMA_SQL = `      CREATE TABLE IF NOT EXISTS schema_meta(
         title TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        archived_at TEXT NOT NULL DEFAULT ''
+        archived_at TEXT NOT NULL DEFAULT '',
+        -- schema_version 25：来源项目快照（用 projectId 建会话时落库，否则为 NULL）。
+        -- 故意不建外键：项目被删后 id 允许悬空，不连带删除会话；name 存建会话时的项目名，
+        -- 项目之后改名/删除仍能显示当时名字（读取方不做删除判断）。
+        source_project_id TEXT,
+        source_project_name TEXT
       );
       CREATE INDEX IF NOT EXISTS corpus_sessions_updated
         ON corpus_sessions(updated_at);

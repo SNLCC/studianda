@@ -12,6 +12,14 @@ import type {
   SearchPlan
 } from '@studianda/shared';
 import { ChatMarkdown } from './ChatMarkdown.js';
+import {
+  PROJECT_SCOPE_EMPTY_NOTICE,
+  PROJECT_SCOPE_MISSING_NOTICE,
+  ProjectScopePane,
+  projectScopeAskPayload,
+  resolveProjectScope,
+  type ProjectScopeOption
+} from './project-scope.js';
 import { onHostKeyDown } from './host-scope.js';
 
 /** 秒 → "25 秒" / "2 分 10 秒"；闸门里只说人话，不显示毫秒。 */
@@ -264,6 +272,12 @@ export interface ChatAskOptions {
   scopeDocuments?: string[];
   /** 按标签圈跨文献范围（与 scopeDocuments 二选一；显式文献优先）。 */
   scopeTags?: string[];
+  /**
+   * 逻辑项目 id：按项目**当前**文献集合圈跨文献范围（与 scopeDocuments/scopeTags 互斥）。
+   *
+   * 由「按项目」范围选择器给出；空项目、已失效项目不会出现在这里（前端先拦住）。
+   */
+  projectId?: string;
   /** 用户改写过的联网查询词（只影响实际发出的搜索词，不改变已生成的搜索计划）。 */
   webQuery?: string;
   /** 本轮是否允许“审计发现缺口后补查”（review 档的回答后确认，仅本次生效）。 */
@@ -373,6 +387,12 @@ export interface ChatPanelProps {
   pendingTasks?: ReadingTaskSummary[];
   onResumeTask?(task: ReadingTaskSummary): void;
   availableDocuments?: Array<{ id: string; name: string; tags?: string[] }>;
+  /**
+   * 可按项目圈定范围的项目清单（宿主复用 `listProjects`，只传**未归档**项目）。
+   *
+   * 不传（undefined）时隐藏「按项目」方式——独立会话等不消费项目范围的场景保持原样。
+   */
+  availableProjects?: ProjectScopeOption[];
   /** 独立会话模式：不依附某篇文献（范围只有库内检索/跨文献精读，隐藏章节与本页/整篇选项）。 */
   standalone?: boolean;
   /**
@@ -517,6 +537,7 @@ export function ChatPanel({
   pendingTasks = [],
   onResumeTask,
   availableDocuments = [],
+  availableProjects,
   standalone = false,
   contextStrategy = 'rounds',
   compactToolbar = false,
@@ -594,10 +615,13 @@ export function ChatPanel({
   // 笔记/批注纳入会话：默认值由父级给（阅读内与独立会话默认勾选），用户可逐轮切换。
   const [includeMemory, setIncludeMemory] = useState(includeMemoryDefault);
   const [scopeDocuments, setScopeDocuments] = useState<string[]>([]);
-  // 跨文献范围有两种圈法：按文献（scopeDocuments）或按标签（scopeTags）。
-  // 两者互不覆盖（切换只改提交口径），但提交时显式文献优先。
-  const [scopeMode, setScopeMode] = useState<'documents' | 'tags'>('documents');
+  // 跨文献范围有三种圈法：按文献（scopeDocuments）、按标签（scopeTags）或按项目（scopeProjectId）。
+  // 三者互斥：选了项目就清空手选文献/标签，做了手选也清掉项目，提交口径见 projectScopeAskPayload。
+  const [scopeMode, setScopeMode] = useState<'documents' | 'tags' | 'project'>('documents');
   const [scopeTags, setScopeTags] = useState<string[]>([]);
+  const [scopeProjectId, setScopeProjectId] = useState('');
+  // 已选项目失效后降级回手选范围的提示（不是每轮都出现，选中/切换后清掉）。
+  const [scopeNotice, setScopeNotice] = useState('');
   const [scopeDialogOpen, setScopeDialogOpen] = useState(false);
   const [scopeQuery, setScopeQuery] = useState('');
   const [fontSize, setFontSize] = useState(() => readAnswerFontSize());
@@ -988,6 +1012,56 @@ export function ChatPanel({
       return next.length === current.length ? current : next;
     });
   }, [scopeTagKey, scopeDocumentKey]);
+  const projectScope = resolveProjectScope(availableProjects, scopeProjectId);
+  // 已选项目被删除或归档（不再出现在未归档清单里）：降级回手选范围，绝不静默带一个会 404 的 id。
+  useEffect(() => {
+    if (scopeMode !== 'project' || projectScope.state !== 'missing') return;
+    setScopeProjectId('');
+    setScopeMode('documents');
+    setScopeNotice(PROJECT_SCOPE_MISSING_NOTICE);
+  }, [scopeMode, projectScope.state]);
+  // 只有解析成功（项目存在且非空）才把 projectId 带进本轮请求。
+  const usableProjectId =
+    scopeMode === 'project' && projectScope.state === 'ok' ? scopeProjectId : '';
+  // 空项目/失效项目时拦下提问：界面上已有提示，输入保留但不发请求。
+  const scopeAskBlocked = scopeMode === 'project' && projectScope.blocked;
+  // 工具栏「已选…」按钮的简短文案：按项目时显示项目名，让范围一眼可见。
+  const scopeSummaryLabel =
+    scopeMode === 'project'
+      ? projectScope.state === 'ok' && projectScope.project
+        ? `项目「${projectScope.project.name}」`
+        : scopeProjectId
+          ? '项目（读取中…）'
+          : '项目（未选）'
+      : scopeMode === 'tags'
+        ? `${scopeTags.length || '全部'} 个标签`
+        : `${scopeDocuments.length || '全部'} 篇`;
+  // 工具栏下方的范围提示：空项目（「该项目暂无文献」）与失效降级提示都显示在这里。
+  const scopeInlineNotice =
+    scopeNotice || (scopeMode === 'project' ? projectScope.notice : '');
+
+  /** 切换圈范围方式：项目与手选文献/标签互斥，切换时清掉另一侧的选择。 */
+  const switchScopeMode = (next: 'documents' | 'tags' | 'project'): void => {
+    setScopeMode(next);
+    setScopeNotice('');
+    if (next === 'project') {
+      setScopeDocuments([]);
+      setScopeTags([]);
+      return;
+    }
+    setScopeProjectId('');
+  };
+
+  /** 选中/清空项目：选了项目就清空手选文献与标签，并把范围切到跨文献（项目范围本身就是跨文献）。 */
+  const selectScopeProject = (projectId: string): void => {
+    setScopeProjectId(projectId);
+    setScopeNotice('');
+    if (!projectId) return;
+    setScopeDocuments([]);
+    setScopeTags([]);
+    setReadingScope('corpus');
+  };
+
   const scopeFilter = scopeQuery.trim().toLowerCase();
   const readingOptions = {
     readingScope,
@@ -999,13 +1073,29 @@ export function ChatPanel({
     sourcePolicy,
     // 笔记/批注作为补充材料纳入本轮（不算文献原文证据）。
     includeMemory,
-    // 提交时按当前圈法取：按文献 → scopeDocuments；按标签 → scopeTags。
-    // 两种圈法都始终提交（不只跨文献）：独立会话的「库内检索」也要用所选范围圈范围，
-    // 阅读内模式 core 只在跨文献时使用它们，无副作用。
-    scopeDocuments: scopeMode === 'documents' ? scopeDocuments : [],
-    scopeTags: scopeMode === 'tags' && scopeTags.length > 0 ? scopeTags : undefined,
+    // 提交时按当前圈法取：项目 / 文献 / 标签三选一（互斥由 projectScopeAskPayload 保证）。
+    // 两种手选圈法都始终提交（不只跨文献）：独立会话的「库内检索」也要用所选范围圈范围，
+    // 阅读内模式 core 只在跨文献时使用它们，无副作用；项目范围只带 projectId。
+    ...projectScopeAskPayload({
+      mode: scopeMode,
+      scopeDocuments,
+      scopeTags,
+      usableProjectId
+    }),
     // 用户改写的联网查询词：只影响实际搜索词，不进已生成的搜索计划。
     webQuery: webQuery.trim() || undefined
+  };
+  /**
+   * 统一提问出口：范围被拦住（空项目/失效项目）时不发请求，只给提示。
+   *
+   * 发送、空态建议问法、审计建议补证等所有内部入口都走这里，避免绕过项目范围校验。
+   */
+  const ask = (value: string, options: ChatAskOptions): void => {
+    if (scopeAskBlocked) {
+      setScopeNotice(projectScope.notice || PROJECT_SCOPE_EMPTY_NOTICE);
+      return;
+    }
+    onAsk(value, options);
   };
   // 回答后的“允许联网补查”确认条：只在最后一条回答返回 gap_search_approval 且本轮未在跑时出现。
   const lastAssistantMessage = [...messages]
@@ -1146,14 +1236,14 @@ export function ChatPanel({
               '本次提问可能需要联网搜索。是否允许把当前问题/必要搜索词发送到已配置的搜索服务？'
             )
           : true;
-      onAsk(value, { confirmSearch, ...readingOptions });
+      ask(value, { confirmSearch, ...readingOptions });
       setQuestion('');
       return;
     }
     // 明显寒暄/确认（「你好」等）：不生成搜索计划、也不联网，直接按普通提问回答。
     // 否则「你好」会走一次规划模型（返回空列表）甚至被拿去联网搜索，体验很怪。
     if (isSmallTalkOnly(value)) {
-      onAsk(value, { confirmSearch: false, ...readingOptions });
+      ask(value, { confirmSearch: false, ...readingOptions });
       setQuestion('');
       return;
     }
@@ -1166,7 +1256,7 @@ export function ChatPanel({
       if (plan.queries.length === 0) {
         // 本轮没有可公开搜索的主体词（寒暄/无需检索/规划模型判断无需联网）：
         // 这不是错误——直接按不联网提问，不显示 planError。
-        onAsk(value, { confirmSearch: false, ...readingOptions });
+        ask(value, { confirmSearch: false, ...readingOptions });
         setQuestion('');
         return;
       }
@@ -1174,7 +1264,7 @@ export function ChatPanel({
         setPendingPlan(plan);
         return;
       }
-      onAsk(value, { confirmSearch: true, search_token: plan.token, ...readingOptions });
+      ask(value, { confirmSearch: true, search_token: plan.token, ...readingOptions });
       setQuestion('');
     } catch (error) {
       setPlanError(
@@ -1199,7 +1289,7 @@ export function ChatPanel({
       setPendingPlan(null);
       return;
     }
-    onAsk(value, { confirmSearch: true, search_token: pendingPlan.token, ...readingOptions });
+    ask(value, { confirmSearch: true, search_token: pendingPlan.token, ...readingOptions });
     setPendingPlan(null);
     setWebQuery('');
     setQuestion('');
@@ -2019,7 +2109,7 @@ export function ChatPanel({
                                 type="button"
                                 className="kr-chat__route-action"
                                 onClick={() =>
-                                  onAsk(
+                                  ask(
                                     `请针对第 ${claim.claim} 段「${claim.text?.slice(0, 120) ?? ''}」补查${route.suggested}依据，并说明哪些结论有外部支持。`,
                                     { ...readingOptions }
                                   )
@@ -2172,7 +2262,7 @@ export function ChatPanel({
               type="button"
               disabled={asking || !lastUserQuestion}
               onClick={() =>
-                onAsk(lastUserQuestion, { ...readingOptions, confirmGapSearch: true })
+                ask(lastUserQuestion, { ...readingOptions, confirmGapSearch: true })
               }
             >
               允许并补查
@@ -2224,13 +2314,13 @@ export function ChatPanel({
               <>
                 <button
                   type="button"
-                  onClick={() => onAsk('概括我最近的笔记', { ...readingOptions })}
+                  onClick={() => ask('概括我最近的笔记', { ...readingOptions })}
                 >
                   概括我最近的笔记
                 </button>
                 <button
                   type="button"
-                  onClick={() => onAsk('我的批注里有哪些主题', { ...readingOptions })}
+                  onClick={() => ask('我的批注里有哪些主题', { ...readingOptions })}
                 >
                   我的批注里有哪些主题
                 </button>
@@ -2240,7 +2330,7 @@ export function ChatPanel({
                 <button
                   type="button"
                   onClick={() =>
-                    onAsk(
+                    ask(
                       currentPage
                         ? `请概括第 ${currentPage} 页的核心论点`
                         : '请概括当前页的核心论点',
@@ -2253,7 +2343,7 @@ export function ChatPanel({
                 <button
                   type="button"
                   onClick={() =>
-                    onAsk(
+                    ask(
                       currentPage
                         ? `请解释第 ${currentPage} 页的重要概念`
                         : '请解释当前页的重要概念',
@@ -2435,7 +2525,12 @@ export function ChatPanel({
                   onChange={(event) => {
                     const value = event.target.value as typeof readingScope;
                     setReadingScope(value);
-                    if (value === 'corpus') setScopeDialogOpen(true);
+                    if (value === 'corpus') {
+                      setScopeDialogOpen(true);
+                    } else if (scopeMode === 'project') {
+                      // 范围切回「自动/库内检索」就不该再带项目范围：回到手选口径，避免范围显示与实际不一致。
+                      switchScopeMode('documents');
+                    }
                   }}
                   aria-label="阅读范围"
                   title="阅读范围"
@@ -2452,10 +2547,7 @@ export function ChatPanel({
                   className="kr-chat__scope-button"
                   onClick={() => setScopeDialogOpen(true)}
                 >
-                  已选{' '}
-                  {scopeMode === 'tags'
-                    ? `${scopeTags.length || '全部'} 个标签`
-                    : `${scopeDocuments.length || '全部'} 篇`}
+                  已选 {scopeSummaryLabel}
                 </button>
               ) : null}
             </div>
@@ -2529,6 +2621,11 @@ export function ChatPanel({
               笔记/批注
             </label>
           </div>
+          {scopeInlineNotice ? (
+            <p className="kr-chat__meta" role="status">
+              {scopeInlineNotice}
+            </p>
+          ) : null}
           <div className="kr-chat__compose-actions">
             {canRecord || speechDisabledReason ? (
               <button
@@ -2598,9 +2695,13 @@ export function ChatPanel({
             <button
               type="submit"
               className="kr-chat__send"
-              disabled={asking || !question.trim()}
+              disabled={asking || !question.trim() || scopeAskBlocked}
               aria-label="发送提问"
-              title="发送"
+              title={
+                scopeAskBlocked
+                  ? projectScope.notice || '当前范围暂不可用，请重新选择'
+                  : '发送'
+              }
             >
               ↑
             </button>
@@ -2623,149 +2724,183 @@ export function ChatPanel({
             <h3>跨文献范围</h3>
             <p>
               {standalone
-                ? '选择这次会话的范围（文献或标签）。不选表示使用全部文献。'
-                : '选择这次一起阅读的文献或标签。不选表示使用全部文献。'}
+                ? '选择这次会话的范围（文献、标签或项目）。不选表示使用全部文献。'
+                : '选择这次一起阅读的文献、标签或项目。不选表示使用全部文献。'}
             </p>
             <div className="kr-chat__scope-search" role="group" aria-label="圈范围方式">
               <button
                 type="button"
                 style={scopeMode === 'documents' ? { fontWeight: 600 } : undefined}
-                onClick={() => setScopeMode('documents')}
+                onClick={() => switchScopeMode('documents')}
               >
                 按文献
               </button>
               <button
                 type="button"
                 style={scopeMode === 'tags' ? { fontWeight: 600 } : undefined}
-                onClick={() => setScopeMode('tags')}
+                onClick={() => switchScopeMode('tags')}
               >
                 按标签
               </button>
+              {availableProjects !== undefined ? (
+                <button
+                  type="button"
+                  style={scopeMode === 'project' ? { fontWeight: 600 } : undefined}
+                  onClick={() => switchScopeMode('project')}
+                >
+                  按项目
+                </button>
+              ) : null}
             </div>
-            <div className="kr-chat__scope-search">
-              <input
-                value={scopeQuery}
-                onChange={(event) => setScopeQuery(event.target.value)}
-                placeholder={scopeMode === 'documents' ? '搜索文献名或标签…' : '搜索标签…'}
-                aria-label="搜索跨文献范围"
+            {scopeMode === 'project' ? (
+              <ProjectScopePane
+                projects={availableProjects ?? []}
+                selectedId={scopeProjectId}
+                query={scopeQuery}
+                notice={projectScope.notice || scopeNotice}
+                onQueryChange={setScopeQuery}
+                onSelect={selectScopeProject}
               />
-              <button
-                type="button"
-                onClick={() => {
-                  if (scopeMode === 'documents') {
-                    const visibleIds = availableDocuments
-                      .filter(
-                        (item) =>
-                          !scopeFilter ||
-                          item.name.toLowerCase().includes(scopeFilter) ||
-                          (item.tags ?? []).some((tag) =>
-                            tag.toLowerCase().includes(scopeFilter)
+            ) : (
+              <>
+                <div className="kr-chat__scope-search">
+                  <input
+                    value={scopeQuery}
+                    onChange={(event) => setScopeQuery(event.target.value)}
+                    placeholder={scopeMode === 'documents' ? '搜索文献名或标签…' : '搜索标签…'}
+                    aria-label="搜索跨文献范围"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (scopeMode === 'documents') {
+                        const visibleIds = availableDocuments
+                          .filter(
+                            (item) =>
+                              !scopeFilter ||
+                              item.name.toLowerCase().includes(scopeFilter) ||
+                              (item.tags ?? []).some((tag) =>
+                                tag.toLowerCase().includes(scopeFilter)
+                              )
                           )
-                      )
-                      .map((item) => item.id);
-                    setScopeDocuments((current) => [
-                      ...new Set([...current, ...visibleIds])
-                    ]);
-                    return;
-                  }
-                  const visibleTags = scopeTagOptions.filter(
-                    (tag) => !scopeFilter || tag.toLowerCase().includes(scopeFilter)
-                  );
-                  setScopeTags((current) => [...new Set([...current, ...visibleTags])]);
-                }}
-              >
-                全选当前结果
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (scopeMode === 'documents') setScopeDocuments([]);
-                  else setScopeTags([]);
-                }}
-              >
-                清空
-              </button>
-            </div>
-            <label className="kr-chat__scope-option kr-chat__scope-all">
-              <input
-                type="checkbox"
-                checked={
-                  scopeMode === 'documents'
-                    ? scopeDocuments.length === 0
-                    : scopeTags.length === 0
-                }
-                onChange={() => {
-                  if (scopeMode === 'documents') setScopeDocuments([]);
-                  else setScopeTags([]);
-                }}
-              />
-              {scopeMode === 'documents' ? '全部文献' : '全部标签（不按标签限制）'}
-            </label>
-            {scopeMode === 'tags' ? (
-              <p className="kr-muted">
-                {standalone
-                  ? '按标签在库内检索与跨文献精读时都会用来圈范围；标签来自文献库已有标签，可多选。切换回「按文献」后按文献提交。'
-                  : '按标签只在「范围：跨文献」时生效；标签来自文献库已有标签，可多选。切换回「按文献」后按文献提交。'}
-              </p>
-            ) : null}
-            <div className="kr-chat__scope-list">
-              {scopeMode === 'documents'
-                ? availableDocuments
-                    .filter(
-                      (item) =>
-                        !scopeFilter ||
-                        item.name.toLowerCase().includes(scopeFilter) ||
-                        (item.tags ?? []).some((tag) =>
-                          tag.toLowerCase().includes(scopeFilter)
+                          .map((item) => item.id);
+                        setScopeDocuments((current) => [
+                          ...new Set([...current, ...visibleIds])
+                        ]);
+                        // 手选文献与项目范围互斥：做了手选就清掉项目，避免两个来源同时生效。
+                        setScopeProjectId('');
+                        return;
+                      }
+                      const visibleTags = scopeTagOptions.filter(
+                        (tag) => !scopeFilter || tag.toLowerCase().includes(scopeFilter)
+                      );
+                      setScopeTags((current) => [...new Set([...current, ...visibleTags])]);
+                      setScopeProjectId('');
+                    }}
+                  >
+                    全选当前结果
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (scopeMode === 'documents') setScopeDocuments([]);
+                      else setScopeTags([]);
+                    }}
+                  >
+                    清空
+                  </button>
+                </div>
+                <label className="kr-chat__scope-option kr-chat__scope-all">
+                  <input
+                    type="checkbox"
+                    checked={
+                      scopeMode === 'documents'
+                        ? scopeDocuments.length === 0
+                        : scopeTags.length === 0
+                    }
+                    onChange={() => {
+                      if (scopeMode === 'documents') setScopeDocuments([]);
+                      else setScopeTags([]);
+                    }}
+                  />
+                  {scopeMode === 'documents' ? '全部文献' : '全部标签（不按标签限制）'}
+                </label>
+                {scopeMode === 'tags' ? (
+                  <p className="kr-muted">
+                    {standalone
+                      ? '按标签在库内检索与跨文献精读时都会用来圈范围；标签来自文献库已有标签，可多选。切换回「按文献」后按文献提交。'
+                      : '按标签只在「范围：跨文献」时生效；标签来自文献库已有标签，可多选。切换回「按文献」后按文献提交。'}
+                  </p>
+                ) : null}
+                <div className="kr-chat__scope-list">
+                  {scopeMode === 'documents'
+                    ? availableDocuments
+                        .filter(
+                          (item) =>
+                            !scopeFilter ||
+                            item.name.toLowerCase().includes(scopeFilter) ||
+                            (item.tags ?? []).some((tag) =>
+                              tag.toLowerCase().includes(scopeFilter)
+                            )
                         )
-                    )
-                    .map((item) => (
-                      <label className="kr-chat__scope-option" key={item.id}>
-                        <input
-                          type="checkbox"
-                          checked={scopeDocuments.includes(item.id)}
-                          onChange={(event) =>
-                            setScopeDocuments((current) =>
-                              event.target.checked
-                                ? [...new Set([...current, item.id])]
-                                : current.filter((id) => id !== item.id)
-                            )
-                          }
-                        />
-                        <span>
-                          {item.name}
-                          {item.tags?.length ? (
-                            <small> · {item.tags.slice(0, 3).join(' / ')}</small>
-                          ) : null}
-                        </span>
-                      </label>
-                    ))
-                : scopeTagOptions
-                    .filter(
-                      (tag) => !scopeFilter || tag.toLowerCase().includes(scopeFilter)
-                    )
-                    .map((tag) => (
-                      <label className="kr-chat__scope-option" key={tag}>
-                        <input
-                          type="checkbox"
-                          checked={scopeTags.includes(tag)}
-                          onChange={(event) =>
-                            setScopeTags((current) =>
-                              event.target.checked
-                                ? [...new Set([...current, tag])]
-                                : current.filter((item) => item !== tag)
-                            )
-                          }
-                        />
-                        <span>{tag}</span>
-                      </label>
-                    ))}
-            </div>
-            <p className="kr-chat__scope-count">
-              {scopeMode === 'documents'
-                ? `已选 ${scopeDocuments.length === 0 ? '全部文献' : `${scopeDocuments.length} 篇`}`
-                : `已选 ${scopeTags.length === 0 ? '全部标签' : `${scopeTags.length} 个标签`}`}
-            </p>
+                        .map((item) => (
+                          <label className="kr-chat__scope-option" key={item.id}>
+                            <input
+                              type="checkbox"
+                              checked={scopeDocuments.includes(item.id)}
+                              onChange={(event) => {
+                                // 手选文献与项目范围互斥：选了文献就清掉项目，反之选项目时清文献。
+                                if (event.target.checked) {
+                                  setScopeProjectId('');
+                                  setScopeNotice('');
+                                }
+                                setScopeDocuments((current) =>
+                                  event.target.checked
+                                    ? [...new Set([...current, item.id])]
+                                    : current.filter((id) => id !== item.id)
+                                );
+                              }}
+                            />
+                            <span>
+                              {item.name}
+                              {item.tags?.length ? (
+                                <small> · {item.tags.slice(0, 3).join(' / ')}</small>
+                              ) : null}
+                            </span>
+                          </label>
+                        ))
+                    : scopeTagOptions
+                        .filter(
+                          (tag) => !scopeFilter || tag.toLowerCase().includes(scopeFilter)
+                        )
+                        .map((tag) => (
+                          <label className="kr-chat__scope-option" key={tag}>
+                            <input
+                              type="checkbox"
+                              checked={scopeTags.includes(tag)}
+                              onChange={(event) => {
+                                if (event.target.checked) {
+                                  setScopeProjectId('');
+                                  setScopeNotice('');
+                                }
+                                setScopeTags((current) =>
+                                  event.target.checked
+                                    ? [...new Set([...current, tag])]
+                                    : current.filter((item) => item !== tag)
+                                );
+                              }}
+                            />
+                            <span>{tag}</span>
+                          </label>
+                        ))}
+                </div>
+                <p className="kr-chat__scope-count">
+                  {scopeMode === 'documents'
+                    ? `已选 ${scopeDocuments.length === 0 ? '全部文献' : `${scopeDocuments.length} 篇`}`
+                    : `已选 ${scopeTags.length === 0 ? '全部标签' : `${scopeTags.length} 个标签`}`}
+                </p>
+              </>
+            )}
             <div className="kr-chat__scope-actions">
               <button type="button" onClick={() => setScopeDialogOpen(false)}>
                 取消

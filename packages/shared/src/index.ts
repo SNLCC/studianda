@@ -1738,6 +1738,17 @@ export interface CorpusSessionRecord {
   updatedAt: string;
   /** 归档时间（空串 = 未归档；本版只有列，没有归档接口）。 */
   archivedAt: string;
+  /**
+   * 范围来自哪个逻辑项目（schema_version 25）：用 projectId 建会话时落库，否则为 null。
+   *
+   * 故意不建外键：项目被删除后该 id 允许悬空，会话继续存在；读取方不做删除判断。
+   */
+  sourceProjectId: string | null;
+  /**
+   * 建会话那一刻的项目名快照（schema_version 25）：项目之后改名或删除都不影响这里。
+   * 不是从项目表实时联查，所以可安全用于展示「来自项目 X」。
+   */
+  sourceProjectName: string | null;
   /** 会话范围快照，按用户建立会话时给出的顺序（去重后）。 */
   documentIds: string[];
 }

@@ -6,7 +6,10 @@
  * - 视觉全部复用 @studianda/ui 的 kr-* 类名（kr-library / kr-doc-list / kr-doc-row /
  *   kr-empty / kr-page-status / kr-page-error / kr-modal*），不新增 CSS 或图标库。
  *
- * 不做：项目级检索作用域、项目级集合、跨篇会话（下一轮）。
+ * 项目详情的两个出口由父级（文献工作台）接线，项目视图本身不跳转：
+ * - 「在此项目中检索」→ 切回检索工作台并把检索范围设成该项目；
+ * - 「用这些文献新建跨篇会话」→ 打开跨篇会话，建立时直接传 `projectId`（服务端解析当前文献）。
+ * 空项目（documentCount = 0）两个按钮都禁用，并提示「该项目暂无文献」。
  */
 import { appDialogs } from './dialogs.js';
 import type { ApiClient } from '@studianda/api-client';
@@ -270,11 +273,17 @@ export function ProjectsList({
 export function ProjectsView({
   api,
   documents,
-  onOpenDocument
+  onOpenDocument,
+  onSearchInProject,
+  onCreateCorpusFromProject
 }: {
   api: ApiClient;
   documents: DocumentSummary[];
   onOpenDocument(document: DocumentSummary): void;
+  /** 「在此项目中检索」：父级切回检索工作台，并把检索范围设成这个项目。 */
+  onSearchInProject(project: ProjectSummary): void;
+  /** 「用这些文献新建跨篇会话」：父级打开跨篇会话，并直接按 projectId 建会话。 */
+  onCreateCorpusFromProject(project: ProjectSummary): void;
 }): JSX.Element {
   const queryClient = useQueryClient();
   const [includeArchived, setIncludeArchived] = useState(false);
@@ -535,8 +544,39 @@ export function ProjectsView({
           >
             {pickerOpen ? '收起添加面板' : '+ 从文献库添加'}
           </button>
+          <button
+            type="button"
+            className="kr-secondary"
+            title={
+              selectedProject.documentCount === 0
+                ? '该项目暂无文献'
+                : `在检索工作台里把范围设为「${selectedProject.name}」`
+            }
+            disabled={selectedProject.documentCount === 0}
+            onClick={() => onSearchInProject(selectedProject)}
+          >
+            在此项目中检索
+          </button>
+          <button
+            type="button"
+            className="kr-secondary"
+            title={
+              selectedProject.documentCount === 0
+                ? '该项目暂无文献'
+                : `用项目「${selectedProject.name}」当前的 ${selectedProject.documentCount} 篇文献建立跨篇会话（范围建立时冻结）`
+            }
+            disabled={selectedProject.documentCount === 0}
+            onClick={() => onCreateCorpusFromProject(selectedProject)}
+          >
+            用这些文献新建跨篇会话
+          </button>
         </div>
-        <p className="kr-muted">项目只保存文献关联：从项目移出不会删除文献。</p>
+        <p className="kr-muted">
+          项目只保存文献关联：从项目移出不会删除文献。
+          {selectedProject.documentCount === 0
+            ? '该项目暂无文献，先加入文献才能检索或建跨篇会话。'
+            : ''}
+        </p>
         {notice ? (
           <p className="kr-settings__message" role="status">
             {notice}

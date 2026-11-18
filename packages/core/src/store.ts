@@ -2126,8 +2126,9 @@ export class Store {
   }
 
   // ---------------------------------------------------------------------------
-  // 跨文献（语料）会话（schema_version 23；24 起消息带 scope_kind='corpus' + 审计摘要）：
-  // 范围是建立时的文献 id 快照。document_chat_sessions 的主键与「一会话一篇文献」语义完全
+  // 跨文献（语料）会话（schema_version 23；24 起消息带 scope_kind='corpus' + 审计摘要；
+  // 25 起会话记录来源项目快照）：范围是建立时的文献 id 快照。
+  // document_chat_sessions 的主键与「一会话一篇文献」语义完全
   // 不变；这里是另一张表。消息复用 messages：document_id 空串哨兵 + session_id，
   // 详见 CORPUS_MESSAGE_DOCUMENT_ID。
   // ---------------------------------------------------------------------------
@@ -2136,7 +2137,9 @@ export class Store {
   getCorpusSession(id: string): CorpusSessionRecord | null {
     const row = this.db
       .prepare(
-        'SELECT id, title, created_at, updated_at, archived_at FROM corpus_sessions WHERE id = ?'
+        `SELECT id, title, created_at, updated_at, archived_at,
+                source_project_id, source_project_name
+         FROM corpus_sessions WHERE id = ?`
       )
       .get(id) as
       | {
@@ -2145,6 +2148,8 @@ export class Store {
           created_at?: string | null;
           updated_at?: string | null;
           archived_at?: string | null;
+          source_project_id?: string | null;
+          source_project_name?: string | null;
         }
       | undefined;
     if (!row?.id) return null;
@@ -2157,6 +2162,12 @@ export class Store {
       createdAt: String(row.created_at ?? ''),
       updatedAt: String(row.updated_at ?? ''),
       archivedAt: String(row.archived_at ?? ''),
+      // 来源项目 id 允许悬空（项目已删除）：读取侧不做存在性判断，原样返回。
+      sourceProjectId: row.source_project_id ? String(row.source_project_id) : null,
+      sourceProjectName:
+        row.source_project_name === null || row.source_project_name === undefined
+          ? null
+          : String(row.source_project_name),
       documentIds: documents
         .map((item) => String(item.document_id ?? ''))
         .filter((documentId) => documentId.length > 0)
@@ -2179,19 +2190,33 @@ export class Store {
    *
    * 只做去重/去空白，不校验文献是否存在——范围是用户的显式决定，当前已删除的文献也保留在
    * 快照里（恢复后仍可读）；读取时跳过并如实报告，而不是建立时静默改写用户的快照。
+   *
+   * `sourceProject` 可选：用 projectId 建会话时由调用方传入**当时**的项目 id 与名字，
+   * 一起落库成快照（schema_version 25）。项目之后改名/删除都不影响这两个字段；不传则两列为 NULL。
    */
-  createCorpusSession(title: string, documentIds: readonly string[]): CorpusSessionRecord {
+  createCorpusSession(
+    title: string,
+    documentIds: readonly string[],
+    sourceProject?: { id: string; name: string } | null
+  ): CorpusSessionRecord {
     const ids = [...new Set(documentIds.map((documentId) => documentId.trim()).filter(Boolean))];
     if (ids.length === 0) throw new Error('至少需要一篇文献');
+    const sourceProjectId = sourceProject?.id?.trim() || null;
+    // 只有确实带了来源项目才写名字：id 与 name 同写同空，避免出现「有 id 没名字」的半个快照。
+    const sourceProjectName = sourceProjectId
+      ? (sourceProject?.name ?? '').trim().slice(0, 60)
+      : null;
     const id = randomUUID();
     const now = new Date().toISOString();
     this.db.exec('BEGIN IMMEDIATE');
     try {
       this.db
         .prepare(
-          'INSERT INTO corpus_sessions(id, title, created_at, updated_at, archived_at) VALUES (?, ?, ?, ?, ?)'
+          `INSERT INTO corpus_sessions(
+             id, title, created_at, updated_at, archived_at, source_project_id, source_project_name
+           ) VALUES (?, ?, ?, ?, ?, ?, ?)`
         )
-        .run(id, title.trim().slice(0, 120), now, now, '');
+        .run(id, title.trim().slice(0, 120), now, now, '', sourceProjectId, sourceProjectName);
       const insertDocument = this.db.prepare(
         'INSERT INTO corpus_session_documents(session_id, document_id) VALUES (?, ?)'
       );
@@ -2460,7 +2485,9 @@ export class Store {
     // 24：messages 新增 scope_kind（'document' | 'corpus'，把跨篇消息的空串 document_id 哨兵
     //     变成显式语义）与 audit_summary（审计摘要 JSON：缺证/原文已变更/越界引用等只存计数，
     //     不存正文/完整响应）。旧消息默认 scope_kind='document'、audit_summary=NULL。
-    const currentVersion = 24;
+    // 25：corpus_sessions 新增 source_project_id / source_project_name（来源项目快照；项目删除后
+    //     id 允许悬空、不建外键，name 存建会话时的项目名）。都只是加列，不重建表。
+    const currentVersion = 25;
     if (previousVersion > 0 && previousVersion < currentVersion) {
       this.backupBeforeMigration(previousVersion);
     }
@@ -2601,6 +2628,22 @@ export class Store {
     if (!messageColumns.has('audit_summary')) {
       this.db.exec('ALTER TABLE messages ADD COLUMN audit_summary TEXT');
     }
+    // schema_version 24 → 25：跨文献会话记录来源项目快照（都只是加可空列，不重建表）。
+    // - source_project_id：用 projectId 建会话时写项目 id；**不建外键**，项目删除后允许悬空，
+    //   避免删项目时连带删掉会话（会话的范围快照与会话本身仍独立存在）。
+    // - source_project_name：建会话那一刻的项目名快照；项目之后改名/删除仍显示当时名字。
+    // 旧会话与不用 projectId 建的会话保持 NULL。
+    const corpusSessionColumns = new Set(
+      (this.db.prepare('PRAGMA table_info(corpus_sessions)').all() as unknown as Array<{
+        name: string;
+      }>).map((column) => column.name)
+    );
+    if (!corpusSessionColumns.has('source_project_id')) {
+      this.db.exec('ALTER TABLE corpus_sessions ADD COLUMN source_project_id TEXT');
+    }
+    if (!corpusSessionColumns.has('source_project_name')) {
+      this.db.exec('ALTER TABLE corpus_sessions ADD COLUMN source_project_name TEXT');
+    }
     if (previousVersion < 19) this.backfillNoteManualOrder();
     this.db.exec(
       `CREATE INDEX IF NOT EXISTS note_external_key ON notes(document_id, external_key)`
@@ -2628,7 +2671,7 @@ export class Store {
     }
     this.db
       .prepare('INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)')
-      .run('schema_version', '24');
+      .run('schema_version', '25');
       this.db.exec('COMMIT');
     } catch (error) {
       // 整体回滚：schema、回填、schema_version 一起回到迁移前；迁移前快照仍保留在

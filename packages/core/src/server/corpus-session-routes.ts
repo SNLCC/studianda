@@ -33,7 +33,8 @@ export interface CorpusSessionRouteOptions {
  *
  * - 范围在建立会话时冻结为 documentIds 快照（之后新增文献不自动加入）；
  * - 建立时支持 `projectId` 代替显式 `documentIds`：服务端解析成项目**当前**文献集合再固化快照，
- *   之后项目增删文献不影响已建会话（快照语义不变）；
+ *   之后项目增删文献不影响已建会话（快照语义不变）；同时把来源项目 id 与**建会话时**的项目名
+ *   作为快照落库（schema 25，项目改名/删除后仍可展示当时的名字）；
  * - 消息复用 `messages`（document_id 空串哨兵 + session_id），服务端负责落 user/assistant；
  * - 追问直接复用 `answerWithCorpus()`：同一会话的后续问题按快照范围 + 已落库历史继续；
  * - 范围里已删除的文献**跳过并报告**（响应 skipped_document_ids + notice），不静默缩范围。
@@ -256,6 +257,8 @@ export function registerCorpusSessionRoutes(
       return badRequest(reply, 'projectId 必须是非空字符串');
     }
     let documentIds = normalizeCorpusSessionDocumentIds(body.documentIds);
+    /** 用 projectId 建会话时的来源项目快照（schema 25）：与范围快照同一次请求写入。 */
+    let sourceProject: { id: string; name: string } | null = null;
     if (projectId) {
       if (documentIds.length > 0) {
         return badRequest(
@@ -265,10 +268,15 @@ export function registerCorpusSessionRoutes(
       }
       const projectScope = resolveProjectScope(store, projectId);
       if (projectScope === null) return notFound(reply, '项目不存在');
+      // 项目名取**建会话这一刻**的值落库（不是读取时联查）：之后改名/删除仍展示当时名字。
+      // resolveProjectScope 已确认项目存在，这里再取一次只为拿名字（同步调用，不会中途消失）。
+      const project = store.getProject(projectId);
+      if (!project) return notFound(reply, '项目不存在');
       if (projectScope.length === 0) {
         return badRequest(reply, '项目里没有可用于跨文献会话的文献');
       }
       documentIds = projectScope;
+      sourceProject = { id: project.id, name: project.name };
     } else if (documentIds.length === 0) {
       return badRequest(reply, '需要 documentIds：至少一篇文献');
     }
@@ -285,7 +293,7 @@ export function registerCorpusSessionRoutes(
     const title = defaultCorpusSessionTitle(body.title, readable);
     let session;
     try {
-      session = store.createCorpusSession(title, documentIds);
+      session = store.createCorpusSession(title, documentIds, sourceProject);
     } catch (error) {
       return badRequest(reply, error instanceof Error ? error.message : '创建跨文献会话失败');
     }

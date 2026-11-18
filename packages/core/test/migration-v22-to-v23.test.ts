@@ -6,17 +6,18 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { Store } from '../src/store.js';
 
 /**
- * schema_version **22 → 23** 旧库升级验证（当前迁移终点已到 24，本夹具同时覆盖 23→24 的加列；
- * 直接跑真实 `Store` 构造函数里的 migrate）。
+ * schema_version **22 → 23** 旧库升级验证（当前迁移终点已到 25，本夹具同时覆盖 23→24 的加列
+ * 与 24→25 的来源项目两列；直接跑真实 `Store` 构造函数里的 migrate）。
  *
  * 本轮迁移**只建表**：
- * - `corpus_sessions(id, title, created_at, updated_at, archived_at)` + `corpus_sessions_updated`；
+ * - `corpus_sessions(id, title, created_at, updated_at, archived_at, source_project_id, source_project_name)`
+ *   + `corpus_sessions_updated`（来源项目两列为 schema 25 追加）；
  * - `corpus_session_documents(session_id, document_id)`（联合主键）+ `corpus_session_documents_document`；
  * - 不改 `document_chat_sessions` 的主键、不把 `document_id` 改成可空；消息复用 `messages`。
  *
  * 夹具用 node:sqlite 手工构造 v22 旧库（documents/messages/document_chat_sessions/三张会话触发器都是
  * v22 真实形态），塞入固定数据后关库，再交给 `new Store(dir)` 触发真实迁移。断言覆盖：补建两表/索引、
- * 版本升到 24、旧行逐字不变（含 24 新增列默认值）、迁移前快照存在且是 v22、重复迁移幂等、
+ * 版本升到 25、旧行逐字不变（含后续新增列默认值）、迁移前快照存在且是 v22、重复迁移幂等、
  * 迁移后语料会话数据层可直接使用（建会话 / 落消息 / 删会话）。
  */
 
@@ -234,7 +235,7 @@ function migrationBackups(dir: string): string[] {
 }
 
 describe('schema_version 22 → 23 迁移', () => {
-  it('补建语料会话两表/索引，版本升到 24，旧行逐字不变，快照为 v22，重复迁移幂等', () => {
+  it('补建语料会话两表/索引，版本升到 25，旧行逐字不变，快照为 v22，重复迁移幂等', () => {
     const dir = mkdtempSync(path.join(root, 'v22-'));
     let store: Store | null = null;
     try {
@@ -325,7 +326,7 @@ describe('schema_version 22 → 23 迁移', () => {
       try {
         afterVersion = readVersion(afterDb) ?? '';
         afterObjects = schemaObjectNames(afterDb);
-        expect(afterVersion).toBe('24');
+        expect(afterVersion).toBe('25');
         expect(tableExists(afterDb, 'corpus_sessions')).toBe(true);
         expect(tableExists(afterDb, 'corpus_session_documents')).toBe(true);
         expect(afterObjects).toEqual(
@@ -343,7 +344,9 @@ describe('schema_version 22 → 23 迁移', () => {
           'title',
           'created_at',
           'updated_at',
-          'archived_at'
+          'archived_at',
+          'source_project_id',
+          'source_project_name'
         ]);
         expect(sessionColumns.find((column) => column.name === 'id')?.pk).toBe(1);
         expect(sessionColumns.find((column) => column.name === 'title')).toMatchObject({
@@ -356,6 +359,17 @@ describe('schema_version 22 → 23 迁移', () => {
           notnull: 1,
           dflt_value: "''"
         });
+        // 24→25 的来源项目两列：可空、无默认值、无外键（项目删除后允许悬空）。
+        for (const name of ['source_project_id', 'source_project_name']) {
+          expect(sessionColumns.find((column) => column.name === name)).toMatchObject({
+            type: 'TEXT',
+            notnull: 0,
+            dflt_value: null
+          });
+        }
+        expect(
+          afterDb.prepare('PRAGMA foreign_key_list(corpus_sessions)').all()
+        ).toEqual([]);
 
         const linkColumns = tableColumns(afterDb, 'corpus_session_documents');
         expect(linkColumns.map((column) => column.name)).toEqual(['session_id', 'document_id']);
@@ -424,7 +438,7 @@ describe('schema_version 22 → 23 迁移', () => {
       }
       const afterReopenDb = readOnlyDb(dir);
       try {
-        expect(readVersion(afterReopenDb)).toBe('24');
+        expect(readVersion(afterReopenDb)).toBe('25');
         expect(schemaObjectNames(afterReopenDb)).toEqual(afterObjects);
       } finally {
         afterReopenDb.close();

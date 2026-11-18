@@ -35,6 +35,8 @@ import type {
   NoteFolderRecord,
   ImportJobRecord,
   OcrJobRecord,
+  ProjectSearchResult,
+  ProjectSummary,
   ReadingTaskSummary,
   ReferenceEntry,
   ReferenceEntryInput,
@@ -805,6 +807,13 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
   const [showCorpus, setShowCorpus] = useState(false);
   // 从文献库进入跨篇会话时，一次性请求打开「新建会话（多选文献）」弹窗。
   const [corpusCreateRequested, setCorpusCreateRequested] = useState(false);
+  // 从项目详情「用这些文献新建跨篇会话」进入时的来源项目：建立会话直接传 projectId，
+  // 并在会话范围里显示「来自项目 X」（服务端已固化快照，这里只展示来源名）。
+  const [corpusProjectSource, setCorpusProjectSource] = useState<{
+    id: string;
+    name: string;
+    documentCount: number;
+  } | null>(null);
   const [referenceGraphOffset, setReferenceGraphOffset] = useState(0);
   // 全库节点数超过单页上限时，类型/关键字筛选在服务端先过滤再分页（空数组 = 不过滤）。
   const [referenceGraphKinds, setReferenceGraphKinds] = useState<ReferenceNodeKind[]>([]);
@@ -919,8 +928,15 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     : ({ '--kr-sidebar-width': `${sidebarWidth}px` } as CSSProperties);
   const [searchTerm, setSearchTerm] = useState('');
   const deferredSearch = useDeferredValue(searchTerm.trim());
-  const [scopeMode, setScopeMode] = useState<'all' | 'tags' | 'documents'>('all');  const [scopeTags, setScopeTags] = useState<string[]>([]);
+  const [scopeMode, setScopeMode] = useState<'all' | 'tags' | 'documents' | 'project'>(
+    'all'
+  );
+  const [scopeTags, setScopeTags] = useState<string[]>([]);
   const [scopeDocuments, setScopeDocuments] = useState<string[]>([]);
+  // 「按项目」检索范围：项目 id（空串 = 未选）。与手选文献/标签互斥，提交前再看项目是否还有效。
+  const [searchProjectId, setSearchProjectId] = useState('');
+  // 检索输入框：从项目详情「在此项目中检索」切过来时聚焦，让用户直接输检索词。
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [searchKinds, setSearchKinds] = useState<LibrarySearchKind[]>([
     'document',
     'tag',
@@ -1080,14 +1096,16 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     !showStandaloneNotes &&
     !showProjects &&
     deferredSearch.length > 0 &&
-    searchKinds.length > 0;
+    // 项目检索只匹配正文，上方类型筛选不参与：项目模式下不需要「至少一种类型」。
+    (scopeMode === 'project' || searchKinds.length > 0);
+  // 按项目检索走 `POST /search`（projectId）：命中仍是「哪些文献命中」，与按文献/标签同一展示口径。
+  // 非项目范围时保持原查询（不因为多了一个范围方式而多发请求）。
   const searchQuery = useQuery({
     queryKey: ['library-search-documents', deferredSearch, searchKinds.join(',')],
-    enabled: searchActive,
+    enabled: searchActive && scopeMode !== 'project',
     placeholderData: keepPreviousData,
     queryFn: () => api.searchLibraryDocuments(deferredSearch, searchKinds)
   });
-  const searchMatchedIds = useMemo(() => new Set(searchQuery.data ?? []), [searchQuery.data]);
 
   const availableTags = [
     ...new Set((documentsQuery.data ?? []).flatMap((document) => document.tags))
@@ -1103,6 +1121,73 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
   }, [availableTagsKey, tagFilter]);
   const [translationNotice, setTranslationNotice] = useState('');
   const [libraryNotice, setLibraryNotice] = useState('');
+  // ---------------------------------------------------------------------------
+  // 检索范围：按项目（复用项目页的 listProjects / listProjectDocuments 查询键）
+  // ---------------------------------------------------------------------------
+  const searchProjectsQuery = useQuery({
+    queryKey: ['projects', false],
+    queryFn: () => api.listProjects(false)
+  });
+  const searchProjects = searchProjectsQuery.data ?? [];
+  const searchProject =
+    searchProjectId !== ''
+      ? (searchProjects.find((project) => project.id === searchProjectId) ?? null)
+      : null;
+  const searchProjectActive = scopeMode === 'project' && searchProjectId !== '';
+  // documentCount 与「按项目检索/精读」解析范围同一口径：0 = 空项目，界面提示且不发检索请求。
+  const searchProjectEmpty =
+    searchProjectActive && searchProject !== null && searchProject.documentCount <= 0;
+  // 项目成员（空项目不发请求）：有搜索词时以检索命中为准，没搜索词时用它把列表收窄到项目内。
+  // 先等 listProjects 回来（documentCount 已知）再决定要不要读成员，空项目一个请求都不发。
+  const projectScopeDocumentsQuery = useQuery({
+    queryKey: ['project-documents', searchProjectId],
+    queryFn: () => api.listProjectDocuments(searchProjectId),
+    enabled: searchProjectActive && !searchProjectEmpty && searchProjectsQuery.isSuccess
+  });
+  const projectScopeDocumentIds = useMemo(
+    () => new Set((projectScopeDocumentsQuery.data ?? []).map((document) => document.id)),
+    [projectScopeDocumentsQuery.data]
+  );
+  const projectSearchQuery = useQuery({
+    queryKey: ['project-search', searchProjectId, deferredSearch],
+    enabled: searchActive && searchProjectActive && !searchProjectEmpty,
+    placeholderData: keepPreviousData,
+    queryFn: async (): Promise<ProjectSearchResult | null> => {
+      const result = await api.searchScoped({
+        query: deferredSearch,
+        // documentId 在项目范围里只作排序锚点，可以不传；类型要求必填时给空串（服务端按未传处理）。
+        documentId: '',
+        projectId: searchProjectId,
+        limit: 60
+      });
+      return Array.isArray(result) ? null : result;
+    }
+  });
+  const searchMatchedIds = useMemo(() => {
+    if (scopeMode === 'project') {
+      return new Set((projectSearchQuery.data?.hits ?? []).map((hit) => hit.documentId));
+    }
+    return new Set(searchQuery.data ?? []);
+  }, [scopeMode, projectSearchQuery.data, searchQuery.data]);
+  // 已选项目被归档/删除（不再出现在「未归档项目」清单里）：降级回全部文献，绝不静默带一个 404 的 id。
+  const searchProjectsRevision = searchProjectsQuery.data;
+  useEffect(() => {
+    if (scopeMode !== 'project' || searchProjectId === '') return;
+    if (!searchProjectsRevision) return;
+    if (searchProjectsRevision.some((project) => project.id === searchProjectId)) return;
+    setScopeMode('all');
+    setSearchProjectId('');
+    setLibraryNotice('所选项目已不可用（可能已删除或已归档），检索范围已切回全部文献。');
+  }, [scopeMode, searchProjectId, searchProjectsRevision]);
+  // 项目在两次列表刷新之间被删：`/search` 返回 404 时同样降级，不去猜一个空结果。
+  useEffect(() => {
+    if (!projectSearchQuery.isError) return;
+    const error = projectSearchQuery.error;
+    if (!(error instanceof ApiRequestError) || error.status !== 404) return;
+    setScopeMode('all');
+    setSearchProjectId('');
+    setLibraryNotice('所选项目已不存在，检索范围已切回全部文献。');
+  }, [projectSearchQuery.isError, projectSearchQuery.error]);
   /**
    * 文件健康检查结果浮窗：检查是用户主动点的一次性动作，结果应该「顶部弹出、几秒消失」，
    * 而不是一直挂在文献库页内（原来的 libraryNotice 不会自动消失）。
@@ -1173,10 +1258,14 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
       window.clearInterval(timer);
     };
   }, [api, runningTranslationKey]);
-  // 检索生效时，下方列表只保留命中文献；"范围"（指定文献/标签）在命中集上再收窄。
+  // 检索生效时，下方列表只保留命中文献；"范围"（指定文献/标签/项目）在命中集上再收窄。
   const searchScopeReady =
     scopeMode === 'all' ||
-    (scopeMode === 'documents' ? scopeDocuments.length > 0 : scopeTags.length > 0);
+    (scopeMode === 'documents'
+      ? scopeDocuments.length > 0
+      : scopeMode === 'tags'
+        ? scopeTags.length > 0
+        : searchProjectId !== '');
   const allDocuments = documentsQuery.data ?? [];
   const folders = foldersQuery.data?.folders ?? [];
   const unfiledTotal = foldersQuery.data?.unfiled.counts.total ?? null;
@@ -1212,11 +1301,20 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
 
   // 搜索 / 标签筛选之后的文献：分栏数量、类型下拉都以这个范围为准，保证数字与列表一致。
   const filteredDocuments = folderScopedDocuments
+    // 按项目：没输入搜索词时列表就是「项目里的文献」；空项目不显示任何文献（范围不泄漏到全库）。
+    .filter((document) => {
+      if (!searchProjectActive) return true;
+      if (searchProjectEmpty) return false;
+      if (searchActive) return true;
+      return projectScopeDocumentIds.has(document.id);
+    })
     .filter((document) => !searchActive || searchMatchedIds.has(document.id))
     .filter((document) => {
+      if (searchProjectActive) return true; // 项目范围已经收窄过，不再叠加手选文献/标签
       if (!searchActive || scopeMode === 'all' || !searchScopeReady) return true;
       if (scopeMode === 'documents') return scopeDocuments.includes(document.id);
-      return document.tags.some((tag) => scopeTags.includes(tag));
+      if (scopeMode === 'tags') return document.tags.some((tag) => scopeTags.includes(tag));
+      return true;
     })
     .filter((document) => !tagFilter || document.tags.includes(tagFilter));
 
@@ -2398,8 +2496,14 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
    *
    * `create=true` 时要求视图挂载后直接打开「新建会话（多选文献）」弹窗——文献库
    * 现有的列表只能单选打开阅读页，所以多选放在这里，不改文献库本身。
+   *
+   * `project` 由项目详情「用这些文献新建跨篇会话」带入：建立会话时直接传 `projectId`
+   * （服务端解析成项目当前文献再冻结快照），对话框里不再让用户手选文献。
    */
-  const openCorpusView = (options?: { create?: boolean }): void => {
+  const openCorpusView = (options?: {
+    create?: boolean;
+    project?: { id: string; name: string; documentCount: number };
+  }): void => {
     setSelected(null);
     setShowTrash(false);
     setShowZotero(false);
@@ -2409,9 +2513,27 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowProjects(false);
     setShowCorpus(true);
     setCorpusCreateRequested(Boolean(options?.create));
+    setCorpusProjectSource(options?.project ?? null);
     setFolderId(null);
     resetLibraryFilters();
     setLibraryNotice('');
+  };
+
+  /**
+   * 项目详情「在此项目中检索」：切回文献工作台，把检索范围设成该项目并聚焦检索框。
+   *
+   * 空项目（documentCount = 0）不发检索请求：只在范围行提示「该项目暂无文献」。
+   */
+  const openSearchInProject = (project: ProjectSummary): void => {
+    openAllDocuments();
+    setScopeMode('project');
+    setSearchProjectId(project.id);
+    setScopeDocuments([]);
+    setScopeTags([]);
+    setSearchTerm('');
+    setLibraryNotice('');
+    // 视图切换后检索区才可见：等一帧再聚焦，避免对隐藏元素 focus 无效。
+    window.setTimeout(() => searchInputRef.current?.focus(), 0);
   };
 
   const openCreateFolder = (): void => {
@@ -3337,10 +3459,13 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
           ))}
         </div>
         <input
+          ref={searchInputRef}
           type="search"
           value={searchTerm}
           onChange={(event) => setSearchTerm(event.target.value)}
-          placeholder="搜索文献全文（标题或正文）"
+          placeholder={
+            scopeMode === 'project' ? '在所选项目里检索全文（正文）' : '搜索文献全文（标题或正文）'
+          }
         />
         <div className="kr-search__scope">
           <label>
@@ -3348,14 +3473,18 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
             <select
               value={scopeMode}
               onChange={(event) => {
-                setScopeMode(event.target.value as 'all' | 'tags' | 'documents');
+                const next = event.target.value as 'all' | 'tags' | 'documents' | 'project';
+                setScopeMode(next);
                 setScopeTags([]);
                 setScopeDocuments([]);
+                // 范围方式与项目 id 互斥：切走就清掉项目，避免切回来时残留一个旧项目。
+                if (next !== 'project') setSearchProjectId('');
               }}
             >
               <option value="all">全部文献</option>
               <option value="documents">指定文献</option>
               <option value="tags">标签</option>
+              <option value="project">按项目</option>
             </select>
           </label>
           {scopeMode === 'documents' ? (
@@ -3376,6 +3505,31 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
               {(documentsQuery.data ?? []).map((document) => (
                 <option key={document.id} value={document.id}>
                   {document.name}
+                </option>
+              ))}
+            </select>
+          ) : null}
+          {scopeMode === 'project' ? (
+            <select
+              className="kr-search__scope-list"
+              size={4}
+              aria-label="项目"
+              value={searchProjectId}
+              onChange={(event) => {
+                const next = event.target.value;
+                setSearchProjectId(next);
+                // 按项目与手选文献/标签互斥：选了项目就清空手选范围。
+                setScopeDocuments([]);
+                setScopeTags([]);
+                setLibraryNotice('');
+              }}
+            >
+              {searchProjects.length === 0 ? (
+                <option value="">还没有可用项目</option>
+              ) : null}
+              {searchProjects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}（{project.documentCount} 篇）
                 </option>
               ))}
             </select>
@@ -3402,18 +3556,39 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
               ))}
             </select>
           ) : null}
-          {scopeMode !== 'all' &&
-          (scopeMode === 'tags' ? scopeTags.length : scopeDocuments.length) === 0 ? (
+          {scopeMode === 'documents' && scopeDocuments.length === 0 ? (
             <span className="kr-search__scope-warn">请至少选择 1 项</span>
           ) : null}
+          {scopeMode === 'tags' && scopeTags.length === 0 ? (
+            <span className="kr-search__scope-warn">请至少选择 1 项</span>
+          ) : null}
+          {scopeMode === 'project' && searchProjectId === '' ? (
+            <span className="kr-search__scope-warn">请选择 1 个项目</span>
+          ) : null}
+          {searchProjectEmpty ? (
+            <span className="kr-search__scope-warn">该项目暂无文献</span>
+          ) : null}
         </div>
-        {searchActive && searchQuery.isPending ? (
+        {scopeMode === 'project' && !searchProjectEmpty ? (
+          <p className="kr-search__status">
+            按项目检索只匹配正文（含图表/公式识别文本）；上方的类型筛选不参与项目检索。
+          </p>
+        ) : null}
+        {searchActive &&
+        (scopeMode === 'project' ? projectSearchQuery.isFetching : searchQuery.isPending) ? (
           <p className="kr-search__status">正在搜索…</p>
         ) : null}
-        {searchActive && searchQuery.isError ? (
+        {scopeMode !== 'project' && searchActive && searchQuery.isError ? (
           <p className="kr-page-error">搜索失败：{searchQuery.error.message}</p>
         ) : null}
-        {deferredSearch.length > 0 && searchKinds.length === 0 ? (
+        {scopeMode === 'project' && projectSearchQuery.isError ? (
+          <p className="kr-page-error">
+            项目检索失败：{projectSearchQuery.error.message}
+          </p>
+        ) : null}
+        {deferredSearch.length > 0 &&
+        searchKinds.length === 0 &&
+        scopeMode !== 'project' ? (
           <p className="kr-search__status">请至少选择一种搜索类型。</p>
         ) : null}
       </section>
@@ -3601,6 +3776,17 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
         <ProjectsView
           api={api}
           documents={documentsQuery.data ?? []}
+          onSearchInProject={openSearchInProject}
+          onCreateCorpusFromProject={(project) =>
+            openCorpusView({
+              create: true,
+              project: {
+                id: project.id,
+                name: project.name,
+                documentCount: project.documentCount
+              }
+            })
+          }
           onOpenDocument={(document) => {
             if (document.missing_file) {
               const confirmed = appDialogs.confirm(
@@ -3620,6 +3806,8 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
           api={api}
           documents={documentsQuery.data ?? []}
           openCreateRequested={corpusCreateRequested}
+          projectSource={corpusProjectSource}
+          onProjectSourceConsumed={() => setCorpusProjectSource(null)}
           onOpenCreateConsumed={() => setCorpusCreateRequested(false)}
           onOpenSource={openCorpusSource}
         />
@@ -6168,6 +6356,11 @@ function ReaderView({
     queryKey: ['settings'],
     queryFn: () => api.getSettings()
   });
+  // 跨文献「按项目」范围：与项目工作区共用同一查询键，项目归档/删除后一起失效（ChatPanel 据此降级）。
+  const readerProjectsQuery = useQuery({
+    queryKey: ['projects', false],
+    queryFn: () => api.listProjects(false)
+  });
   const shortcut = (name: string, fallback: string): string =>
     shortcutSettings.data?.[`shortcut.${name}`] || fallback;
   const [page, setPage] = useState(Math.max(1, initialPage ?? document.currentPage));
@@ -7232,6 +7425,8 @@ function ReaderView({
   // 预算确认/继续阅读要重发同一请求：保留这次提问附带的范围标签、改写联网词与笔记/批注口径。
   const [lastAskExtras, setLastAskExtras] = useState<{
     scopeTags?: string[];
+    /** 本轮的项目范围：预算确认/重新生成/编辑重问重发同一请求时要沿用。 */
+    projectId?: string;
     webQuery?: string;
     includeMemory?: boolean;
   }>({});
@@ -7740,6 +7935,8 @@ function ReaderView({
       scopeDocuments?: string[];
       searchToken?: string;
       scopeTags?: string[];
+      /** 逻辑项目范围（与 scopeDocuments/scopeTags 互斥；由 ChatPanel 的「按项目」范围给出）。 */
+      projectId?: string;
       webQuery?: string;
       confirmGapSearch?: boolean;
       /** 本轮是否把本机笔记/批注作为补充材料纳入（不算文献原文证据）。 */
@@ -7774,6 +7971,8 @@ function ReaderView({
             source_policy: input.sourcePolicy,
             scope_documents: input.scopeDocuments,
             scope_tags: input.scopeTags,
+            // 项目范围：服务端解析成项目当前文献集合（与 scope_documents/scope_tags 互斥）。
+            projectId: input.projectId,
             web_query: input.webQuery,
             confirm_gap_search: input.confirmGapSearch,
             confirm_budget: input.confirmBudget,
@@ -8178,6 +8377,7 @@ function ReaderView({
         confirmBudget: budgetSkipActive,
         // 沿用本轮的笔记/批注口径与范围标签；旧问题的联网改写词不再适用，不带上。
         scopeTags: lastAskExtras.scopeTags,
+        projectId: lastAskExtras.projectId,
         includeMemory: lastAskExtras.includeMemory ?? true,
         history
       });
@@ -10415,6 +10615,8 @@ function ReaderView({
                 name: item.name,
                 tags: item.tags
               }))}
+              // 「按项目」跨文献范围：只给未归档项目；读取中/失败时传 undefined（ChatPanel 不据此清空选择）。
+              availableProjects={readerProjectsQuery.data}
               // 阅读内默认把本机笔记/批注作为补充材料纳入（界面可取消勾选）。
               includeMemoryDefault
               currentPage={page}
@@ -10703,6 +10905,7 @@ function ReaderView({
                 }).catch(reportPersistFailure);
                 setLastAskExtras({
                   scopeTags: extraOptions?.scopeTags,
+                  projectId: options?.projectId,
                   webQuery: extraOptions?.webQuery,
                   includeMemory: options?.includeMemory
                 });
@@ -10717,6 +10920,7 @@ function ReaderView({
                   sourcePolicy: options?.sourcePolicy,
                   scopeDocuments: options?.scopeDocuments,
                   scopeTags: extraOptions?.scopeTags,
+                  projectId: options?.projectId,
                   webQuery: extraOptions?.webQuery,
                   confirmGapSearch: extraOptions?.confirmGapSearch,
                   includeMemory: options?.includeMemory,
@@ -10750,7 +10954,8 @@ function ReaderView({
                   confirmBudget: budgetSkipActive,
                   confirmSearch: lastSearchToken ? true : undefined,
                   searchToken: lastSearchToken,
-                  // 重发同一请求：沿用最近一次的笔记/批注口径（默认纳入）。
+                  // 重发同一请求：沿用最近一次的笔记/批注口径与项目范围（默认纳入）。
+                  projectId: lastAskExtras.projectId,
                   includeMemory: lastAskExtras.includeMemory ?? true
                 });
               }}

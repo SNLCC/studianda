@@ -52,6 +52,8 @@ export function defaultCorpusSessionTitle(
  * 快照 → HTTP 视图：按**当前**库状态解析可读文献；已删除/不存在的 id 放进 skippedDocumentIds。
  *
  * 快照本身不因为文献删除而改写（`session.documentIds` 始终是建立时的清单）。
+ * 来源项目字段（sourceProjectId/sourceProjectName）原样透传，**不做项目是否存在判断**：
+ * 项目删除后 id 允许悬空，界面仍按 name 快照展示「来自项目 X」。
  */
 export function corpusSessionView(
   store: Store,

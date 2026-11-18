@@ -327,6 +327,93 @@ describe('按项目建跨文献会话（POST /corpus-sessions）', () => {
   });
 });
 
+describe('跨篇会话记录来源项目快照（schema 25）', () => {
+  interface CorpusSessionListItem {
+    id: string;
+    documentIds: string[];
+    sourceProjectId: string | null;
+    sourceProjectName: string | null;
+    skippedDocumentIds: string[];
+  }
+
+  async function listCorpusSessions(): Promise<CorpusSessionListItem[]> {
+    const response = await server.inject({
+      method: 'GET',
+      url: '/api/v1/corpus-sessions',
+      headers
+    });
+    expect(response.statusCode).toBe(200);
+    return (response.json() as { sessions: CorpusSessionListItem[] }).sessions;
+  }
+
+  it('用 projectId 建会话：两字段落库并返回；项目改名/删除后仍是建会话时的名字', async () => {
+    const projectId = makeProject('来源项目-建会话时', [documentA, documentB]);
+    const created = await server.inject({
+      method: 'POST',
+      url: '/api/v1/corpus-sessions',
+      headers,
+      payload: { projectId }
+    });
+    expect(created.statusCode).toBe(200);
+    const session = (created.json() as { session: CorpusSessionListItem }).session;
+    // 建立响应（= 服务端视图）带来源项目快照。
+    expect(session.sourceProjectId).toBe(projectId);
+    expect(session.sourceProjectName).toBe('来源项目-建会话时');
+    // 数据层同样落库（不是只拼在响应里）。
+    expect(store.getCorpusSession(session.id)).toMatchObject({
+      sourceProjectId: projectId,
+      sourceProjectName: '来源项目-建会话时'
+    });
+
+    // 列表也返回这两个字段（前端「来自项目 X」只读这里）。
+    const listed = (await listCorpusSessions()).find((item) => item.id === session.id);
+    expect(listed).toMatchObject({
+      sourceProjectId: projectId,
+      sourceProjectName: '来源项目-建会话时'
+    });
+
+    // 项目改名：会话仍展示建会话时的名字（快照，不联查项目表）。
+    store.updateProject(projectId, { name: '来源项目-改名后' });
+    expect(store.getProject(projectId)?.name).toBe('来源项目-改名后');
+    expect((await listCorpusSessions()).find((item) => item.id === session.id)).toMatchObject({
+      sourceProjectId: projectId,
+      sourceProjectName: '来源项目-建会话时'
+    });
+
+    // 删项目：会话保留、source_project_id 悬空，name 仍是建会话时的名字；范围快照不变。
+    store.deleteProject(projectId);
+    expect(store.getProject(projectId)).toBeNull();
+    const afterDelete = (await listCorpusSessions()).find((item) => item.id === session.id);
+    expect(afterDelete).toMatchObject({
+      sourceProjectId: projectId,
+      sourceProjectName: '来源项目-建会话时'
+    });
+    expect(sorted(afterDelete!.documentIds)).toEqual(sorted([documentA, documentB]));
+    expect(afterDelete!.skippedDocumentIds).toEqual([]);
+  });
+
+  it('不用 projectId 建会话：两字段为 NULL，读取正常', async () => {
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/v1/corpus-sessions',
+      headers,
+      payload: { documentIds: [documentA, documentC] }
+    });
+    expect(response.statusCode).toBe(200);
+    const session = (response.json() as { session: CorpusSessionListItem }).session;
+    expect(session.sourceProjectId).toBeNull();
+    expect(session.sourceProjectName).toBeNull();
+    expect(store.getCorpusSession(session.id)).toMatchObject({
+      sourceProjectId: null,
+      sourceProjectName: null
+    });
+    expect((await listCorpusSessions()).find((item) => item.id === session.id)).toMatchObject({
+      sourceProjectId: null,
+      sourceProjectName: null
+    });
+  });
+});
+
 describe('精读入口按项目圈范围（/chat/budget、/chat/ask）', () => {
   it('/chat/budget：projectId 解析成项目当前文献集合再估算', async () => {
     const projectId = makeProject('精读预算项目', [documentA, documentC]);

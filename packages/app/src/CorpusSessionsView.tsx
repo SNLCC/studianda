@@ -10,7 +10,7 @@
  *   原文已变更 / 越界引用等审计展示全部复用 ChatPanel 既有逻辑，不另写一套；
  * - 视觉全部复用 @studianda/ui 的 kr-* 类名，不新增 CSS 文件、不引入图标库。
  *
- * 不做：项目绑定、预算闸门、继续阅读。
+ * 不做：项目范围实时绑定（只保存建会话时的来源项目快照）、预算闸门、继续阅读。
  */
 import { appDialogs } from './dialogs.js';
 import { ApiRequestError, type ApiClient, type CorpusAskProgress } from '@studianda/api-client';
@@ -55,6 +55,14 @@ export function formatCorpusTime(iso: string): string {
     hour: '2-digit',
     minute: '2-digit'
   });
+}
+
+/** 从项目打开跨篇会话时的来源项目：建立会话直接传 projectId（服务端解析成当前文献快照）。 */
+export interface CorpusProjectSource {
+  id: string;
+  name: string;
+  /** 项目当前文献数（空项目不允许建会话，界面先拦，不等服务端 400）。 */
+  documentCount: number;
 }
 
 /** 取消（AbortController）不是错误：不把它当成红色报错上屏。 */
@@ -199,6 +207,14 @@ export function CorpusSessionsList({
                 <span className="kr-doc-row__title">{session.title}</span>
                 <span className="kr-doc-row__badges">
                   <span className="kr-doc-card__tag">{session.documentIds.length} 篇文献</span>
+                  {session.sourceProjectName ? (
+                    <span
+                      className="kr-doc-card__folder"
+                      title={`范围来自项目「${session.sourceProjectName}」，建立会话时已冻结`}
+                    >
+                      来自项目 {session.sourceProjectName}
+                    </span>
+                  ) : null}
                   {session.skippedDocumentIds.length > 0 ? (
                     <span className="kr-doc-row__state">
                       {session.skippedDocumentIds.length} 篇已不可用
@@ -227,13 +243,14 @@ export function CorpusSessionsList({
 }
 
 /**
- * 新建跨篇会话的多选文献弹窗。
- *
- * 文献库现有列表只能单选（打开阅读页），所以按任务约定在这里做一个简单的多选列表，
- * 不改文献库本身；`documents` 直接用文献库当前可见清单。
+ * 新建跨篇会话弹窗：两种范围来源——
+ * - 手选文献（文献库「新建跨篇会话」）：多选，至少 1 篇，提交 documentIds；
+ * - 来源项目（项目详情「用这些文献新建跨篇会话」）：不再手选，提交 projectId，
+ *   服务端把项目**当前**文献解析成快照；空项目只提示「该项目暂无文献」、不允许提交。
  */
 export function CorpusSessionCreateDialog({
   documents,
+  project,
   selectedIds,
   search,
   title,
@@ -246,6 +263,8 @@ export function CorpusSessionCreateDialog({
   onClose
 }: {
   documents: DocumentSummary[];
+  /** 从项目进入时的来源项目；有值时按项目建立会话。 */
+  project?: CorpusProjectSource | null;
   selectedIds: string[];
   search: string;
   title: string;
@@ -262,6 +281,7 @@ export function CorpusSessionCreateDialog({
     if (!query) return true;
     return `${document.name} ${document.author}`.toLowerCase().includes(query);
   });
+  const projectEmpty = Boolean(project) && (project?.documentCount ?? 0) <= 0;
   return (
     <div className="kr-modal-backdrop" role="presentation" onClick={onClose}>
       <div
@@ -272,10 +292,24 @@ export function CorpusSessionCreateDialog({
         aria-label="新建跨篇会话"
         onClick={(event) => event.stopPropagation()}
       >
-        <h2>新建跨篇会话</h2>
-        <p className="kr-muted">
-          选择要一起提问的文献（至少 1 篇）。范围会冻结为快照；之后新增文献不自动加入。
-        </p>
+        <h2>{project ? `新建跨篇会话 · 项目「${project.name}」` : '新建跨篇会话'}</h2>
+        {project ? (
+          <>
+            <p className="kr-muted">
+              范围：项目「{project.name}」当前的 {project.documentCount} 篇文献。建立会话时冻结为
+              快照，之后项目增删文献不影响本会话。
+            </p>
+            {projectEmpty ? (
+              <p className="kr-modal__error" role="status">
+                该项目暂无文献
+              </p>
+            ) : null}
+          </>
+        ) : (
+          <p className="kr-muted">
+            选择要一起提问的文献（至少 1 篇）。范围会冻结为快照；之后新增文献不自动加入。
+          </p>
+        )}
         <label className="kr-modal__field">
           会话标题（选填）
           <input
@@ -292,53 +326,57 @@ export function CorpusSessionCreateDialog({
             }}
           />
         </label>
-        <div className="kr-library__filters">
-          <label>
-            搜索文献
-            <input
-              type="search"
-              value={search}
-              placeholder="标题或作者"
-              onChange={(event) => onChangeSearch(event.target.value)}
-            />
-          </label>
-          <span className="kr-library__count">
-            已选 {selectedIds.length} 篇 · 可添加 {candidates.length} 篇
-          </span>
-        </div>
-        {documents.length === 0 ? (
-          <p className="kr-muted">文献库还没有文献。</p>
-        ) : candidates.length === 0 ? (
-          <p className="kr-muted">没有匹配的文献。</p>
-        ) : (
-          <ul
-            className="kr-doc-list kr-doc-list--rows"
-            style={{ maxHeight: '240px', overflowY: 'auto' }}
-          >
-            {candidates.map((document) => (
-              <li className="kr-doc-row" key={document.id}>
-                <label className="kr-doc-row__main">
-                  <span className="kr-doc-row__title">
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.includes(document.id)}
-                      onChange={() => onToggle(document.id)}
-                    />{' '}
-                    {document.name}
-                  </span>
-                  <span className="kr-doc-row__badges">
-                    {document.author ? (
-                      <span className="kr-doc-card__tag">@{document.author}</span>
-                    ) : null}
-                    <span className="kr-doc-row__meta">{document.pages} 页</span>
-                    {document.missing_file ? (
-                      <span className="kr-doc-card__missing">附件缺失</span>
-                    ) : null}
-                  </span>
-                </label>
-              </li>
-            ))}
-          </ul>
+        {project ? null : (
+          <>
+            <div className="kr-library__filters">
+              <label>
+                搜索文献
+                <input
+                  type="search"
+                  value={search}
+                  placeholder="标题或作者"
+                  onChange={(event) => onChangeSearch(event.target.value)}
+                />
+              </label>
+              <span className="kr-library__count">
+                已选 {selectedIds.length} 篇 · 可添加 {candidates.length} 篇
+              </span>
+            </div>
+            {documents.length === 0 ? (
+              <p className="kr-muted">文献库还没有文献。</p>
+            ) : candidates.length === 0 ? (
+              <p className="kr-muted">没有匹配的文献。</p>
+            ) : (
+              <ul
+                className="kr-doc-list kr-doc-list--rows"
+                style={{ maxHeight: '240px', overflowY: 'auto' }}
+              >
+                {candidates.map((document) => (
+                  <li className="kr-doc-row" key={document.id}>
+                    <label className="kr-doc-row__main">
+                      <span className="kr-doc-row__title">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.includes(document.id)}
+                          onChange={() => onToggle(document.id)}
+                        />{' '}
+                        {document.name}
+                      </span>
+                      <span className="kr-doc-row__badges">
+                        {document.author ? (
+                          <span className="kr-doc-card__tag">@{document.author}</span>
+                        ) : null}
+                        <span className="kr-doc-row__meta">{document.pages} 页</span>
+                        {document.missing_file ? (
+                          <span className="kr-doc-card__missing">附件缺失</span>
+                        ) : null}
+                      </span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
         )}
         {error ? (
           <p className="kr-modal__error" role="alert">
@@ -353,9 +391,15 @@ export function CorpusSessionCreateDialog({
             type="button"
             className="kr-primary"
             onClick={onSubmit}
-            disabled={pending || selectedIds.length === 0}
+            disabled={
+              pending || (project ? projectEmpty : selectedIds.length === 0)
+            }
           >
-            {pending ? '正在建立…' : `建立会话（${selectedIds.length} 篇）`}
+            {pending
+              ? '正在建立…'
+              : project
+                ? `建立会话（项目内 ${project.documentCount} 篇）`
+                : `建立会话（${selectedIds.length} 篇）`}
           </button>
         </div>
       </div>
@@ -476,6 +520,14 @@ export function CorpusSessionDetailView({
         </button>
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+        {session.sourceProjectName ? (
+          <span
+            className="kr-doc-card__folder"
+            title="会话范围在建立时按该项目当前文献冻结；之后项目增删/改名/删除都不影响本会话的展示名"
+          >
+            来自项目 {session.sourceProjectName}
+          </span>
+        ) : null}
         {session.documents.map((document) => (
           <span className="kr-doc-card__tag" key={document.id} title={`${document.pages} 页`}>
             {document.name}
@@ -679,19 +731,27 @@ function CorpusSessionDetail({
 /**
  * 跨篇会话工作区：列表 ↔ 详情由内部状态切换，不新增导航体系。
  *
- * 从文献库进入时可通过 `openCreateRequested` 直接打开多选弹窗（消费后回调清标记）。
+ * 从文献库进入时可通过 `openCreateRequested` 直接打开多选弹窗（消费后回调清标记）；
+ * 从项目详情进入时带 `projectSource`，建立会话直接传 `projectId`；「来自项目 X」由服务端
+ * 返回的 sourceProjectName 展示（建会话时快照，项目改名/删除后仍显示当时名字）。
  */
 export function CorpusSessionsView({
   api,
   documents,
   openCreateRequested = false,
+  projectSource = null,
   onOpenCreateConsumed,
+  onProjectSourceConsumed,
   onOpenSource
 }: {
   api: ApiClient;
   documents: DocumentSummary[];
   openCreateRequested?: boolean;
+  /** 从项目「用这些文献新建跨篇会话」进入时的来源项目（建立会话直接传 projectId）。 */
+  projectSource?: CorpusProjectSource | null;
   onOpenCreateConsumed?(): void;
+  /** 来源项目已消费（建立成功 / 取消 / 项目失效降级）后通知父级清掉，避免下次进入还带着。 */
+  onProjectSourceConsumed?(): void;
   onOpenSource(source: ChatSource): void;
 }): JSX.Element {
   const queryClient = useQueryClient();
@@ -723,7 +783,7 @@ export function CorpusSessionsView({
     setCreateOpen(true);
   };
 
-  // 从文献库「新建跨篇会话」进来：挂载后直接打开多选弹窗，并通知父级清掉一次性标记。
+  // 从文献库「新建跨篇会话」/ 项目「用这些文献新建跨篇会话」进来：挂载后直接打开弹窗。
   useEffect(() => {
     if (!openCreateRequested) return;
     onOpenCreateConsumed?.();
@@ -734,21 +794,36 @@ export function CorpusSessionsView({
 
   const createMutation = useMutation({
     mutationFn: () =>
-      api.createCorpusSession({
-        documentIds: [...pickedIds],
-        ...(title.trim() ? { title: title.trim() } : {})
-      }),
+      projectSource
+        ? api.createCorpusSession({
+            // 来源是项目时直接传 projectId：服务端解析成项目**当前**文献并固化快照，
+            // 不再和手选 documentIds 同时给（两者互斥，同时给会 400）。
+            projectId: projectSource.id,
+            ...(title.trim() ? { title: title.trim() } : {})
+          })
+        : api.createCorpusSession({
+            documentIds: [...pickedIds],
+            ...(title.trim() ? { title: title.trim() } : {})
+          }),
     onSuccess: (session) => {
+      const createdFromProject = projectSource;
       setCreateOpen(false);
       setPickedIds([]);
       setSearch('');
       setTitle('');
       setCreateError('');
       setSelectedId(session.id);
+      if (createdFromProject) {
+        // 来源项目已由服务端写入会话（sourceProjectId/sourceProjectName），前端不再本地记录；
+        // 这里只负责通知父级清掉「从项目进入」的临时状态。
+        onProjectSourceConsumed?.();
+      }
       setNotice(
         session.skippedDocumentIds.length > 0
           ? `已建立会话「${session.title}」；范围内 ${session.skippedDocumentIds.length} 篇文献当前不可用，追问时会跳过。`
-          : `已建立会话「${session.title}」。`
+          : createdFromProject
+            ? `已用项目「${createdFromProject.name}」当前 ${createdFromProject.documentCount} 篇文献建立会话「${session.title}」（范围已冻结）。`
+            : `已建立会话「${session.title}」。`
       );
       // 列表查询可能比建立请求先返回：把新会话补进缓存，详情才能立刻找到它。
       queryClient.setQueryData<CorpusSessionSummary[]>(['corpus-sessions'], (current) => {
@@ -757,7 +832,15 @@ export function CorpusSessionsView({
       });
       void queryClient.invalidateQueries({ queryKey: ['corpus-sessions'] });
     },
-    onError: (error: Error) => setCreateError(corpusErrorMessage(error))
+    onError: (error: Error) => {
+      // 来源项目在建立过程中被删除/归档：降级为手选文献，不把 404 当成「操作失败」唯一提示。
+      if (projectSource && error instanceof ApiRequestError && error.status === 404) {
+        onProjectSourceConsumed?.();
+        setCreateError(`${corpusErrorMessage(error)}；已改为手动选择文献。`);
+        return;
+      }
+      setCreateError(corpusErrorMessage(error));
+    }
   });
 
   const deleteMutation = useMutation({
@@ -792,6 +875,16 @@ export function CorpusSessionsView({
   };
 
   const submitCreate = (): void => {
+    // 来源是项目：直接传 projectId，不要求手选；空项目在界面就拦下，不发请求。
+    if (projectSource) {
+      if (projectSource.documentCount <= 0) {
+        setCreateError('该项目暂无文献');
+        return;
+      }
+      setCreateError('');
+      createMutation.mutate();
+      return;
+    }
     if (pickedIds.length === 0) {
       setCreateError('请至少选择 1 篇文献。');
       return;
@@ -837,6 +930,7 @@ export function CorpusSessionsView({
       {createOpen ? (
         <CorpusSessionCreateDialog
           documents={documents}
+          project={projectSource}
           selectedIds={pickedIds}
           search={search}
           title={title}
@@ -849,6 +943,8 @@ export function CorpusSessionsView({
           onClose={() => {
             setCreateOpen(false);
             setCreateError('');
+            // 取消时也消费来源项目：下次从侧栏「新建跨篇会话」进来应是手选文献。
+            if (projectSource) onProjectSourceConsumed?.();
           }}
         />
       ) : null}
