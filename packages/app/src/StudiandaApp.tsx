@@ -52,6 +52,7 @@ import {
   shouldShowAssetIndexNotice
 } from './asset-index-notice.js';
 import { ProjectsView } from './ProjectsView.js';
+import { FlowsView } from './FlowsView.js';
 import { CorpusSessionsView } from './CorpusSessionsView.js';
 import { ZoteroBrowser } from './ZoteroBrowser.js';
 import {
@@ -154,7 +155,7 @@ function BooksIcon({ collapsed }: { collapsed: boolean }): JSX.Element {
 function SidebarNavIcon({
   name
 }: {
-  name: 'library' | 'qa' | 'trash' | 'zotero' | 'notes' | 'graph' | 'project' | 'corpus';
+  name: 'library' | 'qa' | 'trash' | 'zotero' | 'notes' | 'graph' | 'project' | 'corpus' | 'flows';
 }): JSX.Element {
   // 侧栏导航图标：16×16、1.3 描边、currentColor，与 reader-icons 同一画法。
   // 全部为手绘基础图元（矩形/圆/直线），未复制任何第三方图标库 path 数据。
@@ -230,6 +231,28 @@ function SidebarNavIcon({
       </svg>
     );
   }
+  if (name === 'flows') {
+    // 阅读流程：带序号的步骤清单，表示「按自己的读法一步步读」。
+    return (
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <path
+          d="M4.6 2.8h8.2v10.4H4.6z"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.3"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M2.8 4.2h1.8M2.8 8h1.8M2.8 11.8h1.8"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.2"
+          strokeLinecap="round"
+        />
+        <path d="M6.7 5.2h4.2M6.7 8h4.2M6.7 10.8h2.8" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+      </svg>
+    );
+  }
   return (
     <svg viewBox="0 0 16 16" aria-hidden="true">
       <circle cx="4" cy="11.3" r="1.7" fill="none" stroke="currentColor" strokeWidth="1.3" />
@@ -279,6 +302,7 @@ function LibrarySidebar({
   standaloneCount,
   showReferenceGraph,
   showProjects,
+  showFlows,
   showCorpus,
   showQa,
   importing,
@@ -298,6 +322,7 @@ function LibrarySidebar({
   onStandaloneNotes,
   onReferenceGraph,
   onProjects,
+  onFlows,
   onCorpus,
   onQa,
   onImport,
@@ -311,6 +336,7 @@ function LibrarySidebar({
   standaloneCount: number | null;
   showReferenceGraph: boolean;
   showProjects: boolean;
+  showFlows: boolean;
   showCorpus: boolean;
   showQa: boolean;
   importing: boolean;
@@ -330,6 +356,7 @@ function LibrarySidebar({
   onStandaloneNotes(): void;
   onReferenceGraph(): void;
   onProjects(): void;
+  onFlows(): void;
   onCorpus(): void;
   onQa(): void;
   onImport(): void;
@@ -355,6 +382,7 @@ function LibrarySidebar({
           !showStandaloneNotes &&
           !showReferenceGraph &&
           !showProjects &&
+          !showFlows &&
           !showCorpus &&
           !showQa &&
           selectedFolderId === null
@@ -436,6 +464,19 @@ function LibrarySidebar({
             <SidebarNavIcon name="project" />
           </span>
           <span className="kr-app-sidebar__nav-label">项目</span>
+        </span>
+      </button>
+      <button
+        type="button"
+        className={`kr-app-sidebar__nav${showFlows ? ' is-active' : ''}`}
+        onClick={onFlows}
+        title="阅读流程：给精读请求加一段自己的读法（L1，仅作方法参考，不覆盖安全规则）"
+      >
+        <span className="kr-app-sidebar__nav-main">
+          <span className="kr-app-sidebar__nav-icon">
+            <SidebarNavIcon name="flows" />
+          </span>
+          <span className="kr-app-sidebar__nav-label">阅读流程</span>
         </span>
       </button>
       <button
@@ -803,6 +844,8 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
   const [showReferenceGraph, setShowReferenceGraph] = useState(false);
   // 项目工作区（逻辑分组：只保存文献关联，不绑定目录）。
   const [showProjects, setShowProjects] = useState(false);
+  // 阅读流程工作区（文件系统里的 L1 用户读法；与其它工作区互斥）。
+  const [showFlows, setShowFlows] = useState(false);
   // 跨篇会话工作区（多篇文献共用一个会话范围快照）。
   const [showCorpus, setShowCorpus] = useState(false);
   // 从文献库进入跨篇会话时，一次性请求打开「新建会话（多选文献）」弹窗。
@@ -820,6 +863,18 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
   const [referenceGraphSearch, setReferenceGraphSearch] = useState('');
   // 独立会话页（不依附任何文献，可直接在整个文献库提问）。
   const [showQa, setShowQa] = useState(false);
+  // 阅读流程视图的有效状态：其它工作区/阅读页置位时自动让位（旧入口只清自己的标志，
+  // 不必逐个入口再补 setShowFlows(false)；打开「全部文献/文件夹」时显式清掉）。
+  const flowsViewActive =
+    showFlows &&
+    !selected &&
+    !showTrash &&
+    !showZotero &&
+    !showStandaloneNotes &&
+    !showReferenceGraph &&
+    !showProjects &&
+    !showCorpus &&
+    !showQa;
   // 文件夹：null = 全部文献；'' = 未分类；其它 = 真实文件夹 id。
   const [folderId, setFolderId] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<LibraryCategoryFilter>('all');
@@ -861,6 +916,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     showStandaloneNotes ? '1' : '0',
     showReferenceGraph ? '1' : '0',
     showProjects ? '1' : '0',
+    flowsViewActive ? '1' : '0',
     showCorpus ? '1' : '0',
     showQa ? '1' : '0',
     folderId ?? '',
@@ -1095,6 +1151,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     !showZotero &&
     !showStandaloneNotes &&
     !showProjects &&
+    !flowsViewActive &&
     deferredSearch.length > 0 &&
     // 项目检索只匹配正文，上方类型筛选不参与：项目模式下不需要「至少一种类型」。
     (scopeMode === 'project' || searchKinds.length > 0);
@@ -2426,6 +2483,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowReferenceGraph(false);
     setShowQa(false);
     setShowProjects(false);
+    setShowFlows(false);
     setShowCorpus(false);
     setFolderId(null);
     resetLibraryFilters();
@@ -2441,6 +2499,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowReferenceGraph(false);
     setShowQa(false);
     setShowProjects(false);
+    setShowFlows(false);
     setShowCorpus(false);
     setFolderId(id);
     resetLibraryFilters();
@@ -2485,6 +2544,22 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowReferenceGraph(false);
     setShowQa(false);
     setShowProjects(true);
+    setShowCorpus(false);
+    setFolderId(null);
+    resetLibraryFilters();
+    setLibraryNotice('');
+  };
+
+  /** 阅读流程工作区：清掉当前文献与其它视图/文件夹/筛选，避免标题与筛选条件残留。 */
+  const openFlowsView = (): void => {
+    setSelected(null);
+    setShowTrash(false);
+    setShowZotero(false);
+    setShowStandaloneNotes(false);
+    setShowReferenceGraph(false);
+    setShowQa(false);
+    setShowProjects(false);
+    setShowFlows(true);
     setShowCorpus(false);
     setFolderId(null);
     resetLibraryFilters();
@@ -3072,6 +3147,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
             standaloneCount={standaloneNotesQuery.data?.length ?? null}
             showReferenceGraph={false}
             showProjects={false}
+            showFlows={false}
             showCorpus={false}
             showQa={false}
             importing={importActive}
@@ -3091,6 +3167,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
             onStandaloneNotes={openStandaloneView}
             onReferenceGraph={openReferenceGraphView}
             onProjects={openProjectsView}
+            onFlows={openFlowsView}
             onCorpus={openCorpusView}
             onQa={openQaView}
             onImport={() => void startImport()}
@@ -3219,16 +3296,19 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
               ? '从 Zotero 导入'
               : showTrash
                 ? '回收站'
-                : (activeFolderName ?? '文献工作台');
+                : flowsViewActive
+                  ? '阅读流程'
+                  : (activeFolderName ?? '文献工作台');
 
   // 工作台级操作（文件健康 / + 导入文献 / 导入进度）只属于文献库类视图：
-  // 会话、Zotero、独立笔记、关系图、项目、回收站都有自己的头部，不能出现悬浮的导入按钮。
+  // 会话、Zotero、独立笔记、关系图、项目、阅读流程、回收站都有自己的头部，不能出现悬浮的导入按钮。
   const showLibraryHeadingActions =
     !showQa &&
     !showZotero &&
     !showStandaloneNotes &&
     !showReferenceGraph &&
     !showProjects &&
+    !flowsViewActive &&
     !showCorpus &&
     !showTrash;
 
@@ -3254,6 +3334,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
           standaloneCount={standaloneNotesQuery.data?.length ?? null}
           showReferenceGraph={showReferenceGraph}
           showProjects={showProjects}
+          showFlows={flowsViewActive}
           showCorpus={showCorpus}
           showQa={showQa}
           importing={importActive}
@@ -3276,6 +3357,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
               if (confirmed) relinkMutation.mutate(document);
               return;
             }
+            setShowFlows(false);
             setSelected({ document });
           }}
           onToggleTrash={() => {
@@ -3286,6 +3368,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
           onStandaloneNotes={openStandaloneView}
           onReferenceGraph={openReferenceGraphView}
           onProjects={openProjectsView}
+          onFlows={openFlowsView}
           onCorpus={openCorpusView}
           onQa={openQaView}
           onImport={() => void startImport()}
@@ -3360,13 +3443,15 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
                   ? '不依附任何文献：默认在文献库里检索原文页、笔记与批注后回答，需要通读多篇时选「跨文献精读」。'
                   : showStandaloneNotes
                     ? '不依附任何文献的 Markdown 笔记，可互相引用。'
-                    : showProjects
-                      ? '把文献按课题或论文分组；项目只保存关联，不移动、不删除文献。'
-                      : showCorpus
-                        ? '选几篇文献一起提问；范围在建立会话时冻结，之后新增文献不自动加入。'
-                        : !showZotero && !showTrash && folderId !== null
-                        ? `共 ${folderScopeCounts.total} 篇 · 著作 ${folderScopeCounts.book} · 论文 ${folderScopeCounts.paper} · 其他 ${folderScopeCounts.other + folderScopeCounts.unknown}`
-                        : '管理文献、继续阅读，让资料有序积累。'}
+                    : flowsViewActive
+                      ? '给精读请求加一段自己的读法（L1，仅作方法参考）；停用后不再注入，本版不支持脚本流程。'
+                      : showProjects
+                        ? '把文献按课题或论文分组；项目只保存关联，不移动、不删除文献。'
+                        : showCorpus
+                          ? '选几篇文献一起提问；范围在建立会话时冻结，之后新增文献不自动加入。'
+                          : !showZotero && !showTrash && folderId !== null
+                          ? `共 ${folderScopeCounts.total} 篇 · 著作 ${folderScopeCounts.book} · 论文 ${folderScopeCounts.paper} · 其他 ${folderScopeCounts.other + folderScopeCounts.unknown}`
+                          : '管理文献、继续阅读，让资料有序积累。'}
               </p>
             </div>
             <div className="kr-workspace-heading__actions">
@@ -3426,6 +3511,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
           showStandaloneNotes ||
           showReferenceGraph ||
           showProjects ||
+          flowsViewActive ||
           showCorpus
             ? ' is-hidden'
             : ''
@@ -3599,6 +3685,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
       !showStandaloneNotes &&
       !showReferenceGraph &&
       !showProjects &&
+      !flowsViewActive &&
       !showCorpus &&
       missingDocuments.length > 0 ? (
         <div className="kr-health" role="status">
@@ -3627,6 +3714,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
       !showStandaloneNotes &&
       !showReferenceGraph &&
       !showProjects &&
+      !flowsViewActive &&
       !showCorpus ? (
         <LibraryFilters
           category={categoryFilter}
@@ -3772,6 +3860,8 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
             setSelected({ document });
           }}
         />
+      ) : flowsViewActive ? (
+        <FlowsView api={api} />
       ) : showProjects ? (
         <ProjectsView
           api={api}

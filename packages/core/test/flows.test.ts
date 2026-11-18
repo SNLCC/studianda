@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PDFDocument } from 'pdf-lib';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ChatResponse, FlowListResponse } from '@studianda/shared';
+import type { ChatResponse, FlowDetailRecord, FlowListResponse } from '@studianda/shared';
 import {
   composeFlowInstruction,
   FLOW_MAX_CHARS,
@@ -391,3 +391,326 @@ describe('GET /api/v1/flows', () => {
     }
   }, 120_000);
 });
+
+describe('停用状态不注入精读请求', () => {
+  it('enabled=false 的合法流程留在清单里，但不参与装配', () => {
+    const dataDir = newDataDir();
+    const markdown = '# 我的读法\n先看方法。';
+    writeFlow(dataDir, 'sleeping-flow', markdown, { enabled: false });
+    const loaded = loadFlows(dataDir);
+    expect(loaded.skipped).toEqual([]);
+    expect(loaded.flows).toHaveLength(1);
+    expect(loaded.flows[0]!.enabled).toBe(false);
+    const composed = composeFlowInstruction(loaded.flows, loaded.skipped);
+    expect(composed.text).toBe('');
+    expect(composed.applied).toEqual([]);
+    // 重新启用后恢复注入。
+    writeFlow(dataDir, 'sleeping-flow', markdown, { enabled: true });
+    const enabled = loadFlows(dataDir);
+    expect(enabled.flows[0]!.enabled).toBe(true);
+    expect(composeFlowInstruction(enabled.flows).text).toContain('先看方法。');
+  });
+
+  it('enabled 不是布尔值时按失效跳过并给出原因', () => {
+    const dataDir = newDataDir();
+    writeFlow(dataDir, 'bad-enabled', '正文', { enabled: 'yes' });
+    const loaded = loadFlows(dataDir);
+    expect(loaded.flows).toEqual([]);
+    expect(loaded.skipped[0]!.reason).toContain('enabled');
+  });
+});
+
+describe('阅读流程写入路由', () => {
+  const TOKEN = 'flows-write-token';
+  const headers = { 'x-studianda-token': TOKEN };
+
+  function writeServer(dataDir: string) {
+    const store = newStore(dataDir);
+    return buildServer({
+      token: TOKEN,
+      version: 'test',
+      store,
+      secrets: new SecretStore()
+    });
+  }
+
+  async function createFlowViaApi(
+    server: ReturnType<typeof writeServer>,
+    name: string,
+    markdown: string
+  ): Promise<FlowDetailRecord> {
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/v1/flows',
+      headers,
+      payload: { name, markdown }
+    });
+    expect(response.statusCode).toBe(201);
+    return response.json() as FlowDetailRecord;
+  }
+
+  it('POST 新建：id 安全、sha256/版本/启用状态由服务端生成，清单独取详情有正文', async () => {
+    const dataDir = newDataDir('studianda-flows-write-');
+    const server = writeServer(dataDir);
+    try {
+      // 写接口与既有接口同一鉴权口径：无 token 必须 401。
+      const unauthorized = await server.inject({ method: 'GET', url: '/api/v1/flows' });
+      expect(unauthorized.statusCode).toBe(401);
+
+      const markdown = '# 课题组读法\n\n先看方法，再核对结论。';
+      const flow = await createFlowViaApi(server, '课题组读法', markdown);
+      expect(flow.id).toMatch(/^[a-z0-9-]{1,40}$/);
+      expect(flow).toMatchObject({
+        name: '课题组读法',
+        version: 1,
+        enabled: true,
+        truncated: false,
+        chars: markdown.length
+      });
+      expect(flow.content).toBe(markdown);
+      expect(flow.sha256).toMatch(/^[a-f0-9]{64}$/);
+      expect(flow.updated_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+
+      const list = await server.inject({ method: 'GET', url: '/api/v1/flows', headers });
+      expect(list.statusCode).toBe(200);
+      const body = list.json() as FlowListResponse;
+      expect(body.max_chars).toBe(FLOW_MAX_CHARS);
+      expect(body.flows).toHaveLength(1);
+      expect(body.flows[0]).toMatchObject({ id: flow.id, enabled: true });
+      // 清单不下发正文；详情才带回完整正文。
+      expect(body.flows[0]).not.toHaveProperty('content');
+
+      const detail = await server.inject({
+        method: 'GET',
+        url: `/api/v1/flows/${flow.id}`,
+        headers
+      });
+      expect(detail.statusCode).toBe(200);
+      expect((detail.json() as FlowDetailRecord).content).toBe(markdown);
+      // 服务端写的文件能被加载器按既有校验读回。
+      expect(loadFlows(dataDir).flows.map((item) => item.id)).toEqual([flow.id]);
+    } finally {
+      await server.close();
+    }
+  }, 120_000);
+
+  it('PUT 改名/改正文/启停：版本自增、sha 重算、停用后不再注入', async () => {
+    const dataDir = newDataDir('studianda-flows-update-');
+    const server = writeServer(dataDir);
+    try {
+      const created = await createFlowViaApi(server, '初版读法', '旧正文');
+      const updatedResponse = await server.inject({
+        method: 'PUT',
+        url: `/api/v1/flows/${created.id}`,
+        headers,
+        payload: { name: '改名后的读法', markdown: '新正文：先看方法。' }
+      });
+      expect(updatedResponse.statusCode).toBe(200);
+      const updated = updatedResponse.json() as FlowDetailRecord;
+      expect(updated).toMatchObject({
+        id: created.id,
+        name: '改名后的读法',
+        version: 2,
+        enabled: true,
+        content: '新正文：先看方法。'
+      });
+      expect(updated.sha256).not.toBe(created.sha256);
+
+      const disabledResponse = await server.inject({
+        method: 'PUT',
+        url: `/api/v1/flows/${created.id}`,
+        headers,
+        payload: { enabled: false }
+      });
+      expect(disabledResponse.statusCode).toBe(200);
+      const disabled = disabledResponse.json() as FlowDetailRecord;
+      // 只提交 enabled 时名称/正文保持磁盘上的值。
+      expect(disabled).toMatchObject({
+        name: '改名后的读法',
+        version: 3,
+        enabled: false,
+        content: '新正文：先看方法。'
+      });
+      const loaderAfterDisable = loadFlows(dataDir);
+      expect(loaderAfterDisable.flows[0]!.enabled).toBe(false);
+      expect(composeFlowInstruction(loaderAfterDisable.flows).text).toBe('');
+
+      const enabledResponse = await server.inject({
+        method: 'PUT',
+        url: `/api/v1/flows/${created.id}`,
+        headers,
+        payload: { enabled: true }
+      });
+      expect(enabledResponse.statusCode).toBe(200);
+      const enabled = enabledResponse.json() as FlowDetailRecord;
+      expect(enabled).toMatchObject({ enabled: true, version: 4 });
+      const loaderAfterEnable = loadFlows(dataDir);
+      const composed = composeFlowInstruction(loaderAfterEnable.flows);
+      expect(composed.applied).toEqual([created.id]);
+      expect(composed.text).toContain('新正文：先看方法。');
+    } finally {
+      await server.close();
+    }
+  }, 120_000);
+
+  it('PUT/DELETE 拒绝路径穿越 id，并复用处写明中文错误', async () => {
+    const dataDir = newDataDir('studianda-flows-traversal-');
+    const server = writeServer(dataDir);
+    try {
+      const escaped = encodeURIComponent('..\\evil');
+      const put = await server.inject({
+        method: 'PUT',
+        url: `/api/v1/flows/${escaped}`,
+        headers,
+        payload: { name: '越界' }
+      });
+      expect(put.statusCode).toBe(400);
+      expect((put.json() as { message: string }).message).toContain('id 不合法');
+
+      const del = await server.inject({
+        method: 'DELETE',
+        url: `/api/v1/flows/${escaped}`,
+        headers
+      });
+      expect(del.statusCode).toBe(400);
+      expect((del.json() as { message: string }).message).toContain('id 不合法');
+
+      // 大写 id 不符合写入规则（读取侧兼容历史目录，但写入必须严格）。
+      const upper = await server.inject({
+        method: 'PUT',
+        url: '/api/v1/flows/UPPER-CASE',
+        headers,
+        payload: { name: '大写 id' }
+      });
+      expect(upper.statusCode).toBe(400);
+      expect((upper.json() as { message: string }).message).toContain('id 不合法');
+    } finally {
+      await server.close();
+    }
+  }, 120_000);
+
+  it('拒绝空名称、空正文、超长正文与 scripts 声明', async () => {
+    const dataDir = newDataDir('studianda-flows-invalid-');
+    const server = writeServer(dataDir);
+    try {
+      const blankName = await server.inject({
+        method: 'POST',
+        url: '/api/v1/flows',
+        headers,
+        payload: { name: '   ', markdown: '正文' }
+      });
+      expect(blankName.statusCode).toBe(400);
+      expect((blankName.json() as { message: string }).message).toContain('名称不能为空');
+
+      const blankMarkdown = await server.inject({
+        method: 'POST',
+        url: '/api/v1/flows',
+        headers,
+        payload: { name: '空正文', markdown: '  \n  ' }
+      });
+      expect(blankMarkdown.statusCode).toBe(400);
+      expect((blankMarkdown.json() as { message: string }).message).toContain('正文不能为空');
+
+      const tooLong = await server.inject({
+        method: 'POST',
+        url: '/api/v1/flows',
+        headers,
+        payload: { name: '超长流程', markdown: '读'.repeat(FLOW_MAX_CHARS + 1) }
+      });
+      expect(tooLong.statusCode).toBe(400);
+      const tooLongMessage = (tooLong.json() as { message: string }).message;
+      expect(tooLongMessage).toContain('8000');
+      expect(tooLongMessage).toContain('最多');
+
+      const scripts = await server.inject({
+        method: 'POST',
+        url: '/api/v1/flows',
+        headers,
+        payload: { name: '脚本流程', markdown: '正文', scripts: ['node hack.mjs'] }
+      });
+      expect(scripts.statusCode).toBe(400);
+      expect((scripts.json() as { message: string }).message).toContain('本版不支持脚本流程');
+
+      const missingUpdate = await server.inject({
+        method: 'PUT',
+        url: '/api/v1/flows/missing-flow',
+        headers,
+        payload: { name: '不存在' }
+      });
+      expect(missingUpdate.statusCode).toBe(404);
+      const missingDetail = await server.inject({
+        method: 'GET',
+        url: '/api/v1/flows/missing-flow',
+        headers
+      });
+      expect(missingDetail.statusCode).toBe(404);
+    } finally {
+      await server.close();
+    }
+  }, 120_000);
+
+  it('停用/改名历史超长流程仍可用；重新提交超长正文才拒绝', async () => {
+    const dataDir = newDataDir('studianda-flows-legacy-long-');
+    const server = writeServer(dataDir);
+    try {
+      const legacyMarkdown = '读'.repeat(FLOW_MAX_CHARS + 10);
+      writeFlow(dataDir, 'legacy-long-flow', legacyMarkdown);
+      const disabledResponse = await server.inject({
+        method: 'PUT',
+        url: '/api/v1/flows/legacy-long-flow',
+        headers,
+        payload: { enabled: false }
+      });
+      expect(disabledResponse.statusCode).toBe(200);
+      const disabled = disabledResponse.json() as FlowDetailRecord;
+      expect(disabled.enabled).toBe(false);
+      expect(disabled.chars).toBe(legacyMarkdown.length);
+      const loaded = loadFlows(dataDir);
+      expect(loaded.flows[0]).toMatchObject({ enabled: false, truncated: true });
+      expect(composeFlowInstruction(loaded.flows).text).toBe('');
+
+      const tooLongAgain = await server.inject({
+        method: 'PUT',
+        url: '/api/v1/flows/legacy-long-flow',
+        headers,
+        payload: { markdown: '读'.repeat(FLOW_MAX_CHARS + 1) }
+      });
+      expect(tooLongAgain.statusCode).toBe(400);
+      expect((tooLongAgain.json() as { message: string }).message).toContain('8000');
+    } finally {
+      await server.close();
+    }
+  }, 120_000);
+
+  it('DELETE 移除流程目录，重复删除返回 404', async () => {
+    const dataDir = newDataDir('studianda-flows-delete-');
+    const server = writeServer(dataDir);
+    try {
+      const flow = await createFlowViaApi(server, '待删除', '正文');
+      const deleted = await server.inject({
+        method: 'DELETE',
+        url: `/api/v1/flows/${flow.id}`,
+        headers
+      });
+      expect(deleted.statusCode).toBe(200);
+      expect(deleted.json()).toEqual({ ok: true, id: flow.id });
+      const detail = await server.inject({
+        method: 'GET',
+        url: `/api/v1/flows/${flow.id}`,
+        headers
+      });
+      expect(detail.statusCode).toBe(404);
+      const list = await server.inject({ method: 'GET', url: '/api/v1/flows', headers });
+      expect((list.json() as FlowListResponse).flows).toEqual([]);
+      const again = await server.inject({
+        method: 'DELETE',
+        url: `/api/v1/flows/${flow.id}`,
+        headers
+      });
+      expect(again.statusCode).toBe(404);
+    } finally {
+      await server.close();
+    }
+  }, 120_000);
+});
+

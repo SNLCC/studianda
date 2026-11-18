@@ -23,6 +23,8 @@ import type {
   EmbeddingStatus,
   FolderOverview,
   FolderSummary,
+  FlowDeleteResult,
+  FlowDetailRecord,
   FlowListResponse,
   FileHealthReport,
   BackupJobRecord,
@@ -620,8 +622,19 @@ export interface ApiClient {
   /** 页遮罩重建索引的进度/状态（改规则后进度条与失败原因）。 */
   getMaskIndexStatus(documentId: string): Promise<MaskIndexStatus>;
   getSettings(): Promise<SettingsMap>;
-  /** 提示词分层 P1-2：只读列出 `<dataDir>/flows` 下的 L1 用户阅读流程。 */
+  /** 提示词分层 P1-2：只读列出 `<dataDir>/flows` 下的 L1 用户阅读流程（含启用状态与跳过原因）。 */
   listFlows(): Promise<FlowListResponse>;
+  /** 读取单个流程的完整正文（编辑用；只返回通过服务端校验的流程）。 */
+  getFlow(id: string): Promise<FlowDetailRecord>;
+  /** 新建流程：id 由服务端按名称派生，sha256/版本/更新时间由服务端生成。 */
+  createFlow(input: { name: string; markdown: string }): Promise<FlowDetailRecord>;
+  /** 更新流程：name / markdown / enabled 至少一个；服务端复用完整校验并自增版本号。 */
+  updateFlow(
+    id: string,
+    input: { name?: string; markdown?: string; enabled?: boolean }
+  ): Promise<FlowDetailRecord>;
+  /** 删除流程目录（flow.md + flow.json）。 */
+  deleteFlow(id: string): Promise<FlowDeleteResult>;
   listProviders(): Promise<ProviderPreset[]>;
   getModelServices(): Promise<ModelServicesConfig>;
   getModelServicesImpact(connectionId: string): Promise<ModelServicesImpact>;
@@ -1940,6 +1953,19 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
 
     getSettings: () => request<SettingsMap>('/settings'),
     listFlows: () => request<FlowListResponse>('/flows'),
+    getFlow: (id) => request<FlowDetailRecord>(`/flows/${encodeURIComponent(id)}`),
+    createFlow: (input) =>
+      request<FlowDetailRecord>('/flows', {
+        method: 'POST',
+        body: JSON.stringify(input)
+      }),
+    updateFlow: (id, input) =>
+      request<FlowDetailRecord>(`/flows/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        body: JSON.stringify(input)
+      }),
+    deleteFlow: (id) =>
+      request<FlowDeleteResult>(`/flows/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     listProviders: () => request<ProviderPreset[]>('/providers'),
     getModelServices: () => request<ModelServicesConfig>('/model-services'),
     getTokenizerStatus: () =>

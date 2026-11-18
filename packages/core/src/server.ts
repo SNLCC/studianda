@@ -29,7 +29,6 @@ import {
   type ChatResponse,
   type ClearUserDataResult,
   type FileHealthReport,
-  type FlowListResponse,
   type HealthResponse,
   type ImportJobRecord,
   type MaintenanceStatus,
@@ -68,6 +67,7 @@ import { readCapacity } from './capacity.js';
 import { listBackups } from './backup.js';
 import { registerBackupRoutes } from './server/backup-routes.js';
 import { registerCorpusSessionRoutes } from './server/corpus-session-routes.js';
+import { registerFlowRoutes } from './server/flow-routes.js';
 import { registerOcrRoutes } from './server/ocr-routes.js';
 import {
   createDiagnosticsPackage,
@@ -76,7 +76,6 @@ import {
 } from './diagnostics.js';
 import { testModelConnection } from './model-test.js';
 import { appendErrorLog, redactSensitive } from './error-log.js';
-import { flowListResponse } from './flows.js';
 import { listProviders } from './providers.js';
 import { searchLibrary, searchLibraryDocuments } from './library-search.js';
 import {
@@ -629,19 +628,16 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     void reply.code(500).send({ error: API_ERROR_CODES.internal, message });
   });
 
+  // L1 用户阅读流程（文件系统）：清单/详情 + 新建/编辑/启停/删除。
+  // 放在鉴权 onRequest 钩子之后注册，保证写接口与既有只读接口一样必须带 token。
+  registerFlowRoutes(app, { dataDir: options.store.dataDir });
+
   app.get(`${API_PREFIX}/health`, async (): Promise<HealthResponse> => ({
     application: APP_NAME,
     version: options.version,
     api_version: API_VERSION,
     closing: options.isClosing?.() ?? false
   }));
-
-  // 提示词分层 P1-2：只读列出 `<dataDir>/flows` 下通过校验的用户阅读流程（L1）。
-  // 只返回元数据与跳过原因，不返回流程正文；本版不做 UI、不提供写入接口。
-  app.get(
-    `${API_PREFIX}/flows`,
-    async (): Promise<FlowListResponse> => flowListResponse(options.store.dataDir)
-  );
 
   app.get(`${API_PREFIX}/documents`, async (request) => {
     const query = request.query as { trash?: string };

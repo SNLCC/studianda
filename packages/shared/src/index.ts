@@ -2021,6 +2021,20 @@ export interface FlowSummaryRecord {
   chars: number;
   /** 是否因超过 `max_chars` 被截断后再注入。 */
   truncated: boolean;
+  /** 是否启用；停用的流程保留在清单里但不注入精读请求（缺省视为 true）。 */
+  enabled: boolean;
+}
+
+/** `GET /api/v1/flows/:id` 的详情：在清单元数据之外带回完整正文（供编辑）。 */
+export interface FlowDetailRecord extends FlowSummaryRecord {
+  /** flow.md 完整正文（不截断；可能超过 `max_chars`，保存时按上限拒绝）。 */
+  content: string;
+}
+
+/** `DELETE /api/v1/flows/:id` 的结果。 */
+export interface FlowDeleteResult {
+  ok: boolean;
+  id: string;
 }
 
 /**
