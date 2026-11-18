@@ -23,7 +23,7 @@
     "check:version": "node scripts/check-version.mjs",
     "bump": "node scripts/bump-version.mjs",
     "package": "node scripts/package.mjs",
-    "test": "pnpm --filter @studianda/shared build && pnpm --filter @studianda/core test",
+    "test": "pnpm --filter @studianda/shared build && pnpm --filter @studianda/core test && pnpm --filter @studianda/ui test && pnpm --filter @studianda/app test",
     "legal:generate": "node scripts/audit-packaged-legal.mjs",
     "legal:registry": "node scripts/audit-registry-licenses.mjs",
     "legal:upstream": "node scripts/audit-upstream-licenses.mjs",

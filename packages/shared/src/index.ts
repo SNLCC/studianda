@@ -1942,7 +1942,7 @@ export interface ChatRequest {
    * 是否把本机笔记与批注纳入本轮问答（默认不纳入；界面默认勾选）。
    *
    * - 有 documentId（文献阅读内提问）：纳入该文献的笔记与批注；
-   * - 无 documentId（独立问答）：按 scope_documents/scope_tags/全部文献取笔记与批注，
+   * - 无 documentId（旧版独立问答；服务端现已拒绝该路径，仅类型保留兼容）：按 scope_documents/scope_tags/全部文献取笔记与批注，
    *   范围是「全部文献」时一并纳入独立笔记。
    *
    * 笔记/批注是用户自己的记录，只能作为理解用户关注点的补充材料，

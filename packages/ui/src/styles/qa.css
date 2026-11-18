@@ -1,4 +1,4 @@
-/* 独立会话页（kr-qa-*）：不依附任何文献，默认走库内检索会话。
+/* 跨篇会话页（kr-qa-*）：不依附任何文献，按会话范围检索。
    样式单独放这里（而不是 styles.css），避免与本轮 ChatPanel 的样式改动互相覆盖。 */
 
 .kr-qa {
@@ -148,7 +148,7 @@
   line-height: 1.6;
 }
 
-/* 对话区：高度交给 QaView 控制，ChatPanel 自己 flex 填满并滚动消息流。 */
+/* 对话区：高度交给跨篇会话视图控制，ChatPanel 自己 flex 填满并滚动消息流。 */
 .kr-qa__panel {
   flex: 1;
   min-height: 0;
@@ -543,12 +543,7 @@
   line-height: 1.6;
 }
 
-/* 独立会话每轮的上下文统计（仅 response.qa_context 存在时出现；阅读页不返回，不会显示）。 */
-.kr-chat__qa-context {
-  color: var(--kr-celadon-deep);
-}
-
-/* 「加载更早的消息」：消息流顶部的小胶囊按钮（独立会话分页用）。 */
+/* 「加载更早的消息」：消息流顶部的小胶囊按钮（会话分页用）。 */
 .kr-chat__load-earlier {
   align-self: center;
   flex: none;

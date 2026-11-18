@@ -17,6 +17,7 @@
   },
   "scripts": {
     "build": "node ../../scripts/build-lib.mjs .",
+    "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
@@ -31,6 +32,7 @@
     "@types/react-dom": "19.2.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.0"
   }
 }

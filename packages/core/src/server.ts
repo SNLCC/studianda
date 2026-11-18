@@ -4693,6 +4693,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   /**
    * 这一轮要不要按"跨文献精读"估算：显式 corpus，或旧调用没有当前文献但给了跨书范围。
    * 独立问答的「库内检索」（reading_scope='auto' + scope_documents）只做检索，不读全文，不估算。
+   * 现已无该入口，仅保留旧调用兼容。
    */
   function isCorpusBudgetRequest(
     readingScope: unknown,

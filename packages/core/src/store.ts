@@ -21,6 +21,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { SCHEMA_SQL } from './store-schema.js';
+import * as projectDomain from './store/projects.js';
 import {
   highestMetadataSource,
   mergeMetadataField,
@@ -352,11 +353,6 @@ function parseTags(value: string): string[] {
     // 损坏的标签按空处理
   }
   return [];
-}
-
-/** 项目名唯一索引冲突（node:sqlite message 形如 `UNIQUE constraint failed: projects.name`）。 */
-function isUniqueConstraintError(error: unknown): boolean {
-  return error instanceof Error && /UNIQUE constraint failed/i.test(error.message);
 }
 
 function toSummary(row: DocumentRow, dataDir: string): DocumentSummary {
@@ -3447,275 +3443,59 @@ export class Store {
   }
 
   // ---------------------------------------------------------------------------
-  // 逻辑项目（schema_version 22）：不绑目录，只给文献做逻辑分组；只存链接，不复制文献。
-  // 名称唯一（大小写不敏感）：应用层先查一次给中文错误，DB 的 NOCASE 唯一索引兜底并发写入。
+  // 逻辑项目（schema_version 22）：实现已抽到 ./store/projects.ts。
+  // 拆分模式：纯函数 + 显式依赖注入（db + deps），Store 只保留薄委托，
+  // 调用方签名/返回结构不变；跨表写事务（deleteProject）仍在实现里一次性完成。
   // ---------------------------------------------------------------------------
 
-  private projectRawRow(id: string): {
-    id: string;
-    name: string;
-    description: string;
-    archivedAt: string;
-    createdAt: string;
-    updatedAt: string;
-  } | null {
-    const row = this.db
-      .prepare(
-        'SELECT id, name, description, archived_at, created_at, updated_at FROM projects WHERE id = ?'
-      )
-      .get(id) as
-      | {
-          id?: string;
-          name?: string;
-          description?: string;
-          archived_at?: string;
-          created_at?: string;
-          updated_at?: string;
-        }
-      | undefined;
-    if (!row?.id) return null;
+  /** 项目域依赖：时间、id、文献读取由 Store 显式提供，模块不持有 Store 实例。 */
+  private get projectDeps(): projectDomain.ProjectDeps {
     return {
-      id: String(row.id),
-      name: String(row.name ?? ''),
-      description: String(row.description ?? ''),
-      archivedAt: String(row.archived_at ?? ''),
-      createdAt: String(row.created_at ?? ''),
-      updatedAt: String(row.updated_at ?? '')
+      now: () => new Date().toISOString(),
+      uuid: randomUUID,
+      getDocument: (id) => this.getDocument(id)
     };
-  }
-
-  /** 项目关联文献数：只数未进应用回收站的文献（与文献列表口径一致）。 */
-  private projectDocumentCount(id: string): number {
-    const row = this.db
-      .prepare(
-        `SELECT COUNT(*) AS n FROM project_documents pd
-         JOIN documents d ON d.id = pd.document_id
-         WHERE pd.project_id = ? AND d.deleted = 0`
-      )
-      .get(id) as { n?: number } | undefined;
-    return Number(row?.n ?? 0);
-  }
-
-  private projectSummaryOf(row: {
-    id: string;
-    name: string;
-    description: string;
-    archivedAt: string;
-    createdAt: string;
-    updatedAt: string;
-  }): ProjectSummary {
-    return {
-      id: row.id,
-      name: row.name,
-      description: row.description,
-      archivedAt: row.archivedAt,
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt,
-      documentCount: this.projectDocumentCount(row.id)
-    };
-  }
-
-  private projectNameOf(input: string): string {
-    const name = input.trim();
-    if (!name) throw new Error('请输入项目名称');
-    if (name.length > 60) throw new Error('项目名称过长（最多 60 个字符）');
-    if (/[\u0000-\u001f\u007f]/.test(name)) throw new Error('项目名称包含控制字符');
-    return name;
-  }
-
-  private projectDescriptionOf(input: string): string {
-    const value = input.trim();
-    if (value.length > 2000) throw new Error('项目描述过长（最多 2000 个字符）');
-    return value;
-  }
-
-  /** 同名判断大小写不敏感（与 DB 唯一索引一致）。 */
-  private projectNameTaken(name: string, exceptId?: string): boolean {
-    const row = this.db
-      .prepare('SELECT id FROM projects WHERE name = ? COLLATE NOCASE AND id <> ? LIMIT 1')
-      .get(name, exceptId ?? '') as { id?: string } | undefined;
-    return Boolean(row?.id);
-  }
-
-  /** 链接变化（加入/移除文献）同样算项目更新：列表「最近更新时间」随之刷新。 */
-  private touchProject(id: string, at = new Date().toISOString()): void {
-    this.db.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(at, id);
   }
 
   /** 列出项目（默认不含归档）；documentCount 只数未进回收站的文献。 */
   listProjects(includeArchived = false): ProjectSummary[] {
-    const rows = this.db
-      .prepare(
-        `SELECT id, name, description, archived_at, created_at, updated_at
-         FROM projects
-         WHERE ? = 1 OR archived_at = ''
-         ORDER BY created_at ASC, name ASC`
-      )
-      .all(includeArchived ? 1 : 0) as unknown as Array<{
-      id?: string;
-      name?: string;
-      description?: string;
-      archived_at?: string;
-      created_at?: string;
-      updated_at?: string;
-    }>;
-    return rows.flatMap((row) => {
-      if (!row.id) return [];
-      return [
-        this.projectSummaryOf({
-          id: String(row.id),
-          name: String(row.name ?? ''),
-          description: String(row.description ?? ''),
-          archivedAt: String(row.archived_at ?? ''),
-          createdAt: String(row.created_at ?? ''),
-          updatedAt: String(row.updated_at ?? '')
-        })
-      ];
-    });
+    return projectDomain.listProjects(this.db, this.projectDeps, includeArchived);
   }
 
   getProject(id: string): ProjectSummary | null {
-    const row = this.projectRawRow(id);
-    return row ? this.projectSummaryOf(row) : null;
+    return projectDomain.getProject(this.db, this.projectDeps, id);
   }
 
   createProject(input: CreateProjectInput): ProjectSummary {
-    const name = this.projectNameOf(input.name ?? '');
-    const description = this.projectDescriptionOf(input.description ?? '');
-    if (this.projectNameTaken(name)) throw new Error(`已存在同名项目：${name}`);
-    const id = randomUUID();
-    const now = new Date().toISOString();
-    try {
-      this.db
-        .prepare(
-          `INSERT INTO projects(id, name, description, archived_at, created_at, updated_at)
-           VALUES (?, ?, ?, '', ?, ?)`
-        )
-        .run(id, name, description, now, now);
-    } catch (error) {
-      // 并发下应用层检查可能穿透：把唯一索引冲突翻译成同一个中文错误，不抛裸 SQLite 错误。
-      if (isUniqueConstraintError(error)) throw new Error(`已存在同名项目：${name}`);
-      throw error;
-    }
-    const created = this.projectRawRow(id);
-    if (!created) throw new Error('创建项目后无法读取');
-    return this.projectSummaryOf(created);
+    return projectDomain.createProject(this.db, this.projectDeps, input);
   }
 
   /** 改名/改描述/归档都在这里：只更新传了的字段，名称冲突给出中文错误。 */
   updateProject(id: string, patch: UpdateProjectInput): ProjectSummary {
-    const current = this.projectRawRow(id);
-    if (!current) throw new Error('项目不存在');
-    const name = patch.name === undefined ? current.name : this.projectNameOf(patch.name);
-    const description =
-      patch.description === undefined
-        ? current.description
-        : this.projectDescriptionOf(patch.description);
-    let archivedAt = current.archivedAt;
-    if (patch.archived === true && !archivedAt) archivedAt = new Date().toISOString();
-    else if (patch.archived === false) archivedAt = '';
-    const changed =
-      name !== current.name ||
-      description !== current.description ||
-      archivedAt !== current.archivedAt;
-    if (changed) {
-      if (name !== current.name && this.projectNameTaken(name, id)) {
-        throw new Error(`已存在同名项目：${name}`);
-      }
-      try {
-        this.db
-          .prepare(
-            'UPDATE projects SET name = ?, description = ?, archived_at = ?, updated_at = ? WHERE id = ?'
-          )
-          .run(name, description, archivedAt, new Date().toISOString(), id);
-      } catch (error) {
-        if (isUniqueConstraintError(error)) throw new Error(`已存在同名项目：${name}`);
-        throw error;
-      }
-    }
-    const updated = this.projectRawRow(id);
-    if (!updated) throw new Error('项目不存在');
-    return this.projectSummaryOf(updated);
+    return projectDomain.updateProject(this.db, this.projectDeps, id, patch);
   }
 
   archiveProject(id: string): ProjectSummary {
-    if (!this.projectRawRow(id)) throw new Error('项目不存在');
-    const now = new Date().toISOString();
-    this.db
-      .prepare("UPDATE projects SET archived_at = ?, updated_at = ? WHERE id = ? AND archived_at = ''")
-      .run(now, now, id);
-    const updated = this.projectRawRow(id);
-    if (!updated) throw new Error('项目不存在');
-    return this.projectSummaryOf(updated);
+    return projectDomain.archiveProject(this.db, this.projectDeps, id);
   }
 
   /** 删项目只删链接、不删文献；返回解除关联的文献数（含回收站里的文献链接）。 */
   deleteProject(id: string): ProjectDeleteResult {
-    if (!this.projectRawRow(id)) throw new Error('项目不存在');
-    const countRow = this.db
-      .prepare('SELECT COUNT(*) AS n FROM project_documents WHERE project_id = ?')
-      .get(id) as { n?: number } | undefined;
-    const detachedDocuments = Number(countRow?.n ?? 0);
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      this.db.prepare('DELETE FROM project_documents WHERE project_id = ?').run(id);
-      this.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
-      this.db.exec('COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
-    return { id, deleted: true, detachedDocuments };
+    return projectDomain.deleteProject(this.db, this.projectDeps, id);
   }
 
   /** 把文献加入项目（重复加入幂等）；只建链接，不改文献归属。 */
   addProjectDocument(projectId: string, documentId: string): ProjectDocumentRecord {
-    if (!this.projectRawRow(projectId)) throw new Error('项目不存在');
-    const document = this.getDocument(documentId);
-    if (!document) throw new Error('文档不存在');
-    const now = new Date().toISOString();
-    const result = this.db
-      .prepare(
-        'INSERT OR IGNORE INTO project_documents(project_id, document_id, added_at) VALUES (?, ?, ?)'
-      )
-      .run(projectId, documentId, now);
-    if (result.changes > 0) this.touchProject(projectId, now);
-    const link = this.db
-      .prepare('SELECT added_at FROM project_documents WHERE project_id = ? AND document_id = ?')
-      .get(projectId, documentId) as { added_at?: string } | undefined;
-    return { ...document, projectId, addedAt: String(link?.added_at ?? now) };
+    return projectDomain.addProjectDocument(this.db, this.projectDeps, projectId, documentId);
   }
 
   removeProjectDocument(projectId: string, documentId: string): void {
-    if (!this.projectRawRow(projectId)) throw new Error('项目不存在');
-    const result = this.db
-      .prepare('DELETE FROM project_documents WHERE project_id = ? AND document_id = ?')
-      .run(projectId, documentId);
-    if (result.changes === 0) throw new Error('文献不在该项目中');
-    this.touchProject(projectId);
+    projectDomain.removeProjectDocument(this.db, this.projectDeps, projectId, documentId);
   }
 
   /** 项目下的文献（只读链接；隐藏进应用回收站的文献，恢复后自动重新出现）。 */
   listProjectDocuments(projectId: string): ProjectDocumentRecord[] {
-    if (!this.projectRawRow(projectId)) throw new Error('项目不存在');
-    const rows = this.db
-      .prepare(
-        `SELECT pd.document_id, pd.added_at
-         FROM project_documents pd
-         JOIN documents d ON d.id = pd.document_id
-         WHERE pd.project_id = ? AND d.deleted = 0
-         ORDER BY pd.added_at DESC, d.name ASC`
-      )
-      .all(projectId) as unknown as Array<{ document_id?: string; added_at?: string }>;
-    const records: ProjectDocumentRecord[] = [];
-    for (const row of rows) {
-      const documentId = String(row.document_id ?? '');
-      if (!documentId) continue;
-      const document = this.getDocument(documentId);
-      if (!document) continue;
-      records.push({ ...document, projectId, addedAt: String(row.added_at ?? '') });
-    }
-    return records;
+    return projectDomain.listProjectDocuments(this.db, this.projectDeps, projectId);
   }
 
   listDocuments(trash = false): DocumentSummary[] {
@@ -5040,7 +4820,7 @@ export class Store {
    *
    * 删除范围：文献及全部派生数据（批注/笔记/会话与消息/译文与页记录/页编辑/页遮罩/
    * 目录导航/块与 FTS/结构/参考文献用户编辑/阅读任务与断点/视觉读页缓存/嵌入与审计缓存/
-   * 检索版本）、独立问答会话、文件夹、笔记附件记录与文件、PDF 副本、上传临时文件、
+   * 检索版本）、文件夹、笔记附件记录与文件、PDF 副本、上传临时文件、
    * Markdown 扫描/导入结果与任务快照、备份（backups/、migration-backups/ 与恢复标记）、
    * 诊断包、检索缓存目录、用户自定义阅读流程目录 flows/。
    * **保留** settings（模型/服务/界面配置）与 secrets（密钥）：清空后不需要重新配置模型。

@@ -56,6 +56,13 @@ import { FlowsView } from './FlowsView.js';
 import { CorpusSessionsView } from './CorpusSessionsView.js';
 import { ZoteroBrowser } from './ZoteroBrowser.js';
 import {
+  chooseSearchProject,
+  resolveSearchProject,
+  searchScopeReady as resolveSearchScopeReady,
+  switchSearchScopeMode,
+  type LibraryScopeMode
+} from './search-scope.js';
+import {
   IconBack,
   IconBlocks,
   IconCompanion,
@@ -155,7 +162,7 @@ function BooksIcon({ collapsed }: { collapsed: boolean }): JSX.Element {
 function SidebarNavIcon({
   name
 }: {
-  name: 'library' | 'qa' | 'trash' | 'zotero' | 'notes' | 'graph' | 'project' | 'corpus' | 'flows';
+  name: 'library' | 'trash' | 'zotero' | 'notes' | 'graph' | 'project' | 'corpus' | 'flows';
 }): JSX.Element {
   // 侧栏导航图标：16×16、1.3 描边、currentColor，与 reader-icons 同一画法。
   // 全部为手绘基础图元（矩形/圆/直线），未复制任何第三方图标库 path 数据。
@@ -164,14 +171,6 @@ function SidebarNavIcon({
       <svg viewBox="0 0 16 16" aria-hidden="true">
         <path d="M3.2 2.6h2.2v10.8H3.2zM6.6 2.6h2.2v10.8H6.6z" fill="none" stroke="currentColor" strokeWidth="1.3" />
         <path d="M10.6 4.4l2.1-.5 1.6 9-2.1.5z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-      </svg>
-    );
-  }
-  if (name === 'qa') {
-    return (
-      <svg viewBox="0 0 16 16" aria-hidden="true">
-        <path d="M3 3.2h10v7.2H7.3L4.4 12.9v-2.5H3z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-        <path d="M5.6 6.1h4.8M5.6 8.2h3.4" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
       </svg>
     );
   }
@@ -304,7 +303,6 @@ function LibrarySidebar({
   showProjects,
   showFlows,
   showCorpus,
-  showQa,
   importing,
   folders,
   unfiledTotal,
@@ -324,7 +322,6 @@ function LibrarySidebar({
   onProjects,
   onFlows,
   onCorpus,
-  onQa,
   onImport,
   onSettings
 }: {
@@ -338,7 +335,6 @@ function LibrarySidebar({
   showProjects: boolean;
   showFlows: boolean;
   showCorpus: boolean;
-  showQa: boolean;
   importing: boolean;
   folders: FolderSummary[];
   unfiledTotal: number | null;
@@ -358,7 +354,6 @@ function LibrarySidebar({
   onProjects(): void;
   onFlows(): void;
   onCorpus(): void;
-  onQa(): void;
   onImport(): void;
   onSettings(): void;
 }): JSX.Element {
@@ -384,7 +379,6 @@ function LibrarySidebar({
           !showProjects &&
           !showFlows &&
           !showCorpus &&
-          !showQa &&
           selectedFolderId === null
             ? ' is-active'
             : ''
@@ -861,8 +855,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
   // 全库节点数超过单页上限时，类型/关键字筛选在服务端先过滤再分页（空数组 = 不过滤）。
   const [referenceGraphKinds, setReferenceGraphKinds] = useState<ReferenceNodeKind[]>([]);
   const [referenceGraphSearch, setReferenceGraphSearch] = useState('');
-  // 独立会话页（不依附任何文献，可直接在整个文献库提问）。
-  const [showQa, setShowQa] = useState(false);
   // 阅读流程视图的有效状态：其它工作区/阅读页置位时自动让位（旧入口只清自己的标志，
   // 不必逐个入口再补 setShowFlows(false)；打开「全部文献/文件夹」时显式清掉）。
   const flowsViewActive =
@@ -873,8 +865,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     !showStandaloneNotes &&
     !showReferenceGraph &&
     !showProjects &&
-    !showCorpus &&
-    !showQa;
+    !showCorpus;
   // 文件夹：null = 全部文献；'' = 未分类；其它 = 真实文件夹 id。
   const [folderId, setFolderId] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<LibraryCategoryFilter>('all');
@@ -918,7 +909,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     showProjects ? '1' : '0',
     flowsViewActive ? '1' : '0',
     showCorpus ? '1' : '0',
-    showQa ? '1' : '0',
     folderId ?? '',
     selected?.document.id ?? '',
     selected?.page ?? '',
@@ -984,9 +974,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     : ({ '--kr-sidebar-width': `${sidebarWidth}px` } as CSSProperties);
   const [searchTerm, setSearchTerm] = useState('');
   const deferredSearch = useDeferredValue(searchTerm.trim());
-  const [scopeMode, setScopeMode] = useState<'all' | 'tags' | 'documents' | 'project'>(
-    'all'
-  );
+  const [scopeMode, setScopeMode] = useState<LibraryScopeMode>('all');
   const [scopeTags, setScopeTags] = useState<string[]>([]);
   const [scopeDocuments, setScopeDocuments] = useState<string[]>([]);
   // 「按项目」检索范围：项目 id（空串 = 未选）。与手选文献/标签互斥，提交前再看项目是否还有效。
@@ -1186,14 +1174,11 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     queryFn: () => api.listProjects(false)
   });
   const searchProjects = searchProjectsQuery.data ?? [];
-  const searchProject =
-    searchProjectId !== ''
-      ? (searchProjects.find((project) => project.id === searchProjectId) ?? null)
-      : null;
-  const searchProjectActive = scopeMode === 'project' && searchProjectId !== '';
-  // documentCount 与「按项目检索/精读」解析范围同一口径：0 = 空项目，界面提示且不发检索请求。
-  const searchProjectEmpty =
-    searchProjectActive && searchProject !== null && searchProject.documentCount <= 0;
+  const {
+    project: searchProject,
+    active: searchProjectActive,
+    empty: searchProjectEmpty
+  } = resolveSearchProject(searchProjects, scopeMode, searchProjectId);
   // 项目成员（空项目不发请求）：有搜索词时以检索命中为准，没搜索词时用它把列表收窄到项目内。
   // 先等 listProjects 回来（documentCount 已知）再决定要不要读成员，空项目一个请求都不发。
   const projectScopeDocumentsQuery = useQuery({
@@ -1316,13 +1301,12 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     };
   }, [api, runningTranslationKey]);
   // 检索生效时，下方列表只保留命中文献；"范围"（指定文献/标签/项目）在命中集上再收窄。
-  const searchScopeReady =
-    scopeMode === 'all' ||
-    (scopeMode === 'documents'
-      ? scopeDocuments.length > 0
-      : scopeMode === 'tags'
-        ? scopeTags.length > 0
-        : searchProjectId !== '');
+  const searchScopeReady = resolveSearchScopeReady({
+    mode: scopeMode,
+    documents: scopeDocuments,
+    tags: scopeTags,
+    projectId: searchProjectId
+  });
   const allDocuments = documentsQuery.data ?? [];
   const folders = foldersQuery.data?.folders ?? [];
   const unfiledTotal = foldersQuery.data?.unfiled.counts.total ?? null;
@@ -2266,7 +2250,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowStandaloneNotes(false);
     setShowTrash(false);
     setShowZotero(false);
-    setShowQa(false);
     setShowProjects(false);
     setShowCorpus(false);
     setSelected({
@@ -2280,7 +2263,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowTrash(false);
     setShowZotero(false);
     setShowReferenceGraph(false);
-    setShowQa(false);
     setShowProjects(false);
     setShowCorpus(false);
     setFolderId(null);
@@ -2294,7 +2276,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowTrash(false);
     setShowZotero(false);
     setShowStandaloneNotes(false);
-    setShowQa(false);
     setShowProjects(false);
     setShowCorpus(false);
     setFolderId(null);
@@ -2308,24 +2289,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     if (!hadFilter && referenceGraphOffset === 0) {
       void referenceGraphQuery.refetch();
     }
-    setLibraryNotice('');
-  };
-
-  /**
-   * 打开独立会话页：清掉当前文献与其它视图/文件夹/筛选，避免会话页顶部标题与筛选条件残留。
-   * 对话本身由 QaView 自己从 localStorage 恢复。
-   */
-  const openQaView = (): void => {
-    setSelected(null);
-    setShowTrash(false);
-    setShowZotero(false);
-    setShowStandaloneNotes(false);
-    setShowReferenceGraph(false);
-    setShowProjects(false);
-    setShowCorpus(false);
-    setFolderId(null);
-    resetLibraryFilters();
-    setShowQa(true);
     setLibraryNotice('');
   };
 
@@ -2359,7 +2322,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
       setShowTrash(false);
       setShowZotero(false);
       setShowReferenceGraph(false);
-      setShowQa(false);
       setShowProjects(false);
       setShowCorpus(false);
       setShowStandaloneNotes(true);
@@ -2481,7 +2443,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowZotero(false);
     setShowStandaloneNotes(false);
     setShowReferenceGraph(false);
-    setShowQa(false);
     setShowProjects(false);
     setShowFlows(false);
     setShowCorpus(false);
@@ -2497,7 +2458,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowZotero(false);
     setShowStandaloneNotes(false);
     setShowReferenceGraph(false);
-    setShowQa(false);
     setShowProjects(false);
     setShowFlows(false);
     setShowCorpus(false);
@@ -2512,7 +2472,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowZotero(false);
     setShowStandaloneNotes(false);
     setShowReferenceGraph(false);
-    setShowQa(false);
     setShowProjects(false);
     setShowCorpus(false);
     setShowTrash(true);
@@ -2526,7 +2485,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowTrash(false);
     setShowStandaloneNotes(false);
     setShowReferenceGraph(false);
-    setShowQa(false);
     setShowProjects(false);
     setShowCorpus(false);
     setShowZotero(true);
@@ -2542,7 +2500,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowZotero(false);
     setShowStandaloneNotes(false);
     setShowReferenceGraph(false);
-    setShowQa(false);
     setShowProjects(true);
     setShowCorpus(false);
     setFolderId(null);
@@ -2557,7 +2514,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowZotero(false);
     setShowStandaloneNotes(false);
     setShowReferenceGraph(false);
-    setShowQa(false);
     setShowProjects(false);
     setShowFlows(true);
     setShowCorpus(false);
@@ -2584,7 +2540,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowZotero(false);
     setShowStandaloneNotes(false);
     setShowReferenceGraph(false);
-    setShowQa(false);
     setShowProjects(false);
     setShowCorpus(true);
     setCorpusCreateRequested(Boolean(options?.create));
@@ -2601,10 +2556,12 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
    */
   const openSearchInProject = (project: ProjectSummary): void => {
     openAllDocuments();
-    setScopeMode('project');
-    setSearchProjectId(project.id);
-    setScopeDocuments([]);
-    setScopeTags([]);
+    // 从项目详情进入：直接进入「按项目」范围，并清空互斥的手选文献/标签。
+    const selection = chooseSearchProject(project.id);
+    setScopeMode(selection.mode);
+    setSearchProjectId(selection.projectId);
+    setScopeDocuments([...selection.documents]);
+    setScopeTags([...selection.tags]);
     setSearchTerm('');
     setLibraryNotice('');
     // 视图切换后检索区才可见：等一帧再聚焦，避免对隐藏元素 focus 无效。
@@ -3067,7 +3024,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
    */
   const handleUserDataCleared = (): void => {
     setSelected(null);
-    setShowQa(false);
     setShowTrash(false);
     setShowZotero(false);
     setShowStandaloneNotes(false);
@@ -3149,7 +3105,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
             showProjects={false}
             showFlows={false}
             showCorpus={false}
-            showQa={false}
             importing={importActive}
             folders={folders}
             unfiledTotal={unfiledTotal}
@@ -3169,7 +3124,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
             onProjects={openProjectsView}
             onFlows={openFlowsView}
             onCorpus={openCorpusView}
-            onQa={openQaView}
             onImport={() => void startImport()}
             onSettings={() => setShowSettings(true)}
           />
@@ -3281,29 +3235,26 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setSelected({ document, page: hit.page });
   };
 
-  // 工作台标题：会话 / 关系图 / 独立笔记 / 项目 / Zotero / 回收站优先，其次显示当前文件夹名。
-  const workspaceTitle = showQa
-    ? '会话'
-    : showReferenceGraph
-      ? '关系图'
-      : showStandaloneNotes
-        ? '独立笔记'
-        : showProjects
-          ? '项目'
-          : showCorpus
-            ? '跨篇会话'
-            : showZotero
-              ? '从 Zotero 导入'
-              : showTrash
-                ? '回收站'
-                : flowsViewActive
-                  ? '阅读流程'
-                  : (activeFolderName ?? '文献工作台');
+  // 工作台标题：关系图 / 独立笔记 / 项目 / Zotero / 回收站优先，其次显示当前文件夹名。
+  const workspaceTitle = showReferenceGraph
+    ? '关系图'
+    : showStandaloneNotes
+      ? '独立笔记'
+      : showProjects
+        ? '项目'
+        : showCorpus
+          ? '跨篇会话'
+          : showZotero
+            ? '从 Zotero 导入'
+            : showTrash
+              ? '回收站'
+              : flowsViewActive
+                ? '阅读流程'
+                : (activeFolderName ?? '文献工作台');
 
   // 工作台级操作（文件健康 / + 导入文献 / 导入进度）只属于文献库类视图：
-  // 会话、Zotero、独立笔记、关系图、项目、阅读流程、回收站都有自己的头部，不能出现悬浮的导入按钮。
+  // Zotero、独立笔记、关系图、项目、阅读流程、回收站都有自己的头部，不能出现悬浮的导入按钮。
   const showLibraryHeadingActions =
-    !showQa &&
     !showZotero &&
     !showStandaloneNotes &&
     !showReferenceGraph &&
@@ -3336,7 +3287,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
           showProjects={showProjects}
           showFlows={flowsViewActive}
           showCorpus={showCorpus}
-          showQa={showQa}
           importing={importActive}
           folders={folders}
           unfiledTotal={unfiledTotal}
@@ -3370,7 +3320,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
           onProjects={openProjectsView}
           onFlows={openFlowsView}
           onCorpus={openCorpusView}
-          onQa={openQaView}
           onImport={() => void startImport()}
           onSettings={() => setShowSettings(true)}
         />
@@ -3417,7 +3366,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
           </div>
         </header>
         <div
-          className={`kr-app-content${showQa || showCorpus ? ' kr-app-content--qa' : ''}`}
+          className={`kr-app-content${showCorpus ? ' kr-app-content--qa' : ''}`}
         >
           {showAssetIndexNotice ? (
             <div className="kr-asset-index-notice" role="status">
@@ -3439,19 +3388,17 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
             <div>
               <h1>{workspaceTitle}</h1>
               <p>
-                {showQa
-                  ? '不依附任何文献：默认在文献库里检索原文页、笔记与批注后回答，需要通读多篇时选「跨文献精读」。'
-                  : showStandaloneNotes
-                    ? '不依附任何文献的 Markdown 笔记，可互相引用。'
-                    : flowsViewActive
-                      ? '给精读请求加一段自己的读法（L1，仅作方法参考）；停用后不再注入，本版不支持脚本流程。'
-                      : showProjects
-                        ? '把文献按课题或论文分组；项目只保存关联，不移动、不删除文献。'
-                        : showCorpus
-                          ? '选几篇文献一起提问；范围在建立会话时冻结，之后新增文献不自动加入。'
-                          : !showZotero && !showTrash && folderId !== null
-                          ? `共 ${folderScopeCounts.total} 篇 · 著作 ${folderScopeCounts.book} · 论文 ${folderScopeCounts.paper} · 其他 ${folderScopeCounts.other + folderScopeCounts.unknown}`
-                          : '管理文献、继续阅读，让资料有序积累。'}
+                {showStandaloneNotes
+                  ? '不依附任何文献的 Markdown 笔记，可互相引用。'
+                  : flowsViewActive
+                    ? '给精读请求加一段自己的读法（L1，仅作方法参考）；停用后不再注入，本版不支持脚本流程。'
+                    : showProjects
+                      ? '把文献按课题或论文分组；项目只保存关联，不移动、不删除文献。'
+                      : showCorpus
+                        ? '选几篇文献一起提问；范围在建立会话时冻结，之后新增文献不自动加入。'
+                        : !showZotero && !showTrash && folderId !== null
+                        ? `共 ${folderScopeCounts.total} 篇 · 著作 ${folderScopeCounts.book} · 论文 ${folderScopeCounts.paper} · 其他 ${folderScopeCounts.other + folderScopeCounts.unknown}`
+                        : '管理文献、继续阅读，让资料有序积累。'}
               </p>
             </div>
             <div className="kr-workspace-heading__actions">
@@ -3505,7 +3452,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
           <div className={`kr-workspace${compactHeader ? ' is-compact' : ''}`}>
       <section
         className={`kr-search${
-          showQa ||
           showZotero ||
           showTrash ||
           showStandaloneNotes ||
@@ -3559,12 +3505,18 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
             <select
               value={scopeMode}
               onChange={(event) => {
-                const next = event.target.value as 'all' | 'tags' | 'documents' | 'project';
-                setScopeMode(next);
-                setScopeTags([]);
-                setScopeDocuments([]);
+                const next = event.target.value as LibraryScopeMode;
                 // 范围方式与项目 id 互斥：切走就清掉项目，避免切回来时残留一个旧项目。
-                if (next !== 'project') setSearchProjectId('');
+                const selection = switchSearchScopeMode(next, {
+                  mode: scopeMode,
+                  documents: scopeDocuments,
+                  tags: scopeTags,
+                  projectId: searchProjectId
+                });
+                setScopeMode(selection.mode);
+                setScopeTags([...selection.tags]);
+                setScopeDocuments([...selection.documents]);
+                setSearchProjectId(selection.projectId);
               }}
             >
               <option value="all">全部文献</option>
@@ -3602,11 +3554,11 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
               aria-label="项目"
               value={searchProjectId}
               onChange={(event) => {
-                const next = event.target.value;
-                setSearchProjectId(next);
                 // 按项目与手选文献/标签互斥：选了项目就清空手选范围。
-                setScopeDocuments([]);
-                setScopeTags([]);
+                const selection = chooseSearchProject(event.target.value);
+                setSearchProjectId(selection.projectId);
+                setScopeDocuments([...selection.documents]);
+                setScopeTags([...selection.tags]);
                 setLibraryNotice('');
               }}
             >
@@ -3679,8 +3631,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
         ) : null}
       </section>
 
-      {!showQa &&
-      !showZotero &&
+      {!showZotero &&
       !showTrash &&
       !showStandaloneNotes &&
       !showReferenceGraph &&
@@ -3709,8 +3660,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
         </div>
       ) : null}
 
-      {!showQa &&
-      !showZotero &&
+      {!showZotero &&
       !showStandaloneNotes &&
       !showReferenceGraph &&
       !showProjects &&

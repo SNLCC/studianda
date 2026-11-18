@@ -223,7 +223,7 @@ describe('POST /api/v1/maintenance/clear-user-data', () => {
       backups: 1
     });
 
-    // 数据库里的用户内容全部清空（文档级联 + 独立问答 + 文件夹）。
+    // 数据库里的用户内容全部清空（文档级联 + 文件夹）。
     expect(store.listDocuments()).toHaveLength(0);
     expect(store.listDocuments(true)).toHaveLength(0);
     expect(store.getDocument(documentId)).toBe(null);

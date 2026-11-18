@@ -234,10 +234,6 @@ export const SCHEMA_SQL = `      CREATE TABLE IF NOT EXISTS schema_meta(
       CREATE INDEX IF NOT EXISTS corpus_session_documents_document
         ON corpus_session_documents(document_id);
 
-      -- schema_version 13：独立问答的会话与消息（不依附文献，阅读内 messages 表不变）。
-      -- 会话保存完整历史；context_summary/summary_upto 记录「更早轮次压缩摘要」：
-      -- summary_upto 及之前的消息不再以原文送进模型，只以摘要形式参与上下文。
-
       CREATE TABLE IF NOT EXISTS translation_pages(
         document_id TEXT,
         page INTEGER,
