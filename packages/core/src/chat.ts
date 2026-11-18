@@ -1,4 +1,5 @@
 import type {
+  ChatAuditSummary,
   ChatRequest,
   ChatResponse,
   ChatSource,
@@ -109,6 +110,39 @@ export function isProgrammingError(error: unknown): boolean {
     default:
       return false;
   }
+}
+
+/**
+ * 续读复用答案时继承上一轮的审计摘要（单篇）。
+ *
+ * `answerWithReading()` 的复用分支（已无未读页/草稿恢复）不会重新调用模型，响应里没有 `audit`，
+ * 所以本轮审计结论**等于被复用回答的结论**。摘要不在阅读任务里，只能在会话历史里按正文回找
+ * 上一条 assistant 消息并原样复制——复制而非重算，更不补 0（补 0 会把「有缺证」谎报成「没有」）。
+ *
+ * 找不到（旧消息没有摘要/正文未落库/没有会话 id）时返回 undefined：宁可不写摘要，也不伪造计数。
+ */
+function inheritedReusedAuditSummary(
+  store: Store,
+  input: ChatRequest,
+  answerText: string
+): ChatAuditSummary | undefined {
+  const documentId = input.documentId;
+  const sessionId = input.chat_session_id?.trim();
+  const target = answerText.trim();
+  if (!documentId || !sessionId || !target) return undefined;
+  try {
+    const messages = store.listMessages(documentId, { sessionId });
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]!;
+      if (message.role !== 'assistant') continue;
+      // 界面落库的正文可能被 trim 过（`answerContent`），两侧都按 trim 后比较。
+      if (message.content.trim() !== target) continue;
+      return message.auditSummary;
+    }
+  } catch {
+    // 读历史失败只影响审计展示，不能阻断本轮回答：退化为「没有可继承的摘要」。
+  }
+  return undefined;
 }
 
 function getConfig(store: Store, secrets: SecretStore): ChatConfig | null {
@@ -1271,6 +1305,11 @@ async function answerQuestionInner(
             ? { selection_snapshot_status: finalReading.selection_snapshot.status }
             : {})
         };
+        // 续读复用：本轮没有重新调用模型（响应里没有 `audit`），审计结论等于被复用上一轮
+        // 回答的结论；从会话历史按正文复制摘要（复制而非重算）。找不到时宁可不写，也不补 0。
+        const reusedAuditSummary = finalReading.audit
+          ? undefined
+          : inheritedReusedAuditSummary(store, input, finalReading.answer ?? '');
         const sourceRouting = {
           claims: routes.length,
           needs_external: externalClaims.length,
@@ -1361,7 +1400,12 @@ async function answerQuestionInner(
           route_note: routeNote,
           blocked_sources: blockedSources,
           source_routing: sourceRouting,
-          audit_summary: auditSummary,
+          // 正常回答给本轮摘要；复用回答给被复用原消息的摘要（都没有时省略，不伪造 0）。
+          ...(finalReading.audit
+            ? { audit_summary: auditSummary }
+            : reusedAuditSummary
+              ? { audit_summary: reusedAuditSummary }
+              : {}),
           reading_scope: scope,
           model_knowledge: input.source_policy !== 'document_only',
           web_search:

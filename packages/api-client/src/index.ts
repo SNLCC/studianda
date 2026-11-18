@@ -156,6 +156,13 @@ export interface CorpusAskInput {
   selection?: string;
   /** document_only = 本轮不联网、不补充模型知识。 */
   source_policy?: 'auto' | 'document_only';
+  /**
+   * 继续阅读：上次跨文献回答返回的任务编号。
+   *
+   * 服务端只补未读页，不重读已读部分；必须属于该会话且范围与会话快照一致，否则 400。
+   * 任务已读完/过期时按「无需续读」返回上一轮已保存的回答（`reused_answer`）。
+   */
+  taskId?: string;
 }
 
 /**

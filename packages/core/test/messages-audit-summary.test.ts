@@ -281,4 +281,131 @@ describe('消息审计摘要落库与恢复', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('单篇 POST：没有 metadata.response 时从可见审计字段压摘要；完全没有审计信息时显式 NULL', async () => {
+    const { dir, store, documentId } = await setupDocument('post-fields');
+    const token = 'message-audit-fields-token';
+    const server = buildServer({
+      token,
+      version: 'test-version',
+      store,
+      secrets: new SecretStore()
+    });
+    const headers = { 'x-studianda-token': token };
+    let plainId = 0;
+    try {
+      // 1) 只带可见审计字段（audit.claims / invalid_citations / selection_snapshot），
+      //    没有完整 metadata.response：仍要压出摘要，不能只存正文。
+      const visible = await server.inject({
+        method: 'POST',
+        url: `/api/v1/documents/${encodeURIComponent(documentId)}/messages`,
+        headers,
+        payload: {
+          role: 'assistant',
+          content: '只带可见审计字段的回答。',
+          sources: [],
+          metadata: {
+            sessionId: 'visible-fields',
+            audit: {
+              status: '已进行模型证据支持复核',
+              claims: [
+                { claim: 1, verdict: 'supported', claim_type: 'DOCUMENT_INTERPRETATION' },
+                {
+                  claim: 2,
+                  verdict: 'unsupported',
+                  claim_type: 'HISTORICAL_FACT',
+                  evidence_status: 'source_changed'
+                },
+                { claim: 3, verdict: 'inference' }
+              ]
+            },
+            invalid_citations: [2, 5, 7],
+            selection_snapshot: { status: 'source_changed' }
+          }
+        }
+      });
+      expect(visible.statusCode).toBe(200);
+      expect(visible.json()).toMatchObject({
+        scopeKind: 'document',
+        auditSummary: {
+          claims: 3,
+          supported: 1,
+          inference: 1,
+          unsupported: 1,
+          heading: 0,
+          source_changed: 1,
+          invalid_citations: 3,
+          selection_snapshot_status: 'source_changed'
+        }
+      });
+
+      // 2) 只有顶层 claims 数组（没有 audit 包装、也没有完整响应）同样接受。
+      const claimsOnly = await server.inject({
+        method: 'POST',
+        url: `/api/v1/documents/${encodeURIComponent(documentId)}/messages`,
+        headers,
+        payload: {
+          role: 'assistant',
+          content: '只带 claims 数组的回答。',
+          metadata: {
+            sessionId: 'claims-only',
+            claims: [
+              { claim: 1, verdict: 'unsupported', claim_type: 'HISTORICAL_FACT' },
+              { claim: 2, verdict: 'unsupported' }
+            ]
+          }
+        }
+      });
+      expect(claimsOnly.statusCode).toBe(200);
+      expect(claimsOnly.json()).toMatchObject({
+        auditSummary: { claims: 2, supported: 0, unsupported: 2, source_changed: 0 }
+      });
+
+      // 3) 请求里确实没有任何审计信息（连 metadata 都不传）：消息照常落库，
+      //    审计列显式写 NULL——不伪造计数。
+      const plain = await server.inject({
+        method: 'POST',
+        url: `/api/v1/documents/${encodeURIComponent(documentId)}/messages`,
+        headers,
+        payload: { role: 'assistant', content: '没有审计信息的回答。' }
+      });
+      expect(plain.statusCode).toBe(200);
+      const plainRow = plain.json() as ChatMessageRecord;
+      plainId = plainRow.id;
+      expect(plainRow.auditSummary).toBeUndefined();
+
+      // 回读历史：能压出摘要的两条可恢复，无审计的那条没有摘要（且不影响其它消息）。
+      const history = await server.inject({
+        method: 'GET',
+        url: `/api/v1/documents/${encodeURIComponent(documentId)}/messages`,
+        headers
+      });
+      expect(history.statusCode).toBe(200);
+      const rows = history.json() as ChatMessageRecord[];
+      expect(rows.find((row) => row.content === '只带可见审计字段的回答。')?.auditSummary).toMatchObject(
+        { claims: 3, unsupported: 1, source_changed: 1, invalid_citations: 3 }
+      );
+      expect(rows.find((row) => row.content === '只带 claims 数组的回答。')?.auditSummary).toMatchObject(
+        { claims: 2, unsupported: 2 }
+      );
+      expect(rows.find((row) => row.id === plainId)?.auditSummary).toBeUndefined();
+    } finally {
+      await server.close();
+      store.close();
+    }
+    // 「显式存 NULL」在库层核实：列值就是 NULL，不是空串或 '{}'（关库后用独立连接查看）。
+    try {
+      const raw = new DatabaseSync(path.join(dir, 'reader.sqlite3'));
+      try {
+        const row = raw
+          .prepare('SELECT audit_summary FROM messages WHERE id = ?')
+          .get(plainId) as { audit_summary: string | null };
+        expect(row.audit_summary).toBeNull();
+      } finally {
+        raw.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

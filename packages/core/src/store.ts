@@ -1830,8 +1830,10 @@ export class Store {
     metadata?: Record<string, unknown>;
     /**
      * 显式审计摘要（一般由调用方从 ChatResponse 压缩后传入）。
-     * 不传时：assistant 消息若 `metadata.response` 里带整轮 ChatResponse，服务端自动压缩；
-     * 两者都没有就写 NULL（旧消息/失败占位没有审计信息）。
+     * 不传时：assistant 消息先尝试 `metadata.response` 里的整轮 ChatResponse；没有完整响应
+     * 就退回 `metadata` 自身的可见审计字段（`audit` / `claims` / `invalid_citations` /
+     * `selection_snapshot` / `audit_summary`）。两者都取不到才写 NULL（旧消息/失败占位没有
+     * 审计信息），**不伪造计数**。
      */
     auditSummary?: ChatAuditSummary | null;
   }): ChatMessageRecord {
@@ -1842,7 +1844,10 @@ export class Store {
     // 单篇文献消息显式记 scope_kind='document'：不再依赖 document_id 是否为空来判断作用域。
     const auditSummary =
       input.role === 'assistant'
-        ? (input.auditSummary ?? auditSummaryFromResponse(input.metadata?.response))
+        ? (input.auditSummary ??
+          auditSummaryFromResponse(input.metadata?.response) ??
+          // 调用方没带完整 response 时，请求里的可见审计字段同样压成摘要；都没有就保持 NULL。
+          auditSummaryFromResponse(input.metadata))
         : null;
     const result = this.db
       .prepare(

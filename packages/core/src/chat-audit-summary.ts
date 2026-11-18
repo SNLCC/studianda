@@ -52,11 +52,22 @@ function snapshotStatusOf(value: unknown): ChatAuditSummary['selection_snapshot_
  * 计数优先取 `audit.claims`（最细、最权威）；没有逐段明细时退回响应里已有的
  * `audit_summary` 计数字段。越界引用优先取 `invalid_citations` 数组长度。
  * 完全没有任何审计信息时返回 null（不写空摘要）。
+ *
+ * 入参不限于完整 ChatResponse：调用点只带可见审计字段时（例如请求 body 里的
+ * `audit` / `claims` / `invalid_citations` / `selection_snapshot`），按同一口径压缩。
  */
 export function auditSummaryFromResponse(value: unknown): ChatAuditSummary | null {
   if (!isRecord(value)) return null;
   const audit = isRecord(value.audit) ? value.audit : null;
-  const claims = audit && Array.isArray(audit.claims) ? audit.claims.filter(isRecord) : [];
+  // 没有完整响应时，调用点也可能只把论断明细放在顶层 `claims` 数组（请求体的可见字段）：
+  // 与 `audit.claims` 同等对待；计数仍只看数组里的逐条记录。
+  const claimRows =
+    audit && Array.isArray(audit.claims)
+      ? audit.claims
+      : Array.isArray(value.claims)
+        ? value.claims
+        : [];
+  const claims = claimRows.filter(isRecord);
   const existing = isRecord(value.audit_summary) ? value.audit_summary : null;
   const snapshot = isRecord(value.selection_snapshot) ? value.selection_snapshot : null;
 

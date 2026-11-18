@@ -3,6 +3,8 @@ import {
   API_ERROR_CODES,
   API_PREFIX,
   FAILED_ANSWER_PREFIX,
+  type ChatAuditSummary,
+  type ChatMessageRecord,
   type ChatResponse,
   type DocumentDetail
 } from '@studianda/shared';
@@ -44,6 +46,137 @@ export function registerCorpusSessionRoutes(
   const activeAsks = new Set<string>();
 
   /**
+   * 续读任务校验结果：
+   * - `live`：任务还在（本轮带 taskId 只补未读页）；
+   * - `completed`：任务已不在库（已读完/文献被删除/过期），但本会话的回答记录过这个编号，
+   *   按「无需续读」复用上一轮已保存的回答；
+   * - `none`：本轮不是续读。
+   */
+  type ResumeResolution =
+    | { kind: 'live'; taskId: string }
+    | { kind: 'completed'; taskId: string; message: ChatMessageRecord }
+    | { kind: 'none' };
+
+  /** 阅读任务 payload 里续读校验需要的字段（完整形状由 reading-chat 维护，这里只读不写）。 */
+  interface ResumeTaskPayload {
+    kind?: string;
+    documentIds?: string[];
+  }
+
+  /** 两个文献 id 集合是否相同（范围比较不看顺序，也不看重复）。 */
+  const sameDocumentScope = (left: readonly string[], right: readonly string[]): boolean => {
+    const leftSet = new Set(left);
+    const rightSet = new Set(right);
+    if (leftSet.size !== rightSet.size) return false;
+    for (const id of leftSet) {
+      if (!rightSet.has(id)) return false;
+    }
+    return true;
+  };
+
+  /**
+   * 本会话里「返回过该 taskId」的最后一条 assistant 消息。
+   *
+   * 阅读任务表本身不带会话 id，所以「taskId 属于该会话」以「本会话落库的回答带过这个编号」
+   * 为准：任务编号只可能由本会话自己的回答返回（persistAnswer 写 metadata.taskId），
+   * 别的会话或 /chat/ask 跨文献入口产生的任务不会出现在这里。取最后一条，保证「全读完」
+   * 后复用的是最新、最完整的那一轮回答。
+   */
+  const sessionTaskMessage = (sessionId: string, taskId: string): ChatMessageRecord | null => {
+    const messages = store.listCorpusSessionMessages(sessionId);
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]!;
+      if (message.role !== 'assistant') continue;
+      if (message.metadata?.taskId === taskId) return message;
+    }
+    return null;
+  };
+
+  /**
+   * 校验可选 taskId：必须由本会话产生，且**范围与会话快照一致**。
+   *
+   * 范围按建立会话时冻结的 `documentIds` 比较（不是按当前可读文献）：会话范围不可变，
+   * 快照里文献被删除不该让已保存的续读进度失效；反过来，任务范围与快照不同（来自别的
+   * 会话、或被改小/改大）时一律拒绝——把别的范围的任务接进来会把跨篇续读静默降级。
+   *
+   * 不匹配一律 400，并把「为什么不能续读」写进 message；只有「任务已读完/被删」但本会话
+   * 确实返回过该编号时才走复用分支（那不是校验失败，是明确的「无需续读」行为）。
+   */
+  const resolveResumeTask = (
+    sessionId: string,
+    sessionDocumentIds: string[],
+    requestedTaskId: string
+  ): { resume?: ResumeResolution; error?: string } => {
+    const saved = store.loadReadingTask<ResumeTaskPayload>(requestedTaskId);
+    const recorded = sessionTaskMessage(sessionId, requestedTaskId);
+    if (!saved) {
+      if (!recorded) {
+        return {
+          error:
+            'taskId 不存在，也不属于该会话：无法继续阅读（可能已读完或已过期，请重新提问）'
+        };
+      }
+      return { resume: { kind: 'completed', taskId: requestedTaskId, message: recorded } };
+    }
+    const payload = saved.payload;
+    if (payload?.kind !== 'corpus') {
+      return {
+        error: 'taskId 不是跨文献续读任务（单篇阅读任务不能用于跨文献会话续读）'
+      };
+    }
+    const taskDocumentIds = Array.isArray(payload.documentIds) ? payload.documentIds : [];
+    if (!sameDocumentScope(taskDocumentIds, sessionDocumentIds)) {
+      return {
+        error:
+          'taskId 的文献范围与该会话快照不一致，不能继续阅读；请重新提问或新建会话'
+      };
+    }
+    if (!recorded) {
+      return {
+        error: 'taskId 不属于该会话（该任务的回答不是本会话产生的），不能用于续读'
+      };
+    }
+    return { resume: { kind: 'live', taskId: requestedTaskId } };
+  };
+
+  /**
+   * 「已全部读完/任务已过期」时复用上一轮已保存的回答。
+   *
+   * 不重新调用模型、不改范围、不重读原文：正文与来源原样来自被复用的那条 assistant 消息，
+   * 审计摘要由 persistAnswer 从该消息复制（复制而非重算），响应里也会带回去。
+   */
+  const reusedCompletedResponse = (taskId: string, message: ChatMessageRecord): ChatResponse => ({
+    answer: message.content,
+    sources: message.sources ?? [],
+    taskId,
+    reused_answer: true,
+    notice:
+      '这次「继续阅读」的进度已不存在（可能已读完、文献被删除或已过期），本轮没有重新阅读；' +
+      '下面是上一轮已保存的回答。'
+  });
+
+  /**
+   * 复用答案时继承原消息的审计摘要。
+   *
+   * `reused_answer` 表示本轮没有重新调用模型、正文原样来自上一轮已保存的回答
+   * （`answerWithCorpus()` 的复用分支），所以响应里没有 audit。复用答案的审计结论**等于
+   * 原答案的审计结论**：按正文回找被复用的那条 assistant 消息，把它的 `audit_summary`
+   * 原样复制过来——不重算、不补 0。原消息没有摘要（旧数据/失败占位）时保持 NULL。
+   */
+  const reusedAnswerAuditSummary = (
+    sessionId: string,
+    answerText: string
+  ): ChatAuditSummary | null => {
+    const messages = store.listCorpusSessionMessages(sessionId);
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]!;
+      if (message.role !== 'assistant' || message.content !== answerText) continue;
+      return message.auditSummary ?? null;
+    }
+    return null;
+  };
+
+  /**
    * 组装并落库本轮回答。
    *
    * JSON 模式与 SSE 模式共用这一个函数：SSE 的 `result` 事件就是它返回的对象，
@@ -60,6 +193,10 @@ export function registerCorpusSessionRoutes(
     const notice = [answer.notice, skippedDocumentsNotice(store, skippedDocumentIds)]
       .filter((part): part is string => Boolean(part && part.trim()))
       .join('；');
+    // 正常回答从响应压摘要；复用答案（没有重新调用模型）则复制原消息的摘要。
+    const auditSummary =
+      auditSummaryFromResponse(answer) ??
+      (answer.reused_answer ? reusedAnswerAuditSummary(sessionId, answerText) : null);
     const assistantMessage = store.addCorpusSessionMessage({
       sessionId,
       role: 'assistant',
@@ -67,7 +204,7 @@ export function registerCorpusSessionRoutes(
       sources: answer.sources ?? [],
       // 审计结果压成摘要落库：重开会话后「缺证 / 原文已变更 / 越界引用」仍可展示，
       // 只存计数与选区状态，不存正文/原文/完整 ChatResponse（避免库膨胀与重复存储）。
-      auditSummary: auditSummaryFromResponse(answer),
+      auditSummary,
       metadata: {
         corpusSessionId: sessionId,
         reading_scope: 'corpus',
@@ -78,6 +215,9 @@ export function registerCorpusSessionRoutes(
     store.touchCorpusSession(sessionId);
     return {
       ...answer,
+      // 审计摘要同时进响应：复用答案（没有重新调用模型）时它是从原消息复制的结论，
+      // 正常回答时是从本轮 audit 压出的计数；两者都不该只落库、不返回给调用方。
+      ...(auditSummary ? { audit_summary: auditSummary } : {}),
       answer_mode: answer.answer_mode ?? 'reading',
       model_knowledge: allowKnowledge,
       ...(notice ? { notice } : {}),
@@ -164,6 +304,7 @@ export function registerCorpusSessionRoutes(
       question?: unknown;
       selection?: unknown;
       source_policy?: unknown;
+      taskId?: unknown;
     };
     const question = typeof body.question === 'string' ? body.question.trim() : '';
     if (!question) return badRequest(reply, '需要 question');
@@ -186,6 +327,16 @@ export function registerCorpusSessionRoutes(
       });
     }
 
+    // 2) 可选续读编号：必须由本会话产生、范围与会话快照一致；不匹配 400 且不落任何消息。
+    //    校验放在写 user 消息之前，避免一次非法续读在会话里留下半条记录。
+    const requestedTaskId = typeof body.taskId === 'string' ? body.taskId.trim() : '';
+    let resume: ResumeResolution = { kind: 'none' };
+    if (requestedTaskId) {
+      const resolved = resolveResumeTask(id, session.documentIds, requestedTaskId);
+      if (resolved.error) return badRequest(reply, resolved.error);
+      resume = resolved.resume ?? { kind: 'none' };
+    }
+
     const config = resolveReadingChatConfig(store, secrets);
     if (!config) {
       return badRequest(reply, '还没有可用的模型服务配置，无法进行跨文献阅读');
@@ -198,7 +349,7 @@ export function registerCorpusSessionRoutes(
     }
     activeAsks.add(id);
     try {
-      // 2) 历史来自该会话已落库的消息（复用 prepareHistory 的裁剪口径），不要求客户端重传。
+      // 3) 历史来自该会话已落库的消息（复用 prepareHistory 的裁剪口径），不要求客户端重传。
       const history = store.listCorpusSessionMessages(id).map((message) => ({
         role: message.role,
         content: message.content
@@ -216,7 +367,17 @@ export function registerCorpusSessionRoutes(
 
       // 兼容分支：不带 Accept 的调用方仍拿一次性 JSON（旧客户端/旧脚本不变）。
       if (!String(request.headers.accept ?? '').includes('text/event-stream')) {
-        // 3) 复用既有跨文献阅读链路；范围、预算、规划都走与 /chat/ask corpus 相同的口径。
+        // 「全读完/任务已过期」：不调用模型，直接复用上一轮已保存的完整回答（审计摘要一并复制）。
+        if (resume.kind === 'completed') {
+          return persistAnswer(
+            id,
+            userMessage.id,
+            reusedCompletedResponse(resume.taskId, resume.message),
+            allowKnowledge,
+            skippedDocumentIds
+          );
+        }
+        // 4) 复用既有跨文献阅读链路；范围、预算、规划都走与 /chat/ask corpus 相同的口径。
         let answer: ChatResponse | null = null;
         let failure = '';
         try {
@@ -233,7 +394,8 @@ export function registerCorpusSessionRoutes(
             allowKnowledge,
             history,
             undefined,
-            undefined,
+            // 续读：只补未读页；任务由 answerWithCorpus 按需保留/销掉。
+            resume.kind === 'live' ? resume.taskId : undefined,
             plan
           );
         } catch (error) {
@@ -256,7 +418,7 @@ export function registerCorpusSessionRoutes(
       }
 
       // SSE 分支：复用与 /chat/ask/stream 同一套写法（hijack → 事件 → close/aborted 取消）。
-      // 注意：上面的参数校验/404/409 仍返回普通 JSON（带正确状态码），只有进入回答阶段才开流。
+      // 注意：上面的参数校验/404/409/400 仍返回普通 JSON（带正确状态码），只有进入回答阶段才开流。
       reply.hijack();
       const raw = reply.raw;
       raw.writeHead(200, {
@@ -273,6 +435,21 @@ export function registerCorpusSessionRoutes(
       raw.once('close', abort);
       request.raw.once('aborted', abort);
       try {
+        // 「全读完/任务已过期」：不调用模型，照样只走 result 事件（事件类型不变），
+        // 复用上一轮已保存的完整回答（审计摘要一并复制回去）。
+        if (resume.kind === 'completed') {
+          send(
+            'result',
+            persistAnswer(
+              id,
+              userMessage.id,
+              reusedCompletedResponse(resume.taskId, resume.message),
+              allowKnowledge,
+              skippedDocumentIds
+            )
+          );
+          return;
+        }
         let answer: ChatResponse | null = null;
         let failure = '';
         try {
@@ -290,7 +467,8 @@ export function registerCorpusSessionRoutes(
             history,
             // 进度只报批次数（unit=批）；正文不在任何阶段下发。
             (done, total) => send('progress', { done, total, unit: '批' }),
-            undefined,
+            // 续读：只补未读页；任务由 answerWithCorpus 按需保留/销掉。
+            resume.kind === 'live' ? resume.taskId : undefined,
             plan,
             '',
             // 阶段点由 answerWithCorpus 提供：准备范围 / 读第几篇 / 综合 / 核对论断。
