@@ -1853,7 +1853,14 @@ export async function answerWithCorpus(
   /** 问题规划：沿用规划给出的覆盖维度与查询词（缺省退回 DEFAULT_DIMENSIONS / 空）。 */
   planInput?: ReadingPlanRecord,
   /** 用户笔记/批注补充材料：只进入最终回答，不进入证据银行/审计/引用编号。 */
-  memoryMaterial = ''
+  memoryMaterial = '',
+  /**
+   * 阶段说明回调（进度展示用；**不含正文**）。
+   *
+   * 只上报「准备范围 / 正在读第几篇 / 综合 / 核对论断」这类阶段文字。回答正文在
+   * 审计与逐字核验完成之前不对外发送——调用方（SSE 端点）只把它当进度，不流正文。
+   */
+  onStage?: (text: string) => void
 ): Promise<ChatResponse | null> {
   const capacity = readCapacity(store.getSettings());
   const requestInputLimit = chatInputLimit(store);
@@ -1862,6 +1869,7 @@ export async function answerWithCorpus(
     .map((id) => store.getDocument(id))
     .filter((document): document is NonNullable<ReturnType<Store['getDocument']>> => Boolean(document));
   if (documents.length === 0) return null;
+  onStage?.(`正在准备阅读范围（${documents.length} 篇文献）`);
 
   const activeTaskId = taskId ?? randomUUID();
   const checkpointDocuments = documents.map((document) => document.id);
@@ -1983,6 +1991,7 @@ export async function answerWithCorpus(
       '这些文献还没有可检索的文字（可能是扫描件且尚未识别）；请先识别，或改选有文字的文献。'
     );
   }
+  onStage?.(`正在逐批阅读 ${ordered.length} 篇文献（共 ${sources.length} 页）`);
 
   // 规划维度/查询词（chat.ts 的 corpus 调用会传 plan）：维度非法/为空时退回通用 D1–D6；
   // 查询词并入读后缺口检索，避免只用问题里的字面词。
@@ -2011,12 +2020,33 @@ export async function answerWithCorpus(
       // 环境变量只用于实测 A/B（与 STUDIANDA_READING_BUDGET 同口径），生产不设置即为开。
       process.env.STUDIANDA_BATCH_THINKING === 'on' // 实测默认关：批次开思考让用时近翻倍、无可辨认质量收益
     );
+  // 按批上报「正在读取第 k/N 篇」：批次分组与 readInBatches 内部一致（readOptions 显式
+  // overlap: 1，与执行器默认值相同），所以批号能对应到这一批实际在读哪一篇；
+  // 某一篇只在它的第一批开读时上报一次。阶段文字不含正文。
+  let stageGroups: Array<Array<[number, ReadingSource]>> = [];
+  const stageDocumentIds = new Set<string>();
+  const documentOrdinal = new Map(ordered.map((document, index) => [document.id, index + 1]));
+  const announceReadingDocuments = (batchIndex: number): void => {
+    for (const [, segment] of stageGroups[batchIndex] ?? []) {
+      if (stageDocumentIds.has(segment.document_id)) continue;
+      stageDocumentIds.add(segment.document_id);
+      const ordinal = documentOrdinal.get(segment.document_id);
+      onStage?.(
+        ordinal
+          ? `正在读取第 ${ordinal}/${ordered.length} 篇：${segment.name}`
+          : `正在读取：${segment.name}`
+      );
+    }
+  };
   const readOptions = {
     dimensions,
     maxBatches: turnReadBatches(capacity.maxReadBatches),
     allowPartial: true,
     signal,
     onProgress,
+    // 阶段回调按批号映射文献；显式写 1 以与下面 stageGroups 的分组口径一致。
+    overlap: 1,
+    onBatchStart: announceReadingDocuments,
     workers: readingWorkers(config, capacity.maxParallel),
     // 批次检查点与单篇阅读同口径：按 taskId 保存，内容寻址；恢复时执行器仍会逐字重新核验。
     checkpoint: readingCheckpointFor(store, activeTaskId, checkpointDocuments),
@@ -2066,6 +2096,8 @@ export async function answerWithCorpus(
   }
   const maxTurnBatches = readOptions.maxBatches;
   const turnGroups = batches(segments, activeBudget);
+  // 与 readInBatches 的分组同一口径（overlap = 1）：批号 → 这一批在读哪一篇。
+  stageGroups = batches(segments, activeBudget, 1);
   const readSegmentsDone = [
     ...(prior?.readSegments ?? []),
     ...turnGroups
@@ -2302,6 +2334,7 @@ export async function answerWithCorpus(
     .filter(Boolean)
     .join('\n\n');
 
+  onStage?.('正在综合回答');
   const synthesized = await synthesize(
     store,
     config,
@@ -2321,6 +2354,7 @@ export async function answerWithCorpus(
   const sanitized = sanitizeAnswer(synthesized.answer, synthesized.sources);
   synthesized.answer = sanitized.answer;
 
+  onStage?.('正在核对论断与原文');
   const auditInputs = auditInputsForBank(store, synthesized.sources, bank);
   const audit = await auditGeneratedAnswer(
     config,

@@ -6,7 +6,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { Store } from '../src/store.js';
 
 /**
- * schema_version **21 → 当前版本（23）** 旧库升级验证（直接跑真实 `Store` 构造函数里的 migrate）。
+ * schema_version **21 → 当前版本（24）** 旧库升级验证（直接跑真实 `Store` 构造函数里的 migrate）。
  *
  * 本夹具重点是 22 新增的逻辑项目两张基线表（后续 23 的语料会话表由 migration-v22-to-v23.test.ts
  * 单独覆盖；这里只断言一路升到当前版本且旧行不变）：
@@ -248,7 +248,7 @@ function migrationBackups(dir: string): string[] {
     .sort();
 }
 
-describe('schema_version 21 → 23 迁移', () => {
+describe('schema_version 21 → 24 迁移', () => {
   it('补建项目两表/索引，版本升到 22，旧行逐字不变，快照为 v21，重复迁移幂等', () => {
     const dir = mkdtempSync(path.join(root, 'v21-'));
     let store: Store | null = null;
@@ -303,7 +303,7 @@ describe('schema_version 21 → 23 迁移', () => {
       try {
         afterVersion = readVersion(afterDb) ?? '';
         afterObjects = schemaObjectNames(afterDb);
-        expect(afterVersion).toBe('23');
+        expect(afterVersion).toBe('24');
         expect(tableExists(afterDb, 'projects')).toBe(true);
         expect(tableExists(afterDb, 'project_documents')).toBe(true);
         expect(afterObjects).toEqual(
@@ -390,7 +390,7 @@ describe('schema_version 21 → 23 迁移', () => {
       }
       const afterReopenDb = readOnlyDb(dir);
       try {
-        expect(readVersion(afterReopenDb)).toBe('23');
+        expect(readVersion(afterReopenDb)).toBe('24');
         expect(schemaObjectNames(afterReopenDb)).toEqual(afterObjects);
       } finally {
         afterReopenDb.close();

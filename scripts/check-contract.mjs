@@ -159,11 +159,29 @@ function extractClientRoutes(sourceFile) {
   return routes;
 }
 
+/**
+ * 白名单分两类：
+ * - missing：真正待接入 api-client 的接口（数量应持续下降）；
+ * - exempt：按语义不由客户端封装的接口，按分类分组（桌面进程专用、历史兼容……）。
+ * 分类名不写死在脚本里，新增分类只需改 JSON。
+ */
 function readAllowlist() {
-  if (!existsSync(allowlistFile)) return { missing: [], reason: {} };
+  if (!existsSync(allowlistFile)) return { missing: [], exempt: {}, reason: {} };
   const parsed = JSON.parse(readFileSync(allowlistFile, 'utf8'));
+  const exempt = {};
+  if (parsed.exempt && typeof parsed.exempt === 'object' && !Array.isArray(parsed.exempt)) {
+    for (const [key, value] of Object.entries(parsed.exempt)) {
+      if (!value || !Array.isArray(value.entries)) continue;
+      exempt[key] = {
+        label: typeof value.label === 'string' && value.label.trim() ? value.label.trim() : key,
+        description: typeof value.description === 'string' ? value.description.trim() : '',
+        entries: value.entries.filter((entry) => typeof entry === 'string')
+      };
+    }
+  }
   return {
     missing: Array.isArray(parsed.missing) ? parsed.missing : [],
+    exempt,
     reason: parsed.reason && typeof parsed.reason === 'object' ? parsed.reason : {}
   };
 }
@@ -176,11 +194,29 @@ for (const source of serverSources) {
 }
 const clientRoutes = extractClientRoutes(client.source);
 const allowlist = readAllowlist();
+const exemptEntries = new Map();
+for (const [key, category] of Object.entries(allowlist.exempt)) {
+  for (const entry of category.entries) {
+    if (!exemptEntries.has(entry)) exemptEntries.set(entry, { key, label: category.label });
+  }
+}
+const missingAllowlist = new Set(allowlist.missing);
+// 同一路由只能归入一个分类，否则统计会重复。
+const misclassified = [...missingAllowlist].filter((entry) => exemptEntries.has(entry));
 
-const missing = [...serverRoutes].filter((entry) => !clientRoutes.has(entry)).sort();
+const serverMissing = [...serverRoutes].filter((entry) => !clientRoutes.has(entry)).sort();
+// missing 只统计真正待接入的接口；exempt 命中项单独计数，但仍视为“允许缺失”。
+const missing = serverMissing.filter((entry) => !exemptEntries.has(entry));
+const exemptMissing = serverMissing.filter((entry) => exemptEntries.has(entry));
+const exemptCounts = Object.fromEntries(
+  Object.entries(allowlist.exempt).map(([key, category]) => [
+    key,
+    category.entries.filter((entry) => serverMissing.includes(entry)).length
+  ])
+);
 const clientOnly = [...clientRoutes].filter((entry) => !serverRoutes.has(entry)).sort();
-const allowlisted = missing.filter((entry) => allowlist.missing.includes(entry));
-const unallowlistedMissing = missing.filter((entry) => !allowlist.missing.includes(entry));
+const allowlisted = missing.filter((entry) => missingAllowlist.has(entry));
+const unallowlistedMissing = missing.filter((entry) => !missingAllowlist.has(entry));
 
 const manifest = {
   apiPrefix: PREFIX,
@@ -191,25 +227,43 @@ const manifest = {
     clientRoutes: clientRoutes.size,
     missingFromClient: missing.length,
     clientOnly: clientOnly.length,
-    allowlistedMissing: allowlisted.length
+    allowlistedMissing: allowlisted.length,
+    exemptFromClient: exemptMissing.length
   },
   serverRoutes: [...serverRoutes].sort(),
   missingFromClient: missing,
   allowlistedMissing: allowlisted.map((entry) => ({ entry, reason: allowlist.reason[entry] ?? '' })),
+  exemptFromClient: Object.entries(allowlist.exempt).map(([key, category]) => ({
+    category: key,
+    label: category.label,
+    description: category.description,
+    entries: exemptMissing
+      .filter((entry) => exemptEntries.get(entry)?.key === key)
+      .map((entry) => ({ entry, reason: allowlist.reason[entry] ?? '' }))
+  })),
   clientOnly,
   nextSteps:
-    unallowlistedMissing.length === 0 && clientOnly.length === 0
+    unallowlistedMissing.length === 0 && clientOnly.length === 0 && misclassified.length === 0
       ? []
-      : '新增/修改路由后同步更新 packages/api-client；确属壳专用路由请在 scripts/contract-allowlist.json 写明 reason。'
+      : '新增/修改路由后同步更新 packages/api-client；真正待接入的放 missing，桌面进程专用/历史兼容的按分类放 exempt，并在 reason 写明原因。'
 };
 
 mkdirSync(path.dirname(manifestFile), { recursive: true });
 writeFileSync(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`);
 
+const exemptBreakdown = Object.entries(exemptCounts)
+  .filter(([, count]) => count > 0)
+  .map(([key, count]) => `${key}=${count}`)
+  .join(', ');
 console.log(
   `[contract] server=${manifest.counts.serverRoutes} client=${manifest.counts.clientRoutes} ` +
-    `missing=${manifest.counts.missingFromClient} clientOnly=${manifest.counts.clientOnly}`
+    `missing=${manifest.counts.missingFromClient} clientOnly=${manifest.counts.clientOnly} ` +
+    `exempt=${manifest.counts.exemptFromClient}${exemptBreakdown ? ` (${exemptBreakdown})` : ''}`
 );
+if (misclassified.length > 0) {
+  console.error('[contract] 白名单条目同时出现在 missing 与 exempt，无法确定分类：');
+  for (const entry of misclassified) console.error(`  - ${entry}`);
+}
 if (unallowlistedMissing.length > 0) {
   console.error('[contract] 服务端有、客户端无（且未白名单）：');
   for (const entry of unallowlistedMissing) console.error(`  - ${entry}`);
@@ -218,7 +272,7 @@ if (clientOnly.length > 0) {
   console.error('[contract] 客户端有、服务端无：');
   for (const entry of clientOnly) console.error(`  - ${entry}`);
 }
-if (unallowlistedMissing.length > 0 || clientOnly.length > 0) {
+if (unallowlistedMissing.length > 0 || clientOnly.length > 0 || misclassified.length > 0) {
   process.exitCode = 1;
 } else {
   console.log(`[contract] ok；清单已写入 ${path.relative(root, manifestFile)}`);

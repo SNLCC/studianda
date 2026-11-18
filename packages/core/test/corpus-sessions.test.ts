@@ -238,11 +238,27 @@ describe('跨文献会话', () => {
       '再看定义',
       '跨文献回'
     ]);
-    // 消息复用 messages：document_id 为空串哨兵，归属只看 session_id。
+    // 消息复用 messages：document_id 为空串哨兵，归属只看 session_id；schema 24 起作用域显式
+    // 记为 scope_kind='corpus'，assistant 消息另带审计摘要（重开历史仍能恢复缺证/越界引用展示）。
     for (const message of rows) {
       expect(message.documentId).toBe('');
       expect(message.sessionId).toBe(sessionId);
+      expect(message.scopeKind).toBe('corpus');
     }
+    const assistantRows = rows.filter((message) => message.role === 'assistant');
+    expect(assistantRows.length).toBe(2);
+    for (const message of assistantRows) {
+      // 审计摘要只存计数/状态：这一轮的 mock 审计给出了 1 条 supported 论断。
+      expect(message.auditSummary).toMatchObject({
+        claims: 1,
+        supported: 1,
+        unsupported: 0,
+        source_changed: 0
+      });
+    }
+    expect(rows.filter((message) => message.role === 'user').every((message) => !message.auditSummary)).toBe(
+      true
+    );
     // 数据层口径一致（按会话 id 读回同 4 条）。
     expect(store.listCorpusSessionMessages(sessionId).map((message) => message.id)).toEqual(
       rows.map((message) => message.id)

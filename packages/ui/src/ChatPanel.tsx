@@ -126,6 +126,42 @@ function splitUnsupportedClaims(response: ChatResponse | undefined): {
 }
 
 /**
+ * 缺证计数（展示口径）：优先用 `audit.claims` 逐段明细；历史消息只有落库摘要
+ * （`audit_summary`，没有逐段明细）时退回摘要计数，保证「缺证 N 段 · 原文已变更 N 段」
+ * 在重开历史后仍能恢复。`source_changed` 包含在 `unsupported` 里，先扣掉再单列。
+ */
+function unsupportedCounts(response: ChatResponse | undefined): {
+  plain: number;
+  sourceChanged: number;
+} {
+  const summary = response?.audit_summary;
+  const claims = response?.audit?.claims ?? [];
+  const sourceChanged = splitUnsupportedClaims(response).sourceChanged.length;
+  const sourceChangedCount =
+    typeof summary?.source_changed === 'number' ? summary.source_changed : sourceChanged;
+  const unsupportedCount =
+    claims.length > 0
+      ? claims.filter((claim) => claim.verdict === 'unsupported').length
+      : (summary?.unsupported ?? 0);
+  return {
+    plain: Math.max(0, unsupportedCount - sourceChangedCount),
+    sourceChanged: sourceChangedCount
+  };
+}
+
+/** 审计摘要的计数行（活跃响应与「只有摘要」的历史消息共用同一套文案）。 */
+function auditSummaryLine(response: ChatResponse | undefined): string {
+  const summary = response?.audit_summary;
+  if (!summary) return '';
+  const { plain, sourceChanged } = unsupportedCounts(response);
+  return (
+    `支持 ${summary.supported} · 推断 ${summary.inference} · 缺证 ${plain}` +
+    (sourceChanged > 0 ? ` · 原文已变更 ${sourceChanged}` : '') +
+    ` · 标题 ${summary.heading}`
+  );
+}
+
+/**
  * 选区快照的「原文已变更」提示：只有当前页确实找不到提问时的选区时才需要提示，
  * 状态为 current/unknown 时不额外占一行。
  */
@@ -163,15 +199,15 @@ function turnRecordSummary(response: ChatResponse | undefined): string {
   }
   // 缺证按归因分开计数：原文已变更造成的缺证不能混进「缺证」当成模型编造。
   const claims = response.audit?.claims ?? [];
-  const { plain, sourceChanged } = splitUnsupportedClaims(response);
-  if (plain.length > 0 && sourceChanged.length > 0) {
-    parts.push(`缺证 ${plain.length} 段 · 原文已变更 ${sourceChanged.length} 段`);
-  } else if (sourceChanged.length > 0) {
-    parts.push(`原文已变更 ${sourceChanged.length} 段`);
-  } else if (plain.length > 0) {
-    parts.push(`缺证 ${plain.length} 段`);
-  } else if (claims.length > 0) {
-    parts.push(`审计 ${claims.length} 段`);
+  const { plain: plainCount, sourceChanged: sourceChangedCount } = unsupportedCounts(response);
+  if (plainCount > 0 && sourceChangedCount > 0) {
+    parts.push(`缺证 ${plainCount} 段 · 原文已变更 ${sourceChangedCount} 段`);
+  } else if (sourceChangedCount > 0) {
+    parts.push(`原文已变更 ${sourceChangedCount} 段`);
+  } else if (plainCount > 0) {
+    parts.push(`缺证 ${plainCount} 段`);
+  } else if (claims.length > 0 || response.audit_summary) {
+    parts.push(`审计 ${response.audit_summary?.claims ?? claims.length} 段`);
   }
   if (response.audit?.status === '部分段落未完成复核') parts.push('审计部分未完成');
   else if (response.audit && response.audit.status !== '已进行模型证据支持复核') {
@@ -185,7 +221,7 @@ function turnRecordHasAlert(response: ChatResponse | undefined): boolean {
   if (!response) return false;
   // 「原文已变更」的缺证不是模型编造，不按错误级别标红；只有普通缺证/审计异常才标红。
   return Boolean(
-    splitUnsupportedClaims(response).plain.length > 0 ||
+    unsupportedCounts(response).plain > 0 ||
       (response.audit && response.audit.status !== '已进行模型证据支持复核')
   );
 }
@@ -211,6 +247,7 @@ function hasTurnRecord(response: ChatResponse | undefined): boolean {
       response.gap_search ||
       response.citation_support ||
       response.audit ||
+      response.audit_summary ||
       response.falsify ||
       response.unread_pages?.length
   );
@@ -1350,6 +1387,12 @@ export function ChatPanel({
           // 缺证归因拆开渲染：普通缺证 vs 提问时原文已变更（不是模型编造）。
           const auditClaims = splitUnsupportedClaims(response);
           const changedSnapshot = changedSelectionSnapshot(response);
+          // 越界引用：活跃响应有完整编号；历史消息只有摘要数量（编号未落库）。
+          const invalidCitationNumbers = response?.invalid_citations ?? [];
+          const invalidCitationCount =
+            invalidCitationNumbers.length > 0
+              ? invalidCitationNumbers.length
+              : (response?.audit_summary?.invalid_citations ?? 0);
           const isLast = messageIndex === messages.length - 1;
           const noteSaveState = noteSaveStates[message.id];
           const canSaveNote =
@@ -1523,12 +1566,27 @@ export function ChatPanel({
                         </p>
                       ) : null}
                     </details>
+                  ) : !response?.audit &&
+                    response?.audit_summary?.selection_snapshot_status === 'source_changed' ? (
+                    /*
+                      历史消息只恢复了摘要（没有快照明细）：仍如实提示「原文已变更」的归因，
+                      避免缺证被误当成模型编造。文案与上面的完整提示同一口径。
+                    */
+                    <p className="kr-chat__notice">
+                      原文已变更：本轮提问时的选区在当前页已找不到，标为「原文已变更」的缺证段落
+                      可能只是 OCR 重跑/页校订改写了原文，不代表模型编造；请对照当前原文核对。
+                    </p>
                   ) : null}
-                  {response?.invalid_citations && response.invalid_citations.length > 0 ? (
+                  {invalidCitationNumbers.length > 0 ? (
                     <p className="kr-page-error">
                       回答里有越界引用：
-                      {response.invalid_citations.map((number) => `[${number}]`).join('、')}
+                      {invalidCitationNumbers.map((number) => `[${number}]`).join('、')}
                       ，这些编号没有对应来源，不能当作依据。
+                    </p>
+                  ) : invalidCitationCount > 0 ? (
+                    <p className="kr-page-error">
+                      回答里有越界引用 {invalidCitationCount} 处（历史记录只保留数量，原始编号未保存）；
+                      这些引用没有对应来源，不能当作依据。
                     </p>
                   ) : null}
                   {/*
@@ -1859,6 +1917,18 @@ export function ChatPanel({
                     {response.citation_support.page_only.length} 条。
                   </p>
                 ) : null}
+                {!response?.audit && response?.audit_summary ? (
+                  /*
+                    重开历史：消息只带审计摘要（schema_version 24 的 messages.audit_summary），
+                    没有逐段明细。仍按同一套计数文案展示，避免审计信息在历史里整段消失。
+                  */
+                  <div className="kr-chat__details">
+                    <p className="kr-chat__meta">{auditSummaryLine(response)}</p>
+                    <p className="kr-chat__meta">
+                      历史记录只保存审计计数（缺证/原文已变更/越界引用），逐段明细未落库。
+                    </p>
+                  </div>
+                ) : null}
                 {response?.audit ? (
                   <div className="kr-chat__details">
                     <p
@@ -1874,19 +1944,7 @@ export function ChatPanel({
                         : ''}
                     </p>
                     {response.audit_summary ? (
-                      <p className="kr-chat__meta">
-                        支持 {response.audit_summary.supported} · 推断{' '}
-                        {response.audit_summary.inference} · 缺证{' '}
-                        {/* 服务端 unsupported 含两种归因：这里扣掉「原文已变更」单列，避免当成同一回事。 */}
-                        {Math.max(
-                          0,
-                          response.audit_summary.unsupported - auditClaims.sourceChanged.length
-                        )}
-                        {auditClaims.sourceChanged.length > 0
-                          ? ` · 原文已变更 ${auditClaims.sourceChanged.length}`
-                          : ''}{' '}
-                        · 标题 {response.audit_summary.heading}
-                      </p>
+                      <p className="kr-chat__meta">{auditSummaryLine(response)}</p>
                     ) : null}
                     {auditClaims.plain.length > 0 ? (
                       <details className="kr-chat__audit">

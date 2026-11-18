@@ -62,7 +62,7 @@ describe('notes.folder_path（schema 11）', () => {
 
     const store = new Store(dir);
     try {
-      expect(schemaVersion(store)).toBe('23');
+      expect(schemaVersion(store)).toBe('24');
       const db = (store as unknown as { db: DatabaseSync }).db;
       const columns = (db.prepare('PRAGMA table_info(notes)').all() as Array<{ name: string }>).map(
         (column) => column.name
@@ -79,7 +79,7 @@ describe('notes.folder_path（schema 11）', () => {
     // 幂等：再打开版本仍是 11，folder_path 数据保留。
     const reopened = new Store(dir);
     try {
-      expect(schemaVersion(reopened)).toBe('23');
+      expect(schemaVersion(reopened)).toBe('24');
       expect(reopened.getNote('legacy-note')?.folderPath).toBe('old/imported');
     } finally {
       reopened.close();

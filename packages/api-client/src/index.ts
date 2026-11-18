@@ -10,8 +10,10 @@ import type {
   ChatResponse,
   ChatSource,
   ClearUserDataResult,
+  CorpusSessionSummary,
   CreateAnnotationInput,
   CreateNoteInput,
+  CreateProjectInput,
   DocumentDetail,
   DocumentSummary,
   DocumentChatSessionRecord,
@@ -73,6 +75,9 @@ import type {
   ParsingConfigRecord,
   ParsingConfigUpdate,
   PendingRestore,
+  ProjectDeleteResult,
+  ProjectDocumentRecord,
+  ProjectSummary,
   QuoteLocation,
   ProviderPreset,
   DocumentChapters,
@@ -99,6 +104,7 @@ import type {
   TranslationPageRecord,
   UpdateAnnotationInput,
   UpdateNoteInput,
+  UpdateProjectInput,
   SearchConfigRecord,
   SearchResult,
   SearchPlan,
@@ -135,6 +141,57 @@ export class ApiRequestError extends Error {
     this.code = code;
     this.details = details;
   }
+}
+
+/** 建立跨文献会话（`POST /corpus-sessions`）的入参：范围是文献 id 快照，至少一篇。 */
+export interface CreateCorpusSessionInput {
+  documentIds: string[];
+  title?: string;
+}
+
+/** 跨文献会话追问（`POST /corpus-sessions/:id/ask`）的入参；会话历史由服务端按会话读取。 */
+export interface CorpusAskInput {
+  question: string;
+  /** 用户显式带入的选中原文（参与检索并附在提示里）。 */
+  selection?: string;
+  /** document_only = 本轮不联网、不补充模型知识。 */
+  source_policy?: 'auto' | 'document_only';
+}
+
+/**
+ * `POST /corpus-sessions/:id/ask` 的响应：普通 JSON（非 SSE）。
+ *
+ * 服务端先落库 user/assistant 消息再返回，所以除阅读回答本身外还带本轮消息 id
+ * 与「按当前库状态解析时被跳过的文献」清单；其余字段复用 `ChatResponse`。
+ * 流式版本（`askCorpusSessionStream`）的 `result` 事件是同一个类型、同一份结构。
+ */
+export interface CorpusAskResponse extends ChatResponse {
+  answer_mode: 'direct' | 'web' | 'reading';
+  model_knowledge: boolean;
+  session_id: string;
+  user_message_id: number;
+  assistant_message_id: number;
+  skipped_document_ids: string[];
+}
+
+/**
+ * 跨文献追问的 SSE 进度事件：`unit` 为「篇/页/批」。
+ *
+ * 服务端当前按批推进（unit='批'）；篇/页留给后续更细的进度，客户端按 unit 原样展示。
+ */
+export interface CorpusAskProgress {
+  done: number;
+  total: number;
+  unit?: string;
+}
+
+/** `askCorpusSessionStream()` 的选项：只推进度，**不含正文增量**。 */
+export interface CorpusAskStreamOptions {
+  signal?: AbortSignal;
+  /** 阶段文字，例如「正在读取第 3/12 篇」「正在综合回答」「正在核对论断与原文」。 */
+  onStage?(text: string): void;
+  /** 阶段进度（done/total/unit）。 */
+  onProgress?(progress: CorpusAskProgress): void;
 }
 
 export interface ApiClient {
@@ -201,6 +258,22 @@ export interface ApiClient {
     id: string,
     input: { beforeId?: string | null; afterId?: string | null }
   ): Promise<DocumentDetail>;
+  /**
+   * 逻辑项目（schema 22）：不绑目录的文献分组。
+   * 默认列表不含归档项目；includeArchived=true 连归档一起列出。
+   */
+  listProjects(includeArchived?: boolean): Promise<ProjectSummary[]>;
+  createProject(input: CreateProjectInput): Promise<ProjectSummary>;
+  /** 改名/改描述/归档：只更新传了的字段，返回更新后的项目。 */
+  updateProject(id: string, input: UpdateProjectInput): Promise<ProjectSummary>;
+  /** 删项目只解除文献链接，文献本身保留；返回被解除关联的文献数。 */
+  deleteProject(id: string): Promise<ProjectDeleteResult>;
+  /** 项目下的文献（只读链接；回收站里的文献不返回，恢复后自动重新出现）。 */
+  listProjectDocuments(id: string): Promise<ProjectDocumentRecord[]>;
+  /** 把文献加入项目（重复加入幂等），返回带 projectId/addedAt 的文献记录。 */
+  addProjectDocument(id: string, documentId: string): Promise<ProjectDocumentRecord>;
+  /** 把文献移出项目（只删链接，文献本身保留）。 */
+  deleteProjectDocument(id: string, documentId: string): Promise<{ ok: boolean }>;
   /** 上传笔记/批注里粘贴或选择的本地图片，返回可写进 Markdown 的 studianda-asset 地址。 */
   uploadNoteAsset(input: { dataUrl: string; filename?: string }): Promise<NoteAssetRecord>;
   /** 读取笔记/批注图片原始字节（非 Electron 宿主用 HTTP 地址显示时可走这里）。 */
@@ -376,6 +449,30 @@ export interface ApiClient {
     documentId: string,
     sessionId: string
   ): Promise<{ ok: boolean; removed: number; sessions: DocumentChatSessionRecord[] }>;
+  /** 跨文献（语料）会话：范围是建立时的文献 id 快照，之后新增文献不自动加入。 */
+  listCorpusSessions(): Promise<CorpusSessionSummary[]>;
+  /** 建立跨文献会话（至少一篇可读文献）；范围里不存在的文献由服务端如实报告。 */
+  createCorpusSession(input: CreateCorpusSessionInput): Promise<CorpusSessionSummary>;
+  /** 该会话已落库的消息（按 id 升序，user/assistant 交错）。 */
+  listCorpusSessionMessages(id: string): Promise<ChatMessageRecord[]>;
+  /**
+   * 跨文献追问：普通 JSON 响应（非 SSE），服务端先落库本轮 user/assistant 消息再返回回答。
+   * 同一会话同时只允许一轮在飞（并发会得到 409 busy）。
+   */
+  askCorpusSession(id: string, input: CorpusAskInput): Promise<CorpusAskResponse>;
+  /**
+   * 跨文献追问的流式版本（SSE，`Accept: text/event-stream`）：服务端只下发 stage/progress
+   * 进度事件，审计完成后才用单个 `result` 事件一次性返回完整响应（与 `askCorpusSession`
+   * 同一响应类型、同一结构）。**任何阶段都不含正文增量**——未审计的正文不得外泄。
+   * 参数校验/404/409 等前置失败仍返回普通 JSON 错误。
+   */
+  askCorpusSessionStream(
+    id: string,
+    input: CorpusAskInput,
+    options?: CorpusAskStreamOptions
+  ): Promise<CorpusAskResponse>;
+  /** 删会话（消息 + 范围快照 + 会话行）；removed = 被删除的消息条数。 */
+  deleteCorpusSession(id: string): Promise<{ ok: boolean; removed: number }>;
   addMessage(input: {
     documentId: string;
     role: 'user' | 'assistant';
@@ -823,6 +920,86 @@ async function readJson<T>(response: Response): Promise<T> {
   return body as T;
 }
 
+/**
+ * 读取 SSE 响应（`/chat/ask/stream` 与跨文献追问共用同一套解析）。
+ *
+ * - 非 2xx：按 JSON 错误体抛 `ApiRequestError`（与 `request()` 同口径）；
+ * - 200 但 content-type 不是 SSE：按普通 JSON 返回（预算确认是这种响应）；
+ * - SSE：`progress`/`stage`/`audit` 交给回调，`result` 作为返回值，`error` 直接抛出。
+ *
+ * 这里只搬运服务端事件，不合成/缓存任何正文片段；正文只来自单个 `result` 事件。
+ */
+async function readEventStream<T>(
+  response: Response,
+  options: {
+    onProgress?(done: number, total: number, unit?: string): void;
+    onStage?(text: string): void;
+    onAudit?(claims: unknown[]): void;
+    /** 流里没有 result 事件时的错误文案（不同端点各自说明）。 */
+    emptyResultMessage?: string;
+  } = {}
+): Promise<T> {
+  if (!response.ok || !response.body) {
+    const text = await response.text().catch(() => '');
+    let payload: { error?: string; message?: string; code?: string } | null = null;
+    try {
+      payload = JSON.parse(text) as { error?: string; message?: string; code?: string };
+    } catch {
+      payload = null;
+    }
+    throw new ApiRequestError(
+      response.status,
+      (payload?.error ?? payload?.message ?? text) || `HTTP ${response.status}`,
+      payload?.code,
+      payload
+    );
+  }
+  // 预算确认这类"不进入阅读"的响应是 200 + application/json（不是 SSE）：
+  // 按普通 JSON 解析返回，让调用方拿到 needs_confirmation/budget 后弹确认框。
+  const contentType = response.headers.get('content-type') ?? '';
+  if (!contentType.includes('text/event-stream')) {
+    return (await response.json()) as T;
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let result: T | null = null;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let boundary = buffer.indexOf('\n\n');
+    while (boundary >= 0) {
+      const chunk = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      const event = /^event: (.+)$/m.exec(chunk)?.[1] ?? '';
+      const dataLine = /^data: (.+)$/m.exec(chunk)?.[1] ?? '';
+      if (event === 'progress') {
+        const progress = JSON.parse(dataLine) as {
+          done: number;
+          total: number;
+          unit?: string;
+        };
+        options.onProgress?.(progress.done, progress.total, progress.unit);
+      } else if (event === 'stage') {
+        const stage = JSON.parse(dataLine) as { text?: string };
+        if (stage.text) options.onStage?.(stage.text);
+      } else if (event === 'audit') {
+        const audit = JSON.parse(dataLine) as { claims?: unknown[] };
+        if (Array.isArray(audit.claims)) options.onAudit?.(audit.claims);
+      } else if (event === 'result') {
+        result = JSON.parse(dataLine) as T;
+      } else if (event === 'error') {
+        const error = JSON.parse(dataLine) as { message?: string };
+        throw new Error(error.message ?? '回答失败');
+      }
+      boundary = buffer.indexOf('\n\n');
+    }
+  }
+  if (!result) throw new Error(options.emptyResultMessage ?? '回答流意外结束');
+  return result;
+}
+
 export function createApiClient(options: ApiClientOptions): ApiClient {
   // base 统一带上 API 前缀：下面所有路径都不再硬编码 ``。
   const base = `${options.baseUrl.replace(/\/+$/, '')}${API_PREFIX}`;
@@ -1008,6 +1185,41 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         method: 'POST',
         body: JSON.stringify(input)
       }),
+
+    listProjects: (includeArchived) =>
+      request<ProjectSummary[]>(`/projects${includeArchived ? '?archived=true' : ''}`),
+
+    createProject: (input) =>
+      request<ProjectSummary>('/projects', {
+        method: 'POST',
+        body: JSON.stringify(input)
+      }),
+
+    updateProject: (id, input) =>
+      request<ProjectSummary>(`/projects/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(input)
+      }),
+
+    deleteProject: (id) =>
+      request<ProjectDeleteResult>(`/projects/${encodeURIComponent(id)}`, {
+        method: 'DELETE'
+      }),
+
+    listProjectDocuments: (id) =>
+      request<ProjectDocumentRecord[]>(`/projects/${encodeURIComponent(id)}/documents`),
+
+    addProjectDocument: (id, documentId) =>
+      request<ProjectDocumentRecord>(`/projects/${encodeURIComponent(id)}/documents`, {
+        method: 'POST',
+        body: JSON.stringify({ documentId })
+      }),
+
+    deleteProjectDocument: (id, documentId) =>
+      request<{ ok: boolean }>(
+        `/projects/${encodeURIComponent(id)}/documents/${encodeURIComponent(documentId)}`,
+        { method: 'DELETE' }
+      ),
 
     uploadNoteAsset: (input) =>
       request<NoteAssetRecord>('/note-assets', {
@@ -1399,6 +1611,46 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         )}`,
         { method: 'DELETE', body: JSON.stringify({}) }
       ),
+
+    listCorpusSessions: () =>
+      request<{ sessions: CorpusSessionSummary[] }>('/corpus-sessions').then(
+        (payload) => payload.sessions ?? []
+      ),
+
+    createCorpusSession: (input) =>
+      request<{ session: CorpusSessionSummary }>('/corpus-sessions', {
+        method: 'POST',
+        body: JSON.stringify(input)
+      }).then((payload) => payload.session),
+
+    listCorpusSessionMessages: (id) =>
+      request<ChatMessageRecord[]>(`/corpus-sessions/${encodeURIComponent(id)}/messages`),
+
+    askCorpusSession: (id, input) =>
+      request<CorpusAskResponse>(`/corpus-sessions/${encodeURIComponent(id)}/ask`, {
+        method: 'POST',
+        body: JSON.stringify(input)
+      }),
+
+    async askCorpusSessionStream(id, input, options = {}) {
+      const response = await fetch(`${base}/corpus-sessions/${encodeURIComponent(id)}/ask`, {
+        method: 'POST',
+        // 同一路径按 Accept 区分：带这个头才走 SSE，旧调用方不带时仍拿一次性 JSON。
+        headers: { ...headers, 'content-type': 'application/json', accept: 'text/event-stream' },
+        body: JSON.stringify(input),
+        signal: options.signal
+      });
+      return readEventStream<CorpusAskResponse>(response, {
+        onStage: options.onStage,
+        onProgress: (done, total, unit) => options.onProgress?.({ done, total, unit }),
+        emptyResultMessage: '跨文献追问流意外结束（没有收到审计后的完整回答）'
+      });
+    },
+
+    deleteCorpusSession: (id) =>
+      request<{ ok: boolean; removed: number }>(`/corpus-sessions/${encodeURIComponent(id)}`, {
+        method: 'DELETE'
+      }),
 
     addMessage: (input) =>
       request<ChatMessageRecord>(
@@ -2234,61 +2486,11 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         body: JSON.stringify(input),
         signal: options.signal
       });
-      if (!response.ok || !response.body) {
-        const text = await response.text().catch(() => '');
-        let payload: { error?: string; message?: string; code?: string } | null = null;
-        try {
-          payload = JSON.parse(text) as { error?: string; message?: string; code?: string };
-        } catch {
-          payload = null;
-        }
-        throw new ApiRequestError(
-          response.status,
-          (payload?.error ?? payload?.message ?? text) || `HTTP ${response.status}`,
-          payload?.code,
-          payload
-        );
-      }
-      // 预算确认这类"不进入阅读"的响应是 200 + application/json（不是 SSE）：
-      // 按普通 JSON 解析返回，让调用方拿到 needs_confirmation/budget 后弹确认框。
-      const contentType = response.headers.get('content-type') ?? '';
-      if (!contentType.includes('text/event-stream')) {
-        return (await response.json()) as ChatResponse;
-      }
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let result: ChatResponse | null = null;
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        let boundary = buffer.indexOf('\n\n');
-        while (boundary >= 0) {
-          const chunk = buffer.slice(0, boundary);
-          buffer = buffer.slice(boundary + 2);
-          const event = /^event: (.+)$/m.exec(chunk)?.[1] ?? '';
-          const dataLine = /^data: (.+)$/m.exec(chunk)?.[1] ?? '';
-          if (event === 'progress') {
-            const progress = JSON.parse(dataLine) as { done: number; total: number };
-            options.onProgress?.(progress.done, progress.total);
-          } else if (event === 'stage') {
-            const stage = JSON.parse(dataLine) as { text?: string };
-            if (stage.text) options.onStage?.(stage.text);
-          } else if (event === 'audit') {
-            const audit = JSON.parse(dataLine) as { claims?: unknown[] };
-            if (Array.isArray(audit.claims)) options.onAudit?.(audit.claims);
-          } else if (event === 'result') {
-            result = JSON.parse(dataLine) as ChatResponse;
-          } else if (event === 'error') {
-            const error = JSON.parse(dataLine) as { message?: string };
-            throw new Error(error.message ?? '回答失败');
-          }
-          boundary = buffer.indexOf('\n\n');
-        }
-      }
-      if (!result) throw new Error('回答流意外结束');
-      return result;
+      return readEventStream<ChatResponse>(response, {
+        onProgress: options.onProgress,
+        onStage: options.onStage,
+        onAudit: options.onAudit
+      });
     },
 
     plan: (question, selection = '') =>

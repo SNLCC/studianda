@@ -4,10 +4,11 @@
   "note": "由 scripts/check-contract.mjs 生成；不要手工编辑。",
   "counts": {
     "serverRoutes": 223,
-    "clientRoutes": 206,
-    "missingFromClient": 17,
+    "clientRoutes": 218,
+    "missingFromClient": 0,
     "clientOnly": 0,
-    "allowlistedMissing": 17
+    "allowlistedMissing": 0,
+    "exemptFromClient": 5
   },
   "serverRoutes": [
     "DELETE /api/v1/annotations/:p",
@@ -234,93 +235,42 @@
     "PUT /api/v1/web-search/config",
     "PUT /api/v1/zotero/config"
   ],
-  "missingFromClient": [
-    "DELETE /api/v1/corpus-sessions/:p",
-    "DELETE /api/v1/documents/:p/navigation",
-    "DELETE /api/v1/projects/:p",
-    "DELETE /api/v1/projects/:p/documents/:p",
-    "DELETE /api/v1/secrets/:p",
-    "GET /api/v1/corpus-sessions",
-    "GET /api/v1/corpus-sessions/:p/messages",
-    "GET /api/v1/projects",
-    "GET /api/v1/projects/:p/documents",
-    "GET /api/v1/secrets/status",
-    "PATCH /api/v1/projects/:p",
-    "POST /api/v1/corpus-sessions",
-    "POST /api/v1/corpus-sessions/:p/ask",
-    "POST /api/v1/projects",
-    "POST /api/v1/projects/:p/documents",
-    "POST /api/v1/secrets",
-    "PUT /api/v1/documents/:p/navigation"
-  ],
-  "allowlistedMissing": [
+  "missingFromClient": [],
+  "allowlistedMissing": [],
+  "exemptFromClient": [
     {
-      "entry": "DELETE /api/v1/corpus-sessions/:p",
-      "reason": "跨文献会话（schema 23）本版只交付数据层 + 服务端接口，api-client 与前端接入在下一轮；届时从白名单删除。"
+      "category": "desktop-only",
+      "label": "桌面进程专用：禁止客户端封装",
+      "description": "密钥只走 Electron safeStorage + IPC，api-client 永不封装这三个接口；桌面主进程需要时直连本机 HTTP（本机推送/删除），不属于共享客户端契约。",
+      "entries": [
+        {
+          "entry": "DELETE /api/v1/secrets/:p",
+          "reason": "桌面进程专用：禁止客户端封装。桌面主进程直接删除 safeStorage 中的条目，不经 Core，也不由 api-client 封装。"
+        },
+        {
+          "entry": "GET /api/v1/secrets/status",
+          "reason": "桌面进程专用：禁止客户端封装。桌面主进程用 Electron safeStorage 管理密钥，通过 IPC 读取状态，不经 api-client。"
+        },
+        {
+          "entry": "POST /api/v1/secrets",
+          "reason": "桌面进程专用：禁止客户端封装。桌面主进程启动 Core 后经本机 HTTP 推送解密后的密钥；密钥只走 safeStorage + IPC。"
+        }
+      ]
     },
     {
-      "entry": "DELETE /api/v1/documents/:p/navigation",
-      "reason": "兼容保留：整页导航覆盖接口；新客户端只用 POST /navigation/entries，保留路由以便旧数据兼容。"
-    },
-    {
-      "entry": "DELETE /api/v1/projects/:p",
-      "reason": "逻辑项目（schema 22）本版只交付数据层 + 服务端接口，前端与 api-client 接入在下一轮；届时从白名单删除。"
-    },
-    {
-      "entry": "DELETE /api/v1/projects/:p/documents/:p",
-      "reason": "逻辑项目（schema 22）本版只交付数据层 + 服务端接口，前端与 api-client 接入在下一轮；届时从白名单删除。"
-    },
-    {
-      "entry": "DELETE /api/v1/secrets/:p",
-      "reason": "壳专用：桌面主进程直接删除 safeStorage 中的条目，不经 Core。"
-    },
-    {
-      "entry": "GET /api/v1/corpus-sessions",
-      "reason": "跨文献会话（schema 23）本版只交付数据层 + 服务端接口，api-client 与前端接入在下一轮；届时从白名单删除。"
-    },
-    {
-      "entry": "GET /api/v1/corpus-sessions/:p/messages",
-      "reason": "跨文献会话（schema 23）本版只交付数据层 + 服务端接口，api-client 与前端接入在下一轮；届时从白名单删除。"
-    },
-    {
-      "entry": "GET /api/v1/projects",
-      "reason": "逻辑项目（schema 22）本版只交付数据层 + 服务端接口，前端与 api-client 接入在下一轮；届时从白名单删除。"
-    },
-    {
-      "entry": "GET /api/v1/projects/:p/documents",
-      "reason": "逻辑项目（schema 22）本版只交付数据层 + 服务端接口，前端与 api-client 接入在下一轮；届时从白名单删除。"
-    },
-    {
-      "entry": "GET /api/v1/secrets/status",
-      "reason": "壳专用：桌面主进程用 Electron safeStorage 管理密钥，通过 IPC 读取状态，不经 api-client。"
-    },
-    {
-      "entry": "PATCH /api/v1/projects/:p",
-      "reason": "逻辑项目（schema 22）本版只交付数据层 + 服务端接口，前端与 api-client 接入在下一轮；届时从白名单删除。"
-    },
-    {
-      "entry": "POST /api/v1/corpus-sessions",
-      "reason": "跨文献会话（schema 23）本版只交付数据层 + 服务端接口，api-client 与前端接入在下一轮；届时从白名单删除。"
-    },
-    {
-      "entry": "POST /api/v1/corpus-sessions/:p/ask",
-      "reason": "跨文献会话（schema 23）本版只交付数据层 + 服务端接口，api-client 与前端接入在下一轮；届时从白名单删除。"
-    },
-    {
-      "entry": "POST /api/v1/projects",
-      "reason": "逻辑项目（schema 22）本版只交付数据层 + 服务端接口，前端与 api-client 接入在下一轮；届时从白名单删除。"
-    },
-    {
-      "entry": "POST /api/v1/projects/:p/documents",
-      "reason": "逻辑项目（schema 22）本版只交付数据层 + 服务端接口，前端与 api-client 接入在下一轮；届时从白名单删除。"
-    },
-    {
-      "entry": "POST /api/v1/secrets",
-      "reason": "壳专用：桌面主进程启动 Core 后经本机 HTTP 推送解密后的密钥；Host 接入时补进共享客户端。"
-    },
-    {
-      "entry": "PUT /api/v1/documents/:p/navigation",
-      "reason": "兼容保留：整页覆盖接口；新客户端只用 POST /navigation/entries。"
+      "category": "legacy",
+      "label": "历史兼容：计划废弃",
+      "description": "旧客户端兼容保留的路由，新客户端不使用，后续版本计划废弃；废弃前也不由 api-client 封装（新实现只用 POST /navigation/entries）。",
+      "entries": [
+        {
+          "entry": "DELETE /api/v1/documents/:p/navigation",
+          "reason": "历史兼容：计划废弃。整页覆盖接口的删除路由，新客户端不使用，保留以便旧客户端兼容。"
+        },
+        {
+          "entry": "PUT /api/v1/documents/:p/navigation",
+          "reason": "历史兼容：计划废弃。整页覆盖接口；新客户端只用 POST /navigation/entries，保留路由以便旧数据兼容。"
+        }
+      ]
     }
   ],
   "clientOnly": [],

@@ -1250,7 +1250,7 @@ async function answerQuestionInner(
           {}
         );
         const auditClaims = finalReading.audit?.claims ?? [];
-        const auditSummary = {
+        const auditSummary: NonNullable<ChatResponse['audit_summary']> = {
           claims: auditClaims.length,
           supported: auditClaims.filter((claim) => claim.verdict === 'supported').length,
           inference: auditClaims.filter((claim) => claim.verdict === 'inference').length,
@@ -1261,7 +1261,15 @@ async function answerQuestionInner(
               counts[claim.claim_type] = (counts[claim.claim_type] ?? 0) + 1;
             }
             return counts;
-          }, {})
+          }, {}),
+          // 缺证归因与越界引用是回答可信度的一部分：摘要里单独留计数，重开历史才能恢复展示。
+          source_changed: auditClaims.filter(
+            (claim) => claim.verdict === 'unsupported' && claim.evidence_status === 'source_changed'
+          ).length,
+          invalid_citations: (finalReading.invalid_citations ?? []).length,
+          ...(finalReading.selection_snapshot?.status
+            ? { selection_snapshot_status: finalReading.selection_snapshot.status }
+            : {})
         };
         const sourceRouting = {
           claims: routes.length,
@@ -1390,7 +1398,9 @@ async function answerQuestionInner(
         // 规划维度/查询词：corpus 也沿用问题规划（不再固定 D1–D6 / 只用问题字面词）。
         scopedReadingPlan,
         // 笔记/批注补充材料：只进最终回答，不进证据链。
-        memoryText
+        memoryText,
+        // 阶段说明：/chat/ask/stream 的 stage 事件（只推进度，不含正文）。
+        onStage
       );
       if (corpusAnswer) {
         return {

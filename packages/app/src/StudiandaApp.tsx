@@ -49,6 +49,8 @@ import {
   ASSET_INDEX_ACK_STORAGE_KEY,
   shouldShowAssetIndexNotice
 } from './asset-index-notice.js';
+import { ProjectsView } from './ProjectsView.js';
+import { CorpusSessionsView } from './CorpusSessionsView.js';
 import { ZoteroBrowser } from './ZoteroBrowser.js';
 import {
   IconBack,
@@ -150,7 +152,7 @@ function BooksIcon({ collapsed }: { collapsed: boolean }): JSX.Element {
 function SidebarNavIcon({
   name
 }: {
-  name: 'library' | 'qa' | 'trash' | 'zotero' | 'notes' | 'graph';
+  name: 'library' | 'qa' | 'trash' | 'zotero' | 'notes' | 'graph' | 'project' | 'corpus';
 }): JSX.Element {
   // 侧栏导航图标：16×16、1.3 描边、currentColor，与 reader-icons 同一画法。
   // 全部为手绘基础图元（矩形/圆/直线），未复制任何第三方图标库 path 数据。
@@ -192,6 +194,37 @@ function SidebarNavIcon({
       <svg viewBox="0 0 16 16" aria-hidden="true">
         <path d="M4 2.8h6.3l2 2v8.4H4z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
         <path d="M10.1 2.9v2.1H12M5.9 8h3.9M5.9 10.2h3.9" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  if (name === 'project') {
+    // 项目：文件夹 + 文献线，表示「按课题把文献分组」。
+    return (
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <path
+          d="M2.6 3.2h4.1l1.1 1.4h5.6v8.2H2.6z"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.3"
+          strokeLinejoin="round"
+        />
+        <path d="M5.4 7.2h5.2M5.4 9.4h3.6" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  if (name === 'corpus') {
+    // 跨篇会话：两页文献叠在一起 + 对话线，表示「同时就多篇文献提问」。
+    return (
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <path
+          d="M4.2 3.2h7.6v8.2H8.1L5.9 13v-1.6H4.2z"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.3"
+          strokeLinejoin="round"
+        />
+        <path d="M2.8 5.3V2.2h8.4" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+        <path d="M5.9 6.1h4.6M5.9 7.9h3.3" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
       </svg>
     );
   }
@@ -243,6 +276,8 @@ function LibrarySidebar({
   showStandaloneNotes,
   standaloneCount,
   showReferenceGraph,
+  showProjects,
+  showCorpus,
   showQa,
   importing,
   folders,
@@ -260,6 +295,8 @@ function LibrarySidebar({
   onZotero,
   onStandaloneNotes,
   onReferenceGraph,
+  onProjects,
+  onCorpus,
   onQa,
   onImport,
   onSettings
@@ -271,6 +308,8 @@ function LibrarySidebar({
   showStandaloneNotes: boolean;
   standaloneCount: number | null;
   showReferenceGraph: boolean;
+  showProjects: boolean;
+  showCorpus: boolean;
   showQa: boolean;
   importing: boolean;
   folders: FolderSummary[];
@@ -288,6 +327,8 @@ function LibrarySidebar({
   onZotero(): void;
   onStandaloneNotes(): void;
   onReferenceGraph(): void;
+  onProjects(): void;
+  onCorpus(): void;
   onQa(): void;
   onImport(): void;
   onSettings(): void;
@@ -311,6 +352,8 @@ function LibrarySidebar({
           !showZotero &&
           !showStandaloneNotes &&
           !showReferenceGraph &&
+          !showProjects &&
+          !showCorpus &&
           !showQa &&
           selectedFolderId === null
             ? ' is-active'
@@ -378,6 +421,32 @@ function LibrarySidebar({
             <SidebarNavIcon name="graph" />
           </span>
           <span className="kr-app-sidebar__nav-label">关系图</span>
+        </span>
+      </button>
+      <button
+        type="button"
+        className={`kr-app-sidebar__nav${showProjects ? ' is-active' : ''}`}
+        onClick={onProjects}
+        title="项目：把文献按课题分组（只保存关联，不移动、不删除文献）"
+      >
+        <span className="kr-app-sidebar__nav-main">
+          <span className="kr-app-sidebar__nav-icon">
+            <SidebarNavIcon name="project" />
+          </span>
+          <span className="kr-app-sidebar__nav-label">项目</span>
+        </span>
+      </button>
+      <button
+        type="button"
+        className={`kr-app-sidebar__nav${showCorpus ? ' is-active' : ''}`}
+        onClick={onCorpus}
+        title="跨篇会话：选几篇文献一起提问（范围建立时冻结）"
+      >
+        <span className="kr-app-sidebar__nav-main">
+          <span className="kr-app-sidebar__nav-icon">
+            <SidebarNavIcon name="corpus" />
+          </span>
+          <span className="kr-app-sidebar__nav-label">跨篇会话</span>
         </span>
       </button>
       <button
@@ -730,6 +799,12 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
   const [standaloneNoteId, setStandaloneNoteId] = useState<string | null>(null);
   // 全库引用关系图。
   const [showReferenceGraph, setShowReferenceGraph] = useState(false);
+  // 项目工作区（逻辑分组：只保存文献关联，不绑定目录）。
+  const [showProjects, setShowProjects] = useState(false);
+  // 跨篇会话工作区（多篇文献共用一个会话范围快照）。
+  const [showCorpus, setShowCorpus] = useState(false);
+  // 从文献库进入跨篇会话时，一次性请求打开「新建会话（多选文献）」弹窗。
+  const [corpusCreateRequested, setCorpusCreateRequested] = useState(false);
   const [referenceGraphOffset, setReferenceGraphOffset] = useState(0);
   // 全库节点数超过单页上限时，类型/关键字筛选在服务端先过滤再分页（空数组 = 不过滤）。
   const [referenceGraphKinds, setReferenceGraphKinds] = useState<ReferenceNodeKind[]>([]);
@@ -776,6 +851,8 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     showZotero ? '1' : '0',
     showStandaloneNotes ? '1' : '0',
     showReferenceGraph ? '1' : '0',
+    showProjects ? '1' : '0',
+    showCorpus ? '1' : '0',
     showQa ? '1' : '0',
     folderId ?? '',
     selected?.document.id ?? '',
@@ -998,7 +1075,12 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
   // 而是直接过滤下方的文献列表，避免出现一个和列表割裂的"搜索结果栏"。
   // 回收站/Zotero 页不提供检索（检索索引只覆盖在用文献），搜索栏随视图隐藏。
   const searchActive =
-    !showTrash && !showZotero && !showStandaloneNotes && deferredSearch.length > 0 && searchKinds.length > 0;
+    !showTrash &&
+    !showZotero &&
+    !showStandaloneNotes &&
+    !showProjects &&
+    deferredSearch.length > 0 &&
+    searchKinds.length > 0;
   const searchQuery = useQuery({
     queryKey: ['library-search-documents', deferredSearch, searchKinds.join(',')],
     enabled: searchActive,
@@ -2030,6 +2112,8 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowTrash(false);
     setShowZotero(false);
     setShowQa(false);
+    setShowProjects(false);
+    setShowCorpus(false);
     setSelected({
       document,
       page: Math.min(Math.max(1, targetPage || 1), Math.max(1, document.pages))
@@ -2042,6 +2126,8 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowZotero(false);
     setShowReferenceGraph(false);
     setShowQa(false);
+    setShowProjects(false);
+    setShowCorpus(false);
     setFolderId(null);
     resetLibraryFilters();
     setShowStandaloneNotes(true);
@@ -2054,6 +2140,8 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowZotero(false);
     setShowStandaloneNotes(false);
     setShowQa(false);
+    setShowProjects(false);
+    setShowCorpus(false);
     setFolderId(null);
     resetLibraryFilters();
     setShowReferenceGraph(true);
@@ -2078,6 +2166,8 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowZotero(false);
     setShowStandaloneNotes(false);
     setShowReferenceGraph(false);
+    setShowProjects(false);
+    setShowCorpus(false);
     setFolderId(null);
     resetLibraryFilters();
     setShowQa(true);
@@ -2115,6 +2205,8 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
       setShowZotero(false);
       setShowReferenceGraph(false);
       setShowQa(false);
+      setShowProjects(false);
+      setShowCorpus(false);
       setShowStandaloneNotes(true);
       setStandaloneNoteId(noteId);
     } catch (error) {
@@ -2147,6 +2239,29 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
       // 笔记/批注的摘引只作定位锚点（跳页高亮），不是文献证据。
       quote: source.quotes?.[0] ?? source.anchor,
       panel: source.kind === 'note' ? 'notes' : 'annotations'
+    });
+  };
+
+  /**
+   * 跨篇会话回答里的来源跳转：文献来源打开阅读页并定位页码；笔记/批注来源复用
+   * `openMemorySource`（打开对应文献的笔记/批注面板）。打开阅读页后离开跨篇会话视图，
+   * 与项目视图的返回口径一致。
+   */
+  const openCorpusSource = (source: ChatSource): void => {
+    setShowCorpus(false);
+    if (source.kind === 'note' || source.kind === 'annotation') {
+      openMemorySource(source);
+      return;
+    }
+    const document = (documentsQuery.data ?? []).find((item) => item.id === source.documentId);
+    if (!document) {
+      appDialogs.alert('引用的文献不存在或已从文献库删除。');
+      return;
+    }
+    setSelected({
+      document,
+      page: source.page > 0 ? source.page : document.currentPage,
+      quote: source.quotes?.[0] ?? source.anchor
     });
   };
 
@@ -2212,6 +2327,8 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowStandaloneNotes(false);
     setShowReferenceGraph(false);
     setShowQa(false);
+    setShowProjects(false);
+    setShowCorpus(false);
     setFolderId(null);
     resetLibraryFilters();
     setFolderNotice('');
@@ -2225,6 +2342,8 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowStandaloneNotes(false);
     setShowReferenceGraph(false);
     setShowQa(false);
+    setShowProjects(false);
+    setShowCorpus(false);
     setFolderId(id);
     resetLibraryFilters();
     setFolderNotice('');
@@ -2237,6 +2356,8 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowStandaloneNotes(false);
     setShowReferenceGraph(false);
     setShowQa(false);
+    setShowProjects(false);
+    setShowCorpus(false);
     setShowTrash(true);
     setFolderId(null);
     resetLibraryFilters();
@@ -2249,7 +2370,45 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowStandaloneNotes(false);
     setShowReferenceGraph(false);
     setShowQa(false);
+    setShowProjects(false);
+    setShowCorpus(false);
     setShowZotero(true);
+    setFolderId(null);
+    resetLibraryFilters();
+    setLibraryNotice('');
+  };
+
+  /** 项目工作区：清掉当前文献与其它视图/文件夹/筛选，避免标题与筛选条件残留。 */
+  const openProjectsView = (): void => {
+    setSelected(null);
+    setShowTrash(false);
+    setShowZotero(false);
+    setShowStandaloneNotes(false);
+    setShowReferenceGraph(false);
+    setShowQa(false);
+    setShowProjects(true);
+    setShowCorpus(false);
+    setFolderId(null);
+    resetLibraryFilters();
+    setLibraryNotice('');
+  };
+
+  /**
+   * 跨篇会话工作区：清掉当前文献与其它视图/文件夹/筛选。
+   *
+   * `create=true` 时要求视图挂载后直接打开「新建会话（多选文献）」弹窗——文献库
+   * 现有的列表只能单选打开阅读页，所以多选放在这里，不改文献库本身。
+   */
+  const openCorpusView = (options?: { create?: boolean }): void => {
+    setSelected(null);
+    setShowTrash(false);
+    setShowZotero(false);
+    setShowStandaloneNotes(false);
+    setShowReferenceGraph(false);
+    setShowQa(false);
+    setShowProjects(false);
+    setShowCorpus(true);
+    setCorpusCreateRequested(Boolean(options?.create));
     setFolderId(null);
     resetLibraryFilters();
     setLibraryNotice('');
@@ -2354,6 +2513,8 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
       if (!document) return;
       void queryClient.invalidateQueries({ queryKey: ['documents'] });
       void queryClient.invalidateQueries({ queryKey: ['document', document.id] });
+      // 项目详情里的文献可能带 missing_file：重新连接成功后要让项目清单同步刷新。
+      void queryClient.invalidateQueries({ queryKey: ['project-documents'] });
       // 页数变化/批注页码越界要如实告诉用户，不能只说"已重新连接"。
       appDialogs.alert(
         `已重新连接「${document.name}」。${document.warning ? `\n\n${document.warning}` : ''}`
@@ -2714,6 +2875,8 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowZotero(false);
     setShowStandaloneNotes(false);
     setShowReferenceGraph(false);
+    setShowProjects(false);
+    setShowCorpus(false);
     setStandaloneNoteId(null);
     setFolderId(null);
     setCategoryFilter('all');
@@ -2786,6 +2949,8 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
             showStandaloneNotes={showStandaloneNotes}
             standaloneCount={standaloneNotesQuery.data?.length ?? null}
             showReferenceGraph={false}
+            showProjects={false}
+            showCorpus={false}
             showQa={false}
             importing={importActive}
             folders={folders}
@@ -2803,6 +2968,8 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
             onZotero={openZoteroView}
             onStandaloneNotes={openStandaloneView}
             onReferenceGraph={openReferenceGraphView}
+            onProjects={openProjectsView}
+            onCorpus={openCorpusView}
             onQa={openQaView}
             onImport={() => void startImport()}
             onSettings={() => setShowSettings(true)}
@@ -2915,23 +3082,33 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setSelected({ document, page: hit.page });
   };
 
-  // 工作台标题：会话 / 关系图 / 独立笔记 / Zotero / 回收站优先，其次显示当前文件夹名。
+  // 工作台标题：会话 / 关系图 / 独立笔记 / 项目 / Zotero / 回收站优先，其次显示当前文件夹名。
   const workspaceTitle = showQa
     ? '会话'
     : showReferenceGraph
       ? '关系图'
       : showStandaloneNotes
         ? '独立笔记'
-        : showZotero
-          ? '从 Zotero 导入'
-          : showTrash
-            ? '回收站'
-            : (activeFolderName ?? '文献工作台');
+        : showProjects
+          ? '项目'
+          : showCorpus
+            ? '跨篇会话'
+            : showZotero
+              ? '从 Zotero 导入'
+              : showTrash
+                ? '回收站'
+                : (activeFolderName ?? '文献工作台');
 
   // 工作台级操作（文件健康 / + 导入文献 / 导入进度）只属于文献库类视图：
-  // 会话、Zotero、独立笔记、关系图、回收站都有自己的头部，不能出现悬浮的导入按钮。
+  // 会话、Zotero、独立笔记、关系图、项目、回收站都有自己的头部，不能出现悬浮的导入按钮。
   const showLibraryHeadingActions =
-    !showQa && !showZotero && !showStandaloneNotes && !showReferenceGraph && !showTrash;
+    !showQa &&
+    !showZotero &&
+    !showStandaloneNotes &&
+    !showReferenceGraph &&
+    !showProjects &&
+    !showCorpus &&
+    !showTrash;
 
   return (
     <div
@@ -2954,6 +3131,8 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
           showStandaloneNotes={showStandaloneNotes}
           standaloneCount={standaloneNotesQuery.data?.length ?? null}
           showReferenceGraph={showReferenceGraph}
+          showProjects={showProjects}
+          showCorpus={showCorpus}
           showQa={showQa}
           importing={importActive}
           folders={folders}
@@ -2984,6 +3163,8 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
           onZotero={openZoteroView}
           onStandaloneNotes={openStandaloneView}
           onReferenceGraph={openReferenceGraphView}
+          onProjects={openProjectsView}
+          onCorpus={openCorpusView}
           onQa={openQaView}
           onImport={() => void startImport()}
           onSettings={() => setShowSettings(true)}
@@ -3030,7 +3211,9 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
             </button>
           </div>
         </header>
-        <div className={`kr-app-content${showQa ? ' kr-app-content--qa' : ''}`}>
+        <div
+          className={`kr-app-content${showQa || showCorpus ? ' kr-app-content--qa' : ''}`}
+        >
           {showAssetIndexNotice ? (
             <div className="kr-asset-index-notice" role="status">
               <span>
@@ -3055,14 +3238,26 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
                   ? '不依附任何文献：默认在文献库里检索原文页、笔记与批注后回答，需要通读多篇时选「跨文献精读」。'
                   : showStandaloneNotes
                     ? '不依附任何文献的 Markdown 笔记，可互相引用。'
-                    : !showZotero && !showTrash && folderId !== null
-                      ? `共 ${folderScopeCounts.total} 篇 · 著作 ${folderScopeCounts.book} · 论文 ${folderScopeCounts.paper} · 其他 ${folderScopeCounts.other + folderScopeCounts.unknown}`
-                      : '管理文献、继续阅读，让资料有序积累。'}
+                    : showProjects
+                      ? '把文献按课题或论文分组；项目只保存关联，不移动、不删除文献。'
+                      : showCorpus
+                        ? '选几篇文献一起提问；范围在建立会话时冻结，之后新增文献不自动加入。'
+                        : !showZotero && !showTrash && folderId !== null
+                        ? `共 ${folderScopeCounts.total} 篇 · 著作 ${folderScopeCounts.book} · 论文 ${folderScopeCounts.paper} · 其他 ${folderScopeCounts.other + folderScopeCounts.unknown}`
+                        : '管理文献、继续阅读，让资料有序积累。'}
               </p>
             </div>
             <div className="kr-workspace-heading__actions">
               {showLibraryHeadingActions ? (
                 <>
+                  <button
+                    type="button"
+                    className="kr-secondary"
+                    onClick={() => openCorpusView({ create: true })}
+                    title="选几篇文献一起提问（范围在建立会话时冻结）"
+                  >
+                    新建跨篇会话
+                  </button>
                   <button
                     type="button"
                     className="kr-secondary"
@@ -3103,7 +3298,13 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
           <div className={`kr-workspace${compactHeader ? ' is-compact' : ''}`}>
       <section
         className={`kr-search${
-          showQa || showZotero || showTrash || showStandaloneNotes || showReferenceGraph
+          showQa ||
+          showZotero ||
+          showTrash ||
+          showStandaloneNotes ||
+          showReferenceGraph ||
+          showProjects ||
+          showCorpus
             ? ' is-hidden'
             : ''
         }`}
@@ -3222,6 +3423,8 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
       !showTrash &&
       !showStandaloneNotes &&
       !showReferenceGraph &&
+      !showProjects &&
+      !showCorpus &&
       missingDocuments.length > 0 ? (
         <div className="kr-health" role="status">
           <strong>
@@ -3244,7 +3447,12 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
         </div>
       ) : null}
 
-      {!showQa && !showZotero && !showStandaloneNotes && !showReferenceGraph ? (
+      {!showQa &&
+      !showZotero &&
+      !showStandaloneNotes &&
+      !showReferenceGraph &&
+      !showProjects &&
+      !showCorpus ? (
         <LibraryFilters
           category={categoryFilter}
           counts={categoryCounts}
@@ -3388,6 +3596,32 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
             setShowZotero(false);
             setSelected({ document });
           }}
+        />
+      ) : showProjects ? (
+        <ProjectsView
+          api={api}
+          documents={documentsQuery.data ?? []}
+          onOpenDocument={(document) => {
+            if (document.missing_file) {
+              const confirmed = appDialogs.confirm(
+                `「${document.name}」的 PDF 附件缺失。现在选择文件重新连接吗？`
+              );
+              if (confirmed) relinkMutation.mutate(document);
+              return;
+            }
+            // 与 Zotero 视图一致：进入阅读页后返回文献库，不停在项目页；项目内列表状态在重新进入时重建。
+            setShowProjects(false);
+            setShowCorpus(false);
+            setSelected({ document });
+          }}
+        />
+      ) : showCorpus ? (
+        <CorpusSessionsView
+          api={api}
+          documents={documentsQuery.data ?? []}
+          openCreateRequested={corpusCreateRequested}
+          onOpenCreateConsumed={() => setCorpusCreateRequested(false)}
+          onOpenSource={openCorpusSource}
         />
       ) : (
       <DocumentList
@@ -5537,16 +5771,26 @@ function chatResponseForStorage(response: ChatResponse): Record<string, unknown>
 /**
  * 从 DB 行恢复助手回答（用户行没有 response）：
  * - 新行：`metadata.response` 里存了整轮 ChatResponse（已去掉 sources），拼回单独列的 sources；
- * - 旧行：只有 content + sources 列，退回最小回答 `{answer, sources}`，兼容旧数据。
+ * - 旧行：只有 content + sources 列，退回最小回答 `{answer, sources}`，兼容旧数据；
+ * - schema_version 24 起 `messages.audit_summary` 单独成列：response 里没有摘要时补回去，
+ *   让缺证/原文已变更/越界引用在重开历史后仍可展示（解析失败的坏摘要已在上游降级为空）。
  */
 function chatResponseFromRecord(row: ChatMessageRecord): ChatResponse | undefined {
   if (row.role !== 'assistant') return undefined;
   const sources = Array.isArray(row.sources) ? row.sources : [];
   const stored = (row.metadata ?? {}).response;
   if (stored && typeof stored === 'object' && !Array.isArray(stored)) {
-    return { ...(stored as ChatResponse), sources };
+    const restored = { ...(stored as ChatResponse), sources };
+    if (!restored.audit_summary && row.auditSummary) {
+      restored.audit_summary = row.auditSummary;
+    }
+    return restored;
   }
-  return { answer: row.content, sources };
+  return {
+    answer: row.content,
+    sources,
+    ...(row.auditSummary ? { audit_summary: row.auditSummary } : {})
+  };
 }
 
 /** 阅读伙伴消息分页：默认每页条数（最新一页）。 */

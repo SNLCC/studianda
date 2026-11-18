@@ -8,13 +8,14 @@ import { markdownHasAiExportHeader } from '../src/export-marker.js';
 import { Store } from '../src/store.js';
 
 /**
- * schema_version **19 / 20 → 当前版本（23）** 旧库升级验证（可重复，直接跑真实 `Store` 构造函数里的 migrate）。
+ * schema_version **19 / 20 → 当前版本（24）** 旧库升级验证（可重复，直接跑真实 `Store` 构造函数里的 migrate）。
  *
  * 本轮迁移：
  * - 19 → 20：新增 `book_summaries`（全书摘要缓存）与 `selection_snapshots`（选区冻结快照）两张基线表；
  * - 20 → 21：`notes`、`annotations` 各新增 `origin TEXT NOT NULL DEFAULT 'user'`；
  * - 21 → 22：新增逻辑项目 `projects` 与 `project_documents` 两张基线表（直接由 SCHEMA_SQL 补建）；
- * - 22 → 23：新增跨文献语料会话 `corpus_sessions` 与 `corpus_session_documents` 两张基线表。
+ * - 22 → 23：新增跨文献语料会话 `corpus_sessions` 与 `corpus_session_documents` 两张基线表；
+ * - 23 → 24：`messages` 新增 `scope_kind`（'document' | 'corpus'）与 `audit_summary`（审计摘要 JSON）。
  *
  * 夹具用 node:sqlite **手工构造** v19 / v20 的旧库（表结构是迁移前真实形态：notes/annotations
  * 没有 origin 列，v19 没有 20 的两张表），塞入固定数据后关库，再交给 `new Store(dir)` 触发真实迁移。
@@ -481,8 +482,8 @@ function columnByName(columns: SchemaColumn[], name: string): SchemaColumn | und
   return columns.find((column) => column.name === name);
 }
 
-describe.each([19, 20] as const)('schema_version %i → 23 迁移', (version) => {
-  it('补建表/列、版本升到 23，旧行数与内容/时间戳逐字不变，老行 origin=user，重复迁移幂等', () => {
+describe.each([19, 20] as const)('schema_version %i → 24 迁移', (version) => {
+  it('补建表/列、版本升到 24，旧行数与内容/时间戳逐字不变，老行 origin=user，重复迁移幂等', () => {
     const dir = mkdtempSync(path.join(root, `v${version}-`));
     let store: Store | null = null;
     try {
@@ -542,7 +543,7 @@ describe.each([19, 20] as const)('schema_version %i → 23 迁移', (version) =>
 
       // ---- 迁移后：版本、表、列 ----
       const after = readState(dir);
-      expect(after.version).toBe('23');
+      expect(after.version).toBe('24');
       expect(tableNames(after)).toEqual(
         expect.arrayContaining([
           'book_summaries',
@@ -627,7 +628,7 @@ describe.each([19, 20] as const)('schema_version %i → 23 迁移', (version) =>
         }
       }
       const afterReopen = readState(dir);
-      expect(afterReopen.version).toBe('23');
+      expect(afterReopen.version).toBe('24');
       expect(afterReopen.schemaObjects).toEqual(schemaAfterFirstMigration);
       expect(afterReopen.rows).toEqual(after.rows);
       // 已是 23 的库不会再备份一次。

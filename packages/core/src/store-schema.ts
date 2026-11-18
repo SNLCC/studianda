@@ -173,7 +173,13 @@ export const SCHEMA_SQL = `      CREATE TABLE IF NOT EXISTS schema_meta(
         sources TEXT,
         created TEXT DEFAULT CURRENT_TIMESTAMP,
         metadata TEXT DEFAULT '{}',
-        session_id TEXT DEFAULT 'legacy'
+        session_id TEXT DEFAULT 'legacy',
+        -- schema_version 24：消息作用域显式化（'document' | 'corpus'）。
+        -- 跨篇会话消息仍复用 messages、document_id 写空串哨兵，但归属语义不再靠哨兵推断。
+        scope_kind TEXT NOT NULL DEFAULT 'document',
+        -- schema_version 24：assistant 消息的审计摘要 JSON（只存计数/状态，不存正文）。
+        -- 旧消息/非 assistant 消息为 NULL；读取侧解析失败按「没有摘要」降级。
+        audit_summary TEXT
       );
 
       -- schema_version 15：阅读伙伴会话正式落表（原先的 settings JSON 清单迁移到这里）。
@@ -196,7 +202,8 @@ export const SCHEMA_SQL = `      CREATE TABLE IF NOT EXISTS schema_meta(
       -- schema_version 23：跨文献（语料）会话。**不改** document_chat_sessions 的主键，
       -- 也不把其 document_id 改成可空：跨篇会话是另一张表，范围冻结在建立时的文献快照
       -- （之后库里的新文献不自动加入）；消息复用 messages，document_id 用空串哨兵
-      -- 表示「不属于任何单篇文献」，只靠 session_id 归属。
+      -- 表示「不属于任何单篇文献」，只靠 session_id 归属；schema_version 24 起同时把
+      -- scope_kind 显式记为 'corpus'（空串哨兵只是复用表的兼容手段，不再是唯一语义）。
       CREATE TABLE IF NOT EXISTS corpus_sessions(
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL DEFAULT '',

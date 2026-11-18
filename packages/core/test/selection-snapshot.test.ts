@@ -195,6 +195,6 @@ describe('选区快照：schema 迁移', () => {
     const version = db
       .prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'")
       .get() as { value?: string } | undefined;
-    expect(version?.value).toBe('23');
+    expect(version?.value).toBe('24');
   });
 });

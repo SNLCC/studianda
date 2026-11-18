@@ -32,12 +32,18 @@ import {
   type SelectionSnapshotRecord,
   type SelectionSnapshotStatus
 } from './selection-snapshot.js';
+import {
+  auditSummaryFromResponse,
+  parseAuditSummary,
+  serializeAuditSummary
+} from './chat-audit-summary.js';
 import { purgeDocumentRetrievalCaches } from './retrieval.js';
 import { loadImage } from '@napi-rs/canvas';
 import type {
   AnnotationRecord,
   BacklinkRecord,
   BacklinkTargetKind,
+  ChatAuditSummary,
   ChatMessageRecord,
   ChatSource,
   ClearUserDataResult,
@@ -134,6 +140,9 @@ const NAV_SYNC_LIMIT = 80;
  * 而 `addMessage` 还要求该文献存在。跨文献会话没有单篇归属，所以复用该表时把 document_id
  * 写成空串、只靠 session_id 归属：这些消息不会出现在任何单篇文献的阅读会话里，
  * 单篇文献被彻底删除（purgeDocument 按 document_id 清 messages）时也不会误删它们。
+ *
+ * schema_version 24 起另写 `messages.scope_kind='corpus'` 显式表达作用域；空串哨兵继续保留
+ * 只是为了复用同一张表/同一套 document_id 过滤，**不再是判断作用域的唯一依据**。
  */
 const CORPUS_MESSAGE_DOCUMENT_ID = '';
 
@@ -1676,7 +1685,7 @@ export class Store {
   ): ChatMessageRecord[] {
     const rows = this.db
       .prepare(
-        'SELECT id, document_id, role, content, sources, metadata, created, session_id FROM messages WHERE document_id = ? ORDER BY id'
+        'SELECT id, document_id, role, content, sources, metadata, created, session_id, scope_kind, audit_summary FROM messages WHERE document_id = ? ORDER BY id'
       )
       .all(documentId) as unknown as Array<{
       id: number;
@@ -1687,6 +1696,8 @@ export class Store {
       metadata: string | null;
       created: string;
       session_id: string | null;
+      scope_kind: string | null;
+      audit_summary: string | null;
     }>;
     const sessionId = options.sessionId?.trim() ?? '';
     // 会话归属以 messages.session_id 列为准；legacy 兼容旧库/旧消息（列默认值或空）。
@@ -1713,6 +1724,8 @@ export class Store {
       } catch {
         metadata = {};
       }
+      // 审计摘要解析失败时退化为「没有摘要」（坏 JSON/旧消息都不能让整条历史读取报错）。
+      const auditSummary = parseAuditSummary(row.audit_summary);
       return {
         id: Number(row.id),
         documentId: row.document_id,
@@ -1721,7 +1734,10 @@ export class Store {
         sources,
         metadata,
         created: row.created,
-        ...(row.session_id ? { sessionId: row.session_id } : {})
+        ...(row.session_id ? { sessionId: row.session_id } : {}),
+        // 空串哨兵语义显式化：只有校验为 corpus 才算跨篇，其余（含旧数据 NULL）按单篇兜底。
+        scopeKind: row.scope_kind === 'corpus' ? 'corpus' : 'document',
+        ...(auditSummary ? { auditSummary } : {})
       };
     });
     if (!sessionId) return messages;
@@ -1812,14 +1828,25 @@ export class Store {
     content: string;
     sources?: ChatSource[];
     metadata?: Record<string, unknown>;
+    /**
+     * 显式审计摘要（一般由调用方从 ChatResponse 压缩后传入）。
+     * 不传时：assistant 消息若 `metadata.response` 里带整轮 ChatResponse，服务端自动压缩；
+     * 两者都没有就写 NULL（旧消息/失败占位没有审计信息）。
+     */
+    auditSummary?: ChatAuditSummary | null;
   }): ChatMessageRecord {
     if (!this.getDocument(input.documentId)) throw new Error('文档不存在');
     const rawSessionId = input.metadata?.sessionId;
     const sessionId =
       typeof rawSessionId === 'string' && rawSessionId.trim() ? rawSessionId.trim() : 'legacy';
+    // 单篇文献消息显式记 scope_kind='document'：不再依赖 document_id 是否为空来判断作用域。
+    const auditSummary =
+      input.role === 'assistant'
+        ? (input.auditSummary ?? auditSummaryFromResponse(input.metadata?.response))
+        : null;
     const result = this.db
       .prepare(
-        'INSERT INTO messages(document_id, role, content, sources, metadata, session_id) VALUES (?, ?, ?, ?, ?, ?)'
+        'INSERT INTO messages(document_id, role, content, sources, metadata, session_id, scope_kind, audit_summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .run(
         input.documentId,
@@ -1827,7 +1854,9 @@ export class Store {
         input.content,
         JSON.stringify(input.sources ?? []),
         JSON.stringify(input.metadata ?? {}),
-        sessionId
+        sessionId,
+        'document',
+        serializeAuditSummary(auditSummary)
       );
     return {
       id: Number(result.lastInsertRowid),
@@ -1836,7 +1865,10 @@ export class Store {
       content: input.content,
       sources: input.sources ?? [],
       metadata: input.metadata ?? {},
-      created: new Date().toISOString()
+      created: new Date().toISOString(),
+      sessionId,
+      scopeKind: 'document',
+      ...(auditSummary ? { auditSummary } : {})
     };
   }
 
@@ -2089,9 +2121,10 @@ export class Store {
   }
 
   // ---------------------------------------------------------------------------
-  // 跨文献（语料）会话（schema_version 23）：范围是建立时的文献 id 快照。
-  // document_chat_sessions 的主键与「一会话一篇文献」语义完全不变；这里是另一张表。
-  // 消息复用 messages：document_id 空串哨兵 + session_id，详见 CORPUS_MESSAGE_DOCUMENT_ID。
+  // 跨文献（语料）会话（schema_version 23；24 起消息带 scope_kind='corpus' + 审计摘要）：
+  // 范围是建立时的文献 id 快照。document_chat_sessions 的主键与「一会话一篇文献」语义完全
+  // 不变；这里是另一张表。消息复用 messages：document_id 空串哨兵 + session_id，
+  // 详见 CORPUS_MESSAGE_DOCUMENT_ID。
   // ---------------------------------------------------------------------------
 
   /** 读一个跨文献会话（含范围快照，按写入顺序）；不存在返回 null。 */
@@ -2206,11 +2239,22 @@ export class Store {
     content: string;
     sources?: ChatSource[];
     metadata?: Record<string, unknown>;
+    /**
+     * 本轮回答的审计摘要（由调用方从 ChatResponse 压缩后传入）。
+     * 落库为 `messages.audit_summary`，重开历史时据此恢复缺证/原文已变更/越界引用展示。
+     */
+    auditSummary?: ChatAuditSummary | null;
   }): ChatMessageRecord {
     if (!this.getCorpusSession(input.sessionId)) throw new Error('跨文献会话不存在');
+    // 跨篇消息显式记 scope_kind='corpus'：空串 document_id 只是复用 messages 表的兼容手段，
+    // 不再是唯一语义来源。user 消息没有审计信息，写 NULL。
+    const auditSummary =
+      input.role === 'assistant'
+        ? (input.auditSummary ?? auditSummaryFromResponse(input.metadata?.response))
+        : null;
     const result = this.db
       .prepare(
-        'INSERT INTO messages(document_id, role, content, sources, metadata, session_id) VALUES (?, ?, ?, ?, ?, ?)'
+        'INSERT INTO messages(document_id, role, content, sources, metadata, session_id, scope_kind, audit_summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .run(
         CORPUS_MESSAGE_DOCUMENT_ID,
@@ -2218,7 +2262,9 @@ export class Store {
         input.content,
         JSON.stringify(input.sources ?? []),
         JSON.stringify(input.metadata ?? {}),
-        input.sessionId
+        input.sessionId,
+        'corpus',
+        serializeAuditSummary(auditSummary)
       );
     return {
       id: Number(result.lastInsertRowid),
@@ -2228,7 +2274,9 @@ export class Store {
       sources: input.sources ?? [],
       metadata: input.metadata ?? {},
       created: new Date().toISOString(),
-      sessionId: input.sessionId
+      sessionId: input.sessionId,
+      scopeKind: 'corpus',
+      ...(auditSummary ? { auditSummary } : {})
     };
   }
 
@@ -2404,7 +2452,10 @@ export class Store {
     // 22：新增逻辑项目 projects + 项目文献链接 project_documents（不绑目录，文献仍全局唯一）。
     // 23：新增跨文献语料会话 corpus_sessions + 范围快照 corpus_session_documents（只建表，
     //     消息复用 messages 的 session_id；document_chat_sessions 主键与语义不变）。
-    const currentVersion = 23;
+    // 24：messages 新增 scope_kind（'document' | 'corpus'，把跨篇消息的空串 document_id 哨兵
+    //     变成显式语义）与 audit_summary（审计摘要 JSON：缺证/原文已变更/越界引用等只存计数，
+    //     不存正文/完整响应）。旧消息默认 scope_kind='document'、audit_summary=NULL。
+    const currentVersion = 24;
     if (previousVersion > 0 && previousVersion < currentVersion) {
       this.backupBeforeMigration(previousVersion);
     }
@@ -2527,6 +2578,24 @@ export class Store {
     if (!annotationColumns.has('origin')) {
       this.db.exec("ALTER TABLE annotations ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'");
     }
+    // schema_version 23 → 24：消息作用域显式化 + 审计摘要落库（都只是加列，不重建表）。
+    // - scope_kind：跨篇消息此前靠 document_id='' 哨兵，语义不清；现在显式记 'corpus'，
+    //   单篇消息记 'document'。NOT NULL + 常量默认值对 SQLite 的 ALTER ADD COLUMN 合法，
+    //   旧消息按默认值 'document' 兜底（读取不依赖该列，缺/空也照样能读）。
+    // - audit_summary：可空 JSON，旧消息保持 NULL；读取侧解析失败即视为没有摘要。
+    const messageColumns = new Set(
+      (this.db.prepare('PRAGMA table_info(messages)').all() as unknown as Array<{
+        name: string;
+      }>).map((column) => column.name)
+    );
+    if (!messageColumns.has('scope_kind')) {
+      this.db.exec(
+        "ALTER TABLE messages ADD COLUMN scope_kind TEXT NOT NULL DEFAULT 'document'"
+      );
+    }
+    if (!messageColumns.has('audit_summary')) {
+      this.db.exec('ALTER TABLE messages ADD COLUMN audit_summary TEXT');
+    }
     if (previousVersion < 19) this.backfillNoteManualOrder();
     this.db.exec(
       `CREATE INDEX IF NOT EXISTS note_external_key ON notes(document_id, external_key)`
@@ -2554,7 +2623,7 @@ export class Store {
     }
     this.db
       .prepare('INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)')
-      .run('schema_version', '23');
+      .run('schema_version', '24');
       this.db.exec('COMMIT');
     } catch (error) {
       // 整体回滚：schema、回填、schema_version 一起回到迁移前；迁移前快照仍保留在

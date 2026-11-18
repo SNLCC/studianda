@@ -1665,6 +1665,19 @@ export interface ChatMessageRecord {
    * 只靠 sessionId 归属，因此把列值一并返回，调用方不必再按 document 反推。
    */
   sessionId?: string;
+  /**
+   * 消息作用域（`messages.scope_kind`，schema_version 24 起）：
+   * - `document`：单篇文献的阅读伙伴消息（documentId 指向真实文献）；
+   * - `corpus`：跨文献会话消息（documentId 为空串哨兵，靠 sessionId 归属）。
+   *
+   * 旧服务端/旧数据可能没有该字段，读取时按 `document` 兜底。
+   */
+  scopeKind?: 'document' | 'corpus';
+  /**
+   * 落库后恢复的审计摘要（`messages.audit_summary`），只有 assistant 消息可能有。
+   * 解析失败/旧消息没有摘要时为 undefined，**不影响整条历史读取**。
+   */
+  auditSummary?: ChatAuditSummary;
 }
 
 /** 阅读伙伴（按文献）的会话清单记录；消息归属靠消息 metadata 里的 sessionId。 */
@@ -1960,6 +1973,29 @@ export interface FlowSummaryRecord {
   truncated: boolean;
 }
 
+/**
+ * 审计摘要（schema_version 24 起随 assistant 消息落库到 `messages.audit_summary`）。
+ *
+ * 只存计数与选区状态：`claims/supported/inference/unsupported/heading` 是逐段审计的状态计数，
+ * `source_changed` 是被归因为「提问时原文已变更」的缺证件数（已包含在 `unsupported` 内，单列
+ * 避免混成模型编造），`invalid_citations` 是越界引用数。**不存正文/原文/完整 ChatResponse**，
+ * 避免库膨胀与重复存储；重开历史时界面只能恢复到计数级别，逐段明细不可回放。
+ */
+export interface ChatAuditSummary {
+  claims: number;
+  supported: number;
+  inference: number;
+  unsupported: number;
+  heading: number;
+  claim_types: Record<string, number>;
+  /** 原文已变更归因的缺证件数（旧响应/旧消息可能没有该字段，按 0 处理）。 */
+  source_changed?: number;
+  /** 越界引用数（回答里没有对应来源的引用编号个数；旧响应可能没有该字段）。 */
+  invalid_citations?: number;
+  /** 提问时冻结的选区快照相对当前原文的状态（没有快照时不存）。 */
+  selection_snapshot_status?: 'current' | 'source_changed' | 'unknown';
+}
+
 /** 加载时被跳过的用户流程及原因（不静默失效）。 */
 export interface SkippedFlowRecord {
   id: string;
@@ -2031,14 +2067,11 @@ export interface ChatResponse {
     blocked_kinds: string[];
     by_suggestion: Record<string, number>;
   };
-  audit_summary?: {
-    claims: number;
-    supported: number;
-    inference: number;
-    unsupported: number;
-    heading: number;
-    claim_types: Record<string, number>;
-  };
+  /**
+   * 本轮审计的状态计数摘要。也会被压成同一结构存进 `messages.audit_summary`，
+   * 重开历史时据此恢复「缺证 / 原文已变更 / 越界引用」展示。
+   */
+  audit_summary?: ChatAuditSummary;
   plan?: ReadingPlanRecord;
   /** 本轮实际按章阅读时的章信息（著作默认按章读或用户指定章节时返回）。 */
   chapter?: DocumentChapter;

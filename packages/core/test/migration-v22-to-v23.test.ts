@@ -6,7 +6,8 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { Store } from '../src/store.js';
 
 /**
- * schema_version **22 → 23** 旧库升级验证（直接跑真实 `Store` 构造函数里的 migrate）。
+ * schema_version **22 → 23** 旧库升级验证（当前迁移终点已到 24，本夹具同时覆盖 23→24 的加列；
+ * 直接跑真实 `Store` 构造函数里的 migrate）。
  *
  * 本轮迁移**只建表**：
  * - `corpus_sessions(id, title, created_at, updated_at, archived_at)` + `corpus_sessions_updated`；
@@ -15,7 +16,7 @@ import { Store } from '../src/store.js';
  *
  * 夹具用 node:sqlite 手工构造 v22 旧库（documents/messages/document_chat_sessions/三张会话触发器都是
  * v22 真实形态），塞入固定数据后关库，再交给 `new Store(dir)` 触发真实迁移。断言覆盖：补建两表/索引、
- * 版本升到 23、旧行逐字不变、迁移前快照存在且是 v22（没有语料会话表）、重复迁移幂等、
+ * 版本升到 24、旧行逐字不变（含 24 新增列默认值）、迁移前快照存在且是 v22、重复迁移幂等、
  * 迁移后语料会话数据层可直接使用（建会话 / 落消息 / 删会话）。
  */
 
@@ -233,7 +234,7 @@ function migrationBackups(dir: string): string[] {
 }
 
 describe('schema_version 22 → 23 迁移', () => {
-  it('补建语料会话两表/索引，版本升到 23，旧行逐字不变，快照为 v22，重复迁移幂等', () => {
+  it('补建语料会话两表/索引，版本升到 24，旧行逐字不变，快照为 v22，重复迁移幂等', () => {
     const dir = mkdtempSync(path.join(root, 'v22-'));
     let store: Store | null = null;
     try {
@@ -324,7 +325,7 @@ describe('schema_version 22 → 23 迁移', () => {
       try {
         afterVersion = readVersion(afterDb) ?? '';
         afterObjects = schemaObjectNames(afterDb);
-        expect(afterVersion).toBe('23');
+        expect(afterVersion).toBe('24');
         expect(tableExists(afterDb, 'corpus_sessions')).toBe(true);
         expect(tableExists(afterDb, 'corpus_session_documents')).toBe(true);
         expect(afterObjects).toEqual(
@@ -423,7 +424,7 @@ describe('schema_version 22 → 23 迁移', () => {
       }
       const afterReopenDb = readOnlyDb(dir);
       try {
-        expect(readVersion(afterReopenDb)).toBe('23');
+        expect(readVersion(afterReopenDb)).toBe('24');
         expect(schemaObjectNames(afterReopenDb)).toEqual(afterObjects);
       } finally {
         afterReopenDb.close();
