@@ -6,7 +6,6 @@ import {
   existsSync,
   mkdirSync,
   openSync,
-  opendirSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -22,6 +21,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { SCHEMA_SQL } from './store-schema.js';
 import * as projectDomain from './store/projects.js';
+import * as noteAssets from './store/note-assets.js';
+import {
+  NOTE_ASSET_DIR,
+  NOTE_ASSET_EXT,
+  NOTE_ASSET_MIME_BY_EXT
+} from './store/note-assets.js';
+import { NoteAssetReindexer } from './note-asset-reindexer.js';
 import {
   highestMetadataSource,
   mergeMetadataField,
@@ -103,7 +109,6 @@ import type {
 import {
   REFERENCE_GRAPH_ALL_NODE_LIMIT,
   documentCategoryOf,
-  extractNoteAssetFilenames,
   markdownPlainText,
   parseMarkdownInternalLink
 } from '@studianda/shared';
@@ -577,47 +582,6 @@ function extractDoi(text: string): string {
   const match = /10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i.exec(text);
   return match ? normalizeDoi(match[0]) : '';
 }
-
-/** 笔记图片资源：MIME → 落盘扩展名；同时用作白名单。 */
-const NOTE_ASSET_EXT: Record<string, string> = {
-  'image/png': 'png',
-  'image/jpeg': 'jpg',
-  'image/gif': 'gif',
-  'image/webp': 'webp'
-};
-const NOTE_ASSET_DIR = 'note-assets';
-/** 反向映射：扩展名 → MIME（迁移回填/磁盘孤儿登记/附件导入用）。 */
-const NOTE_ASSET_MIME_BY_EXT: Record<string, string> = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  gif: 'image/gif',
-  webp: 'image/webp',
-  pdf: 'application/pdf',
-  txt: 'text/plain',
-  md: 'text/markdown',
-  markdown: 'text/markdown',
-  json: 'application/json',
-  csv: 'text/csv',
-  html: 'text/html',
-  svg: 'image/svg+xml',
-  doc: 'application/msword',
-  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  ppt: 'application/vnd.ms-powerpoint',
-  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  xls: 'application/vnd.ms-excel',
-  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  epub: 'application/epub+zip',
-  zip: 'application/zip',
-  '7z': 'application/x-7z-compressed',
-  rar: 'application/vnd.rar',
-  mp3: 'audio/mpeg',
-  wav: 'audio/wav',
-  m4a: 'audio/mp4',
-  mp4: 'video/mp4',
-  mov: 'video/quicktime',
-  webm: 'video/webm'
-};
 
 /** LIKE 查询把用户输入当字面量：转义 %、_ 与转义符本身。 */
 function escapeLike(value: string): string {
@@ -1237,18 +1201,11 @@ export class Store {
    * 用 static 字段而非 const，便于测试按需调小后覆盖超限分支。
    */
   static MAX_ALL_NODES = REFERENCE_GRAPH_ALL_NODE_LIMIT;
-  /** 后台资源索引重建任务（单并发；仅内存态，重启丢失 running 状态）。 */
-  private noteAssetReindexJob: NoteAssetReindexJob = {
-    status: 'idle',
-    phase: 'idle',
-    total: 0,
-    done: 0,
-    indexedFiles: 0,
-    indexedRefs: 0,
-    indexedAt: '',
-    error: ''
-  };
-  private noteAssetReindexRunning = false;
+  /**
+   * 后台资源索引重建器（任务状态 job / running 与其状态机都在 NoteAssetReindexer 里，
+   * 本类不再持有；懒创建，构造它不会启动任何任务）。
+   */
+  private noteAssetReindexerInstance: NoteAssetReindexer | null = null;
 
   constructor(dataDir: string) {
     this.dataDir = dataDir;
@@ -2773,7 +2730,7 @@ export class Store {
     // schema_version 9 → 10：回填资源登记表（扫描目录 + 所有笔记/批注引用）。
     // 旧库升级时跑一次；已是 10 的库不再重复扫描（迁移幂等，见 previousVersion）。
     if (previousVersion < 10) {
-      this.rebuildNoteAssetRefs(false);
+      noteAssets.rebuildRefs(this.db, this.noteAssetDeps, false);
     }
     // 12：从 notes.folder_path 回填虚拟文件夹（含祖先目录）；幂等。
     this.backfillNoteFolders();
@@ -3068,227 +3025,46 @@ export class Store {
     return Number(row?.value ?? 1);
   }
 
-  /** 按文件名登记资源行（已存在直接返回 asset_id；缺文件也登记，size 0）。 */
-  private ensureNoteAssetRecord(filename: string): string {
-    const existing = this.db
-      .prepare('SELECT asset_id FROM note_assets WHERE filename = ?')
-      .get(filename) as { asset_id?: string } | undefined;
-    if (existing?.asset_id) return existing.asset_id;
-    const ext = path.extname(filename).slice(1).toLowerCase();
-    const mime = NOTE_ASSET_MIME_BY_EXT[ext] ?? '';
-    let size = 0;
-    const filePath = path.join(this.dataDir, NOTE_ASSET_DIR, filename);
-    try {
-      if (existsSync(filePath)) size = statSync(filePath).size;
-    } catch {
-      size = 0;
-    }
-    const assetId = randomUUID();
-    this.db
-      .prepare(
-        `INSERT OR IGNORE INTO note_assets(asset_id, filename, mime, size_bytes)
-         VALUES (?, ?, ?, ?)`
-      )
-      .run(assetId, filename, mime, size);
-    const row = this.db
-      .prepare('SELECT asset_id FROM note_assets WHERE filename = ?')
-      .get(filename) as { asset_id?: string } | undefined;
-    return row?.asset_id ?? assetId;
+  /**
+   * 笔记资源域的显式依赖：syncSource / GC / 全量重建只通过它拿时间、uuid、资源目录与
+   * settings，不把 Store 实例传进域模块（见 store/note-assets.ts 的拆分约定）。
+   */
+  private get noteAssetDeps(): noteAssets.NoteAssetDeps {
+    return {
+      assetDir: path.join(this.dataDir, NOTE_ASSET_DIR),
+      now: () => new Date().toISOString(),
+      uuid: () => randomUUID(),
+      readSettings: () => this.getSettings(),
+      updateSettings: (patch, manageTransaction) => {
+        this.updateSettings(patch, manageTransaction);
+      }
+    };
   }
 
-  /** 重算受影响资源的 ref_count / last_referenced（last 取引用来源的最大 created）。 */
-  private refreshNoteAssetCounts(assetIds: Iterable<string>): void {
-    const countStatement = this.db.prepare(
-      'SELECT COUNT(*) AS n FROM note_asset_refs WHERE asset_id = ?'
-    );
-    const lastStatement = this.db.prepare(
-      `SELECT MAX(created) AS last FROM (
-         SELECT n.created AS created FROM note_asset_refs r
-           JOIN notes n ON n.id = r.source_id
-          WHERE r.asset_id = ? AND r.source_kind = 'note'
-         UNION ALL
-         SELECT a.created AS created FROM note_asset_refs r
-           JOIN annotations a ON a.id = r.source_id
-          WHERE r.asset_id = ? AND r.source_kind = 'annotation'
-       )`
-    );
-    const update = this.db.prepare(
-      'UPDATE note_assets SET ref_count = ?, last_referenced = ? WHERE asset_id = ?'
-    );
-    for (const assetId of new Set(assetIds)) {
-      const count = Number(
-        (countStatement.get(assetId) as { n?: number } | undefined)?.n ?? 0
-      );
-      const last = count
-        ? String((lastStatement.get(assetId, assetId) as { last?: string } | undefined)?.last ?? '')
-        : '';
-      update.run(count, last, assetId);
-    }
+  /**
+   * 后台重建器：懒创建，任务状态在 NoteAssetReindexer 里（Store 不再持有 job/running）。
+   * 同步写路径与后台重建共用 `syncNoteAssetRefs`，因此这里动态引用它。
+   */
+  private get noteAssetReindexer(): NoteAssetReindexer {
+    this.noteAssetReindexerInstance ??= new NoteAssetReindexer(this.db, {
+      ...this.noteAssetDeps,
+      syncSource: (kind, sourceId, content) => this.syncNoteAssetRefs(kind, sourceId, content)
+    });
+    return this.noteAssetReindexerInstance;
   }
 
   /**
    * 同步一条笔记/批注的资源引用：先删旧 refs，再按当前内容插入新 refs。
    * 只影响被删/新增的资源计数，不做全量扫描。
+   *
+   * 薄委托：实现（含「调用方事务内执行」的不变量）见 store/note-assets.ts 的 syncSource。
    */
   private syncNoteAssetRefs(
     sourceKind: 'note' | 'annotation',
     sourceId: string,
     content: string
   ): void {
-    const old = this.db
-      .prepare('SELECT asset_id FROM note_asset_refs WHERE source_kind = ? AND source_id = ?')
-      .all(sourceKind, sourceId) as unknown as Array<{ asset_id: string }>;
-    const affected = new Set<string>(old.map((row) => row.asset_id));
-    this.db
-      .prepare('DELETE FROM note_asset_refs WHERE source_kind = ? AND source_id = ?')
-      .run(sourceKind, sourceId);
-    const insert = this.db.prepare(
-      'INSERT OR IGNORE INTO note_asset_refs(asset_id, source_kind, source_id) VALUES (?, ?, ?)'
-    );
-    for (const filename of extractNoteAssetFilenames(content ?? '')) {
-      const assetId = this.ensureNoteAssetRecord(filename);
-      insert.run(assetId, sourceKind, sourceId);
-      affected.add(assetId);
-    }
-    this.refreshNoteAssetCounts(affected);
-  }
-
-  /** 全量重建资源登记与引用（迁移回填 / 旧库导入后调用；幂等，整体事务化）。
-   *  迁移外层已有事务时传 false，避免 SQLite 嵌套事务报错。 */
-  private rebuildNoteAssetRefs(manageTransaction = true): void {
-    const dir = path.join(this.dataDir, NOTE_ASSET_DIR);
-    let filesSeen = 0;
-    if (manageTransaction) this.db.exec('BEGIN IMMEDIATE');
-    try {
-      if (existsSync(dir)) {
-        let entries: Dirent[];
-        try {
-          entries = readdirSync(dir, { withFileTypes: true });
-        } catch {
-          entries = [];
-        }
-        for (const entry of entries) {
-          if (!entry.isFile()) continue;
-          filesSeen += 1;
-          this.ensureNoteAssetRecord(entry.name);
-        }
-      }
-      this.db.exec('DELETE FROM note_asset_refs');
-      this.db.exec("UPDATE note_assets SET ref_count = 0, last_referenced = ''");
-      const notes = this.db
-        .prepare('SELECT id, content FROM notes')
-        .all() as unknown as Array<{ id: string; content: string | null }>;
-      const annotations = this.db
-        .prepare('SELECT id, content FROM annotations')
-        .all() as unknown as Array<{ id: string; content: string | null }>;
-      for (const note of notes) this.syncNoteAssetRefs('note', note.id, note.content ?? '');
-      for (const annotation of annotations) {
-        this.syncNoteAssetRefs('annotation', annotation.id, annotation.content ?? '');
-      }
-      if (manageTransaction) this.db.exec('COMMIT');
-    } catch (error) {
-      if (manageTransaction) this.db.exec('ROLLBACK');
-      throw error;
-    }
-    // 记录本次索引统计（迁移提示用）：扫描文件数 + 建立的引用条数，幂等覆盖。
-    const refCount = Number(
-      (this.db.prepare('SELECT COUNT(*) AS n FROM note_asset_refs').get() as { n?: number })
-        ?.n ?? 0
-    );
-    try {
-      this.updateSettings(
-        {
-          'note_assets.indexed_at': new Date().toISOString(),
-          'note_assets.indexed_files': String(filesSeen),
-          'note_assets.indexed_refs': String(refCount)
-        },
-        manageTransaction
-      );
-    } catch {
-      // 统计写入失败不影响索引重建本身。
-    }
-  }
-
-  /** 至少有一条「未删除来源」引用的资源文件名集合（usage.active / GC includeDeleted=false 共用）。 */
-  private activeReferencedAssetFilenames(): Set<string> {
-    const rows = this.db
-      .prepare(
-        `SELECT DISTINCT na.filename AS filename
-         FROM note_assets na
-         JOIN note_asset_refs r ON r.asset_id = na.asset_id
-         LEFT JOIN notes n ON r.source_kind = 'note' AND n.id = r.source_id
-         LEFT JOIN annotations a ON r.source_kind = 'annotation' AND a.id = r.source_id
-         WHERE (r.source_kind = 'note' AND n.deleted = 0)
-            OR (r.source_kind = 'annotation' AND a.deleted = 0)`
-      )
-      .all() as unknown as Array<{ filename: string }>;
-    return new Set(rows.map((row) => row.filename));
-  }
-
-  /**
-   * 裁剪登记表里磁盘文件已不存在的行（连同 refs）。幂等；只用于 GC 真删阶段，
-   * 不参与 report 统计（这些行本来就不对应磁盘文件）。
-   */
-  private pruneMissingNoteAssets(): void {
-    const dir = path.join(this.dataDir, NOTE_ASSET_DIR);
-    const resolvedDir = path.resolve(dir);
-    const rows = this.db
-      .prepare('SELECT asset_id, filename FROM note_assets')
-      .all() as unknown as Array<{ asset_id: string; filename: string }>;
-    const deleteRefs = this.db.prepare('DELETE FROM note_asset_refs WHERE asset_id = ?');
-    const deleteAsset = this.db.prepare('DELETE FROM note_assets WHERE asset_id = ?');
-    for (const row of rows) {
-      const filename = String(row.filename ?? '');
-      const safeName = filename && path.basename(filename) === filename;
-      const filePath = safeName ? path.resolve(dir, filename) : '';
-      if (!safeName || path.dirname(filePath) !== resolvedDir || !existsSync(filePath)) {
-        deleteRefs.run(row.asset_id);
-        deleteAsset.run(row.asset_id);
-      }
-    }
-  }
-
-  /**
-   * 资源彻底回收：仅处理 ref_count 已为 0 且文件存在的资源，删文件 + 删登记行。
-   * 用于彻底删除笔记/文献后立即释放其独占图片。
-   */
-  private purgeNoteAssetRecords(assetIds: Iterable<string>): NotePurgeResult {
-    const result: NotePurgeResult = { freedAssets: 0, freedBytes: 0 };
-    const dir = path.join(this.dataDir, NOTE_ASSET_DIR);
-    const resolvedDir = path.resolve(dir);
-    const countStatement = this.db.prepare(
-      'SELECT COUNT(*) AS n FROM note_asset_refs WHERE asset_id = ?'
-    );
-    for (const assetId of new Set(assetIds)) {
-      const count = Number((countStatement.get(assetId) as { n?: number } | undefined)?.n ?? 0);
-      if (count > 0) continue;
-      const row = this.db
-        .prepare('SELECT filename, size_bytes FROM note_assets WHERE asset_id = ?')
-        .get(assetId) as { filename?: string; size_bytes?: number } | undefined;
-      if (!row) continue;
-      const filename = String(row.filename ?? '');
-      if (!filename || path.basename(filename) !== filename) {
-        // 不安全的文件名：只清登记与 refs，不碰磁盘。
-        this.db.prepare('DELETE FROM note_asset_refs WHERE asset_id = ?').run(assetId);
-        this.db.prepare('DELETE FROM note_assets WHERE asset_id = ?').run(assetId);
-        continue;
-      }
-      const filePath = path.resolve(dir, filename);
-      if (path.dirname(filePath) === resolvedDir && existsSync(filePath)) {
-        try {
-          const size = statSync(filePath).size;
-          unlinkSync(filePath);
-          result.freedBytes += size;
-        } catch {
-          // 删除失败：保留登记行，下次 GC 再试。
-          continue;
-        }
-      }
-      this.db.prepare('DELETE FROM note_asset_refs WHERE asset_id = ?').run(assetId);
-      this.db.prepare('DELETE FROM note_assets WHERE asset_id = ?').run(assetId);
-      result.freedAssets += 1;
-    }
-    return result;
+    noteAssets.syncSource(this.db, sourceKind, sourceId, content, this.noteAssetDeps);
   }
 
   /**
@@ -4799,8 +4575,8 @@ export class Store {
       this.db.exec('ROLLBACK');
       throw error;
     }
-    this.refreshNoteAssetCounts(affectedAssets);
-    this.purgeNoteAssetRecords(affectedAssets);
+    noteAssets.refreshCounts(this.db, affectedAssets);
+    noteAssets.purgeRecords(this.db, this.noteAssetDeps, affectedAssets);
     this.invalidateReferenceGraphCache();
     // 派生缓存不在事务里：按作用域清掉内存索引与磁盘 token 缓存，再截断 WAL，减少残留。
     try {
@@ -5245,8 +5021,8 @@ export class Store {
       this.db.exec('ROLLBACK');
       throw error;
     }
-    this.refreshNoteAssetCounts(affected);
-    const purged = this.purgeNoteAssetRecords(affected);
+    noteAssets.refreshCounts(this.db, affected);
+    const purged = noteAssets.purgeRecords(this.db, this.noteAssetDeps, affected);
     this.invalidateReferenceGraphCache();
     return purged;
   }
@@ -6334,172 +6110,12 @@ export class Store {
     graceMs?: number;
     includeDeleted?: boolean;
   }): NoteAssetGcReport {
-    const dryRun = input?.dryRun === true;
-    const includeDeleted = input?.includeDeleted !== false;
-    const graceMs =
-      typeof input?.graceMs === 'number' && Number.isFinite(input.graceMs) && input.graceMs >= 0
-        ? input.graceMs
-        : 24 * 60 * 60 * 1000;
-    const report: NoteAssetGcReport = {
-      scannedFiles: 0,
-      referencedFiles: 0,
-      deletedFiles: 0,
-      keptFiles: 0,
-      skippedRecent: 0,
-      bytesFreed: 0
-    };
-    // 真删阶段先裁剪「登记表有行、磁盘文件已不存在」的残留（幂等，不影响报告数字）。
-    if (!dryRun) this.pruneMissingNoteAssets();
-    const assetRows = this.db
-      .prepare('SELECT asset_id, filename, ref_count FROM note_assets')
-      .all() as unknown as Array<{ asset_id: string; filename: string; ref_count: number }>;
-    const assetIdByFilename = new Map(assetRows.map((row) => [row.filename, row.asset_id]));
-    const referenced = new Set<string>();
-    if (includeDeleted) {
-      for (const row of assetRows) {
-        if (Number(row.ref_count) > 0) referenced.add(row.filename);
-      }
-    } else {
-      for (const filename of this.activeReferencedAssetFilenames()) referenced.add(filename);
-    }
-    const dir = path.join(this.dataDir, NOTE_ASSET_DIR);
-    const finish = (): NoteAssetGcReport => {
-      if (!dryRun) {
-        try {
-          this.updateSettings({ 'note_assets.last_gc': new Date().toISOString() });
-        } catch {
-          // 写 last_gc 失败不影响清理结果。
-        }
-      }
-      return report;
-    };
-    if (!existsSync(dir)) return finish();
-    let entries: Dirent[];
-    try {
-      entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return finish();
-    }
-    const resolvedDir = path.resolve(dir);
-    const now = Date.now();
-    const deleteRefs = this.db.prepare('DELETE FROM note_asset_refs WHERE asset_id = ?');
-    const deleteAsset = this.db.prepare('DELETE FROM note_assets WHERE asset_id = ?');
-    for (const entry of entries) {
-      // 只处理目录下的普通文件；符号链接/子目录一律跳过。
-      if (!entry.isFile()) continue;
-      const filePath = path.resolve(dir, entry.name);
-      if (path.dirname(filePath) !== resolvedDir) continue;
-      report.scannedFiles += 1;
-      if (referenced.has(entry.name)) {
-        report.referencedFiles += 1;
-        report.keptFiles += 1;
-        continue;
-      }
-      let stats;
-      try {
-        stats = statSync(filePath);
-      } catch {
-        report.keptFiles += 1;
-        continue;
-      }
-      if (now - stats.mtimeMs < graceMs) {
-        report.skippedRecent += 1;
-        report.keptFiles += 1;
-        continue;
-      }
-      if (dryRun) {
-        report.deletedFiles += 1;
-        report.bytesFreed += stats.size;
-        continue;
-      }
-      try {
-        unlinkSync(filePath);
-      } catch {
-        // 删除失败（占用/权限）按保留处理，下次 GC 再试。
-        report.keptFiles += 1;
-        continue;
-      }
-      report.deletedFiles += 1;
-      report.bytesFreed += stats.size;
-      const assetId = assetIdByFilename.get(entry.name);
-      if (assetId) {
-        // 文件已删：同步清掉登记与残留 refs（孤儿引用不再有意义）。
-        deleteRefs.run(assetId);
-        deleteAsset.run(assetId);
-        assetIdByFilename.delete(entry.name);
-      }
-    }
-    return finish();
+    return noteAssets.gc(this.db, this.noteAssetDeps, input);
   }
 
   /** 本地图片资源使用统计：文件数/占用/被引用/孤儿/活跃与仅删除引用/上次清理/索引统计。 */
   getNoteAssetUsage(): NoteAssetUsage {
-    const dir = path.join(this.dataDir, NOTE_ASSET_DIR);
-    const referenced = new Set(
-      (
-        this.db
-          .prepare('SELECT filename FROM note_assets WHERE ref_count > 0')
-          .all() as unknown as Array<{ filename: string }>
-      ).map((row) => row.filename)
-    );
-    const active = this.activeReferencedAssetFilenames();
-    let fileCount = 0;
-    let totalBytes = 0;
-    let referencedFiles = 0;
-    let activeReferencedFiles = 0;
-    let deletedReferencedFiles = 0;
-    if (existsSync(dir)) {
-      let entries: Dirent[];
-      try {
-        entries = readdirSync(dir, { withFileTypes: true });
-      } catch {
-        entries = [];
-      }
-      const resolvedDir = path.resolve(dir);
-      for (const entry of entries) {
-        if (!entry.isFile()) continue;
-        const filePath = path.resolve(dir, entry.name);
-        if (path.dirname(filePath) !== resolvedDir) continue;
-        try {
-          const size = statSync(filePath).size;
-          fileCount += 1;
-          totalBytes += size;
-          if (referenced.has(entry.name)) {
-            referencedFiles += 1;
-            // 有任一条未删除来源引用 → active；否则只被已删除内容引用。
-            if (active.has(entry.name)) activeReferencedFiles += 1;
-            else deletedReferencedFiles += 1;
-          }
-        } catch {
-          // 读不到的文件不计入统计。
-        }
-      }
-    }
-    const settings = this.getSettings();
-    const indexedFiles = integerSetting(
-      settings['note_assets.indexed_files'],
-      0,
-      Number.MAX_SAFE_INTEGER,
-      0
-    );
-    const indexedRefs = integerSetting(
-      settings['note_assets.indexed_refs'],
-      0,
-      Number.MAX_SAFE_INTEGER,
-      0
-    );
-    return {
-      fileCount,
-      totalBytes,
-      referencedFiles,
-      orphanFiles: Math.max(0, fileCount - referencedFiles),
-      lastGcAt: String(settings['note_assets.last_gc'] ?? ''),
-      activeReferencedFiles,
-      deletedReferencedFiles,
-      indexedAt: String(settings['note_assets.indexed_at'] ?? ''),
-      indexedFiles,
-      indexedRefs
-    };
+    return noteAssets.usage(this.db, this.noteAssetDeps);
   }
 
   /** 启动时自动 GC：restore-safe（includeDeleted=true、grace 24h）；失败不影响启动。 */
@@ -6516,23 +6132,7 @@ export class Store {
    * 造成的 refs 漂移；同时更新并返回 `note_assets.indexed_*` 统计。
    */
   reindexNoteAssets(): NoteAssetReindexResult {
-    this.rebuildNoteAssetRefs();
-    const settings = this.getSettings();
-    return {
-      indexedFiles: integerSetting(
-        settings['note_assets.indexed_files'],
-        0,
-        Number.MAX_SAFE_INTEGER,
-        0
-      ),
-      indexedRefs: integerSetting(
-        settings['note_assets.indexed_refs'],
-        0,
-        Number.MAX_SAFE_INTEGER,
-        0
-      ),
-      indexedAt: String(settings['note_assets.indexed_at'] ?? '')
-    };
+    return noteAssets.reindex(this.db, this.noteAssetDeps);
   }
 
   /**
@@ -6540,216 +6140,12 @@ export class Store {
    * 每批一个短事务并在批间让出事件循环，避免长时间阻塞请求。已运行则返回当前任务。
    */
   startNoteAssetReindex(): NoteAssetReindexJob {
-    if (this.noteAssetReindexRunning) return this.getNoteAssetReindexStatus();
-    this.noteAssetReindexRunning = true;
-    this.noteAssetReindexJob = {
-      status: 'running',
-      phase: 'scanning',
-      total: 0,
-      done: 0,
-      indexedFiles: 0,
-      indexedRefs: 0,
-      indexedAt: '',
-      error: ''
-    };
-    void this.runNoteAssetReindex().catch((error) => {
-      this.noteAssetReindexRunning = false;
-      const message = error instanceof Error ? error.message : String(error);
-      this.noteAssetReindexJob = {
-        ...this.noteAssetReindexJob,
-        status: 'error',
-        error: `资源索引重建失败：${message.slice(0, 200)}`
-      };
-    });
-    return this.getNoteAssetReindexStatus();
+    return this.noteAssetReindexer.start();
   }
 
   /** 后台重建任务状态快照（无任务时 status/phase 为 idle）。 */
   getNoteAssetReindexStatus(): NoteAssetReindexJob {
-    return { ...this.noteAssetReindexJob };
-  }
-
-  /** 后台分块重建的实现：目录 → notes → annotations → finalizing，每批 100 条。 */
-  private async runNoteAssetReindex(): Promise<void> {
-    const batchSize = 100;
-    // 单批内容总字节上限：防止 100 条旧笔记里塞满内联大图时整批进内存。
-    // 单条内容超过上限时仍单独处理（无法拆开一条 Markdown）。
-    const maxBatchContentBytes = 2 * 1024 * 1024;
-    const yieldToEventLoop = (): Promise<void> =>
-      new Promise((resolve) => setImmediate(resolve));
-    const dir = path.join(this.dataDir, NOTE_ASSET_DIR);
-    const count = (table: 'notes' | 'annotations'): number =>
-      Number(
-        (this.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n?: number } | undefined)
-          ?.n ?? 0
-      );
-
-    // 目录只做流式遍历：先数数量（用于进度分母），再分批登记，避免一次性把
-    // 几十万/上百万个文件名和 Dirent 全部留在内存里。
-    const countAssetFiles = (): number => {
-      if (!existsSync(dir)) return 0;
-      let total = 0;
-      let handle: ReturnType<typeof opendirSync> | null = null;
-      try {
-        handle = opendirSync(dir);
-        let entry = handle.readSync();
-        while (entry) {
-          if (entry.isFile()) total += 1;
-          entry = handle.readSync();
-        }
-      } catch {
-        return total;
-      } finally {
-        try {
-          handle?.closeSync();
-        } catch {
-          // 目录句柄已被关闭/不可关闭
-        }
-      }
-      return total;
-    };
-
-    const assetFileCount = countAssetFiles();
-    this.noteAssetReindexJob = {
-      ...this.noteAssetReindexJob,
-      phase: 'scanning',
-      total: assetFileCount + count('notes') + count('annotations')
-    };
-
-    const processFileBatch = (batch: string[]): void => {
-      if (batch.length === 0) return;
-      this.db.exec('BEGIN IMMEDIATE');
-      try {
-        for (const name of batch) this.ensureNoteAssetRecord(name);
-        this.db.exec('COMMIT');
-      } catch (error) {
-        this.db.exec('ROLLBACK');
-        throw error;
-      }
-      this.noteAssetReindexJob.done += batch.length;
-    };
-
-    if (existsSync(dir)) {
-      let handle: ReturnType<typeof opendirSync> | null = null;
-      try {
-        handle = opendirSync(dir);
-        let batch: string[] = [];
-        let entry = handle.readSync();
-        while (entry) {
-          if (entry.isFile()) {
-            batch.push(entry.name);
-            if (batch.length >= batchSize) {
-              processFileBatch(batch);
-              batch = [];
-              await yieldToEventLoop();
-            }
-          }
-          entry = handle.readSync();
-        }
-        processFileBatch(batch);
-      } finally {
-        try {
-          handle?.closeSync();
-        } catch {
-          // 目录句柄已被关闭/不可关闭
-        }
-      }
-    }
-
-    // 先清空引用，再按批重建（后台任务允许最终一致，完成时全量 refs 已重建）。
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      this.db.exec('DELETE FROM note_asset_refs');
-      this.db.exec("UPDATE note_assets SET ref_count = 0, last_referenced = ''");
-      this.db.exec('COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
-
-    const runSource = async (
-      table: 'notes' | 'annotations',
-      kind: 'note' | 'annotation',
-      phase: 'notes' | 'annotations'
-    ): Promise<void> => {
-      this.noteAssetReindexJob = { ...this.noteAssetReindexJob, phase };
-      let cursor = 0;
-      while (true) {
-        // 先取一批元数据（只含内容字节数），再按累计字节数挑出真正要处理的行；
-        // 避免一次把 100 条超大笔记内容同时读进内存。
-        const metaRows = this.db
-          .prepare(
-            `SELECT rowid AS rowid, id, LENGTH(CAST(content AS BLOB)) AS content_bytes
-             FROM ${table}
-             WHERE rowid > ? ORDER BY rowid LIMIT ?`
-          )
-          .all(cursor, batchSize) as unknown as Array<{
-          rowid: number;
-          id: string;
-          content_bytes: number;
-        }>;
-        if (metaRows.length === 0) break;
-        const selected: typeof metaRows = [];
-        let selectedBytes = 0;
-        for (const row of metaRows) {
-          const bytes = Number(row.content_bytes ?? 0);
-          if (selected.length > 0 && selectedBytes + bytes > maxBatchContentBytes) break;
-          selected.push(row);
-          selectedBytes += bytes;
-          if (selectedBytes >= maxBatchContentBytes) break;
-        }
-        const ids = selected.map((row) => row.rowid);
-        const rows = this.db
-          .prepare(
-            `SELECT rowid AS rowid, id, content FROM ${table}
-             WHERE rowid IN (${ids.map(() => '?').join(', ')}) ORDER BY rowid`
-          )
-          .all(...ids) as unknown as Array<{
-          rowid: number;
-          id: string;
-          content: string | null;
-        }>;
-        this.db.exec('BEGIN IMMEDIATE');
-        try {
-          for (const row of rows) this.syncNoteAssetRefs(kind, row.id, row.content ?? '');
-          this.db.exec('COMMIT');
-        } catch (error) {
-          this.db.exec('ROLLBACK');
-          throw error;
-        }
-        cursor = Number(selected[selected.length - 1]!.rowid);
-        this.noteAssetReindexJob.done += rows.length;
-        await yieldToEventLoop();
-      }
-    };
-    await runSource('notes', 'note', 'notes');
-    await runSource('annotations', 'annotation', 'annotations');
-
-    this.noteAssetReindexJob = { ...this.noteAssetReindexJob, phase: 'finalizing' };
-    const refCount = Number(
-      (this.db.prepare('SELECT COUNT(*) AS n FROM note_asset_refs').get() as { n?: number })
-        ?.n ?? 0
-    );
-    const indexedAt = new Date().toISOString();
-    try {
-      this.updateSettings({
-        'note_assets.indexed_at': indexedAt,
-        'note_assets.indexed_files': String(assetFileCount),
-        'note_assets.indexed_refs': String(refCount)
-      });
-    } catch {
-      // 统计写入失败不影响重建结果。
-    }
-    this.noteAssetReindexJob = {
-      ...this.noteAssetReindexJob,
-      status: 'done',
-      phase: 'finalizing',
-      indexedFiles: assetFileCount,
-      indexedRefs: refCount,
-      indexedAt,
-      error: ''
-    };
-    this.noteAssetReindexRunning = false;
+    return this.noteAssetReindexer.status();
   }
 
   /**
@@ -6995,8 +6391,8 @@ export class Store {
       this.db.exec('ROLLBACK');
       throw error;
     }
-    this.refreshNoteAssetCounts(affected);
-    const purged = this.purgeNoteAssetRecords(affected);
+    noteAssets.refreshCounts(this.db, affected);
+    const purged = noteAssets.purgeRecords(this.db, this.noteAssetDeps, affected);
     this.invalidateReferenceGraphCache();
     return purged;
   }
@@ -9869,7 +9265,7 @@ export class Store {
 
     legacy.close();
     // 旧库复制过来的笔记/批注内容可能带图片引用：重建一次资源引用表。
-    this.rebuildNoteAssetRefs();
+    noteAssets.rebuildRefs(this.db, this.noteAssetDeps);
     this.invalidateReferenceGraphCache();
     return report;
   }
