@@ -79,8 +79,8 @@ function isAbortError(error: unknown): boolean {
  * 跨篇会话的助手消息没有把整轮 ChatResponse 存进 `metadata.response`（服务端只落
  * corpusSessionId/skipped_document_ids 等元数据），重开历史时从 `content + sources` 恢复
  * 「正文 + 依据」；审计信息由 schema_version 24 的 `messages.audit_summary` 恢复成
- * `ChatResponse.audit_summary`（只含计数/状态），ChatPanel 复用既有缺证/原文已变更/越界引用
- * 渲染逻辑展示。本轮刚返回的完整结果由容器按 message id 覆盖，保留逐段明细。
+ * `ChatResponse.audit_summary`（计数/状态 + 越界引用编号），ChatPanel 复用既有缺证/原文已变更/
+ * 越界引用渲染逻辑展示。本轮刚返回的完整结果由容器按 message id 覆盖，保留逐段明细。
  */
 export function corpusMessageView(
   row: ChatMessageRecord,

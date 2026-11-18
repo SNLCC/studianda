@@ -11,7 +11,8 @@
  *   2. 在副本上报告迁移前的 schema_version / 表清单 / 行数（documents、notes、annotations、messages…）；
  *   3. 直接调用真实的 `Store` 构造函数（内部执行 store.ts 的 `migrate()`，含迁移前 VACUUM INTO 快照），
  *      记录迁移耗时；
- *   4. 迁移后报告 schema_version / 表清单 / 行数 / 新增或删除的表，并跑 `PRAGMA integrity_check`；
+ *   4. 迁移后报告 schema_version / 表清单 / 行数 / 新增或删除的表，跑 `PRAGMA integrity_check`，
+ *      并校验迁移快照保留上限（N 从 store.ts 读取）与「本次新生成的快照没有被清理误删」；
  *   5. 复核源目录 reader.sqlite3 的 sha256 未变（证明从未改动原目录），最后给出 PASS/FAIL。
  *
  * 安全约定：
@@ -80,6 +81,24 @@ function readExpectedVersion() {
 }
 
 const EXPECTED_VERSION = readExpectedVersion();
+
+/**
+ * 迁移快照保留上限从 store.ts 实时读取，不在脚本里再手抄一份 N。
+ * 迁移成功后的清理会把 migration-backups/ 裁剪到这个数量，脚本据此断言。
+ */
+function readBackupKeep() {
+  const source = readFileSync(
+    new URL('../packages/core/src/store.ts', import.meta.url),
+    'utf8'
+  );
+  const match = source.match(/MIGRATION_BACKUP_KEEP\s*=\s*(\d+)\s*;/);
+  if (!match) {
+    throw new Error('无法从 store.ts 读取 MIGRATION_BACKUP_KEEP，拒绝用默认值猜测');
+  }
+  return Number(match[1]);
+}
+
+const BACKUP_KEEP = readBackupKeep();
 
 /** @type {string[]} */
 const failures = [];
@@ -221,11 +240,16 @@ function integrityCheck(dbPath) {
   }
 }
 
+/**
+ * migration-backups/ 里符合自动命名 `reader-before-v<数字>-*.sqlite3` 的快照。
+ * 模式与 store.ts 的保留策略一致：不符合这个命名的用户文件不参与统计（也不会被清理）。
+ */
 function countMigrationBackups(dir) {
   const folder = path.join(dir, 'migration-backups');
   if (!existsSync(folder)) return [];
-  return readdirSync(folder)
-    .filter((name) => name.startsWith('reader-before-v') && name.endsWith('.sqlite3'))
+  return readdirSync(folder, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && /^reader-before-v\d+-.+\.sqlite3$/.test(entry.name))
+    .map((entry) => entry.name)
     .sort();
 }
 
@@ -313,9 +337,12 @@ async function main() {
 
   const copyDb = path.join(copyDir, DB_FILE);
   const before = readSnapshot(copyDb);
+  // 迁移前已有的快照：迁移成功后保留策略会裁剪；用它区分「本次新生成」的快照。
+  const backupsBefore = countMigrationBackups(copyDir);
   console.log(`[2/4] 迁移前 schema_version=${before.version ?? '(未知)'}`);
   printTables('      迁移前表清单', before.tables);
   printCounts('      迁移前行数', before.counts);
+  console.log(`      迁移前已有快照: ${backupsBefore.length} 份`);
 
   // ---- 2. 真实迁移 ----
   const { Store, bundleMs } = await loadStore();
@@ -349,8 +376,17 @@ async function main() {
       `删除 [${removedTables.length > 0 ? removedTables.join(', ') : '无'}]`
   );
   const backups = countMigrationBackups(copyDir);
+  const newBackups = backups.filter((name) => !backupsBefore.includes(name));
+  const previousVersion =
+    before.version !== null && /^\d+$/.test(String(before.version))
+      ? Number(before.version)
+      : null;
+  const migrated =
+    previousVersion !== null && previousVersion > 0 && previousVersion < Number(EXPECTED_VERSION);
   console.log(
-    `      迁移前快照: ${backups.length > 0 ? backups.join(', ') : '（未产生：源库已是当前版本）'}`
+    `      迁移后快照: ${backups.length} 份` +
+      `（保留上限 ${BACKUP_KEEP}，本次新增 ${newBackups.length} 份）` +
+      (backups.length > 0 ? `: ${backups.join(', ')}` : '（未产生：源库已是当前版本）')
   );
 
   const integrity = integrityCheck(copyDb);
@@ -359,6 +395,19 @@ async function main() {
   // ---- 4. 校验 ----
   if (after.version !== EXPECTED_VERSION) {
     failures.push(`迁移后 schema_version=${after.version ?? '(未知)'}，期望 ${EXPECTED_VERSION}`);
+  }
+  // 保留策略：迁移成功后最多 N 份，且本次升级刚生成的那份不能被清理误删。
+  if (backups.length > BACKUP_KEEP) {
+    failures.push(`迁移后迁移快照 ${backups.length} 份，超过保留上限 ${BACKUP_KEEP}`);
+  }
+  if (migrated) {
+    const prefix = `reader-before-v${previousVersion}-`;
+    if (!newBackups.some((name) => name.startsWith(prefix))) {
+      failures.push(
+        `本次迁移快照（${prefix}*.sqlite3）未被保留：` +
+          `本次新增 [${newBackups.length > 0 ? newBackups.join(', ') : '无'}]`
+      );
+    }
   }
   for (const table of EXPECTED_TABLES) {
     if (!after.tables.includes(table)) failures.push(`迁移后缺少表：${table}`);

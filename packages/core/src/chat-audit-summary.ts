@@ -2,15 +2,20 @@
  * 审计摘要的压缩、序列化与**容错**解析（schema_version 24）。
  *
  * 背景：跨篇会话的追问结果只把正文写进 `messages`，重开历史时会丢失「缺证 / 原文已变更 /
- * 越界引用」这些审计信息。这里把一轮 ChatResponse 里的审计结果压成**只含计数与状态**的
+ * 越界引用」这些审计信息。这里把一轮 ChatResponse 里的审计结果压成**只含计数、编号与状态**的
  * `ChatAuditSummary`，随 assistant 消息落进 `messages.audit_summary`；读取时解析回对象挂在
  * 消息记录上。**不存正文/原文/完整 ChatResponse**，避免库膨胀与重复存储。
  *
- * 解析必须容错：坏 JSON、字段缺失或类型不对都退化为「没有摘要」，绝不能让整条历史读取报错。
+ * 越界引用除计数外还存具体编号（回答正文里的 `[n]`），但有条数上限，避免摘要膨胀。
+ * 解析必须容错：坏 JSON、字段缺失或类型不对都退化为「没有摘要」，绝不能让整条历史读取报错；
+ * 迁移前的老摘要只有计数、没有编号数组，同样必须按「无编号」正常降级。
  */
 import type { ChatAuditSummary } from '@studianda/shared';
 
 type RecordLike = Record<string, unknown>;
+
+/** 摘要里最多存多少个越界引用编号：超过只保留最小的若干个，计数仍如实记全量。 */
+export const MAX_AUDIT_INVALID_CITATION_IDS = 20;
 
 function isRecord(value: unknown): value is RecordLike {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -47,10 +52,74 @@ function snapshotStatusOf(value: unknown): ChatAuditSummary['selection_snapshot_
 }
 
 /**
+ * 越界引用编号归一：只收非负有限整数，去重后升序。
+ *
+ * 非数组返回 `null`（表示「这条数据没有编号」），空数组返回 `[]`（表示「确实没有越界引用」）：
+ * 调用方据此区分「旧数据只有计数」与「新数据无越界」，前者不能凭空造编号。
+ */
+function citationIdsOf(value: unknown): number[] | null {
+  if (!Array.isArray(value)) return null;
+  const ids = new Set<number>();
+  for (const item of value) {
+    if (typeof item === 'number' && Number.isFinite(item) && Number.isInteger(item) && item >= 0) {
+      ids.add(item);
+    }
+  }
+  return [...ids].sort((left, right) => left - right);
+}
+
+type InvalidCitationFields = Pick<
+  ChatAuditSummary,
+  'invalid_citations' | 'invalid_citation_ids' | 'invalid_citations_truncated'
+>;
+
+/**
+ * 新产生的越界引用编号 → 摘要字段：计数 + 截断后的编号数组（没有越界引用时只写 0 计数）。
+ *
+ * 编号与计数同源（同一数组），不会出现「编号与计数对不上」；超过上限只存前
+ * `MAX_AUDIT_INVALID_CITATION_IDS` 个并置 `invalid_citations_truncated`，计数仍记全量。
+ */
+export function invalidCitationSummaryFields(ids: readonly number[]): InvalidCitationFields {
+  const normalized = citationIdsOf(ids) ?? [];
+  const fields: InvalidCitationFields = { invalid_citations: normalized.length };
+  if (normalized.length === 0) return fields;
+  fields.invalid_citation_ids = normalized.slice(0, MAX_AUDIT_INVALID_CITATION_IDS);
+  if (normalized.length > MAX_AUDIT_INVALID_CITATION_IDS) {
+    fields.invalid_citations_truncated = true;
+  }
+  return fields;
+}
+
+/**
+ * 已落库摘要对象里的越界引用字段 → 摘要字段。
+ *
+ * 迁移前的老摘要只有计数：原样保留计数、不造编号；已有编号时保留编号与截断标记，
+ * 重新压缩（响应里带旧 `audit_summary`）时不丢失。
+ */
+function invalidCitationFieldsOfSummary(existing: RecordLike | null): InvalidCitationFields {
+  const ids = citationIdsOf(existing?.invalid_citation_ids);
+  const count = Math.max(countOrZero(existing?.invalid_citations), ids?.length ?? 0);
+  if (!ids || ids.length === 0) return { invalid_citations: count };
+  const fields: InvalidCitationFields = {
+    invalid_citations: count,
+    invalid_citation_ids: ids.slice(0, MAX_AUDIT_INVALID_CITATION_IDS)
+  };
+  if (
+    ids.length > MAX_AUDIT_INVALID_CITATION_IDS ||
+    count > ids.length ||
+    existing?.invalid_citations_truncated === true
+  ) {
+    fields.invalid_citations_truncated = true;
+  }
+  return fields;
+}
+
+/**
  * 把一轮 ChatResponse（或它的持久化形态）压成落库摘要。
  *
  * 计数优先取 `audit.claims`（最细、最权威）；没有逐段明细时退回响应里已有的
- * `audit_summary` 计数字段。越界引用优先取 `invalid_citations` 数组长度。
+ * `audit_summary` 计数字段。越界引用优先取响应顶层的 `invalid_citations` 编号数组
+ * （编号与计数同源）；只有旧摘要计数时保留计数、不造编号。
  * 完全没有任何审计信息时返回 null（不写空摘要）。
  *
  * 入参不限于完整 ChatResponse：调用点只带可见审计字段时（例如请求 body 里的
@@ -71,15 +140,20 @@ export function auditSummaryFromResponse(value: unknown): ChatAuditSummary | nul
   const existing = isRecord(value.audit_summary) ? value.audit_summary : null;
   const snapshot = isRecord(value.selection_snapshot) ? value.selection_snapshot : null;
 
+  // 越界引用编号的来源：本轮响应顶层的 `invalid_citations`（阅读链路从回答正文解析出的
+  // `[n]` 序号）最权威；没有时沿用响应里已有摘要的编号/计数（旧数据只有计数）。
   const invalidCitations = Array.isArray(value.invalid_citations)
-    ? value.invalid_citations.filter(
-        (item) => typeof item === 'number' && Number.isFinite(item)
-      ).length
-    : countOrZero(existing?.invalid_citations);
+    ? invalidCitationSummaryFields(value.invalid_citations)
+    : invalidCitationFieldsOfSummary(existing);
   const selectionStatus =
     snapshotStatusOf(snapshot?.status) ?? snapshotStatusOf(existing?.selection_snapshot_status);
 
-  if (claims.length === 0 && !existing && invalidCitations === 0 && !selectionStatus) {
+  if (
+    claims.length === 0 &&
+    !existing &&
+    invalidCitations.invalid_citations === 0 &&
+    !selectionStatus
+  ) {
     return null;
   }
 
@@ -116,7 +190,7 @@ export function auditSummaryFromResponse(value: unknown): ChatAuditSummary | nul
         }, {})
       : claimTypesOf(existing?.claim_types),
     source_changed: sourceChanged,
-    invalid_citations: invalidCitations
+    ...invalidCitations
   };
   if (selectionStatus) summary.selection_snapshot_status = selectionStatus;
   return summary;
@@ -158,7 +232,8 @@ export function parseAuditSummary(raw: string | null | undefined): ChatAuditSumm
     heading,
     claim_types: claimTypesOf(parsed.claim_types),
     source_changed: countOrZero(parsed.source_changed),
-    invalid_citations: countOrZero(parsed.invalid_citations)
+    // 编号数组容错：坏值丢弃、去重升序、按上限截断；老摘要没有编号时只恢复计数。
+    ...invalidCitationFieldsOfSummary(parsed)
   };
   const selectionStatus = snapshotStatusOf(parsed.selection_snapshot_status);
   if (selectionStatus) summary.selection_snapshot_status = selectionStatus;

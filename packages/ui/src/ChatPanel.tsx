@@ -1477,12 +1477,21 @@ export function ChatPanel({
           // 缺证归因拆开渲染：普通缺证 vs 提问时原文已变更（不是模型编造）。
           const auditClaims = splitUnsupportedClaims(response);
           const changedSnapshot = changedSelectionSnapshot(response);
-          // 越界引用：活跃响应有完整编号；历史消息只有摘要数量（编号未落库）。
-          const invalidCitationNumbers = response?.invalid_citations ?? [];
+          // 越界引用：活跃响应有完整编号；新落库摘要也带编号（超上限已截断）；
+          // 迁移前的旧摘要只有计数（没有编号数组），退回「N 处」展示。
+          const responseInvalidCitationNumbers = response?.invalid_citations ?? [];
+          const summaryInvalidCitationIds = response?.audit_summary?.invalid_citation_ids ?? [];
+          const invalidCitationNumbers =
+            responseInvalidCitationNumbers.length > 0
+              ? responseInvalidCitationNumbers
+              : summaryInvalidCitationIds;
           const invalidCitationCount =
-            invalidCitationNumbers.length > 0
-              ? invalidCitationNumbers.length
+            responseInvalidCitationNumbers.length > 0
+              ? responseInvalidCitationNumbers.length
               : (response?.audit_summary?.invalid_citations ?? 0);
+          const invalidCitationsTruncated =
+            responseInvalidCitationNumbers.length === 0 &&
+            response?.audit_summary?.invalid_citations_truncated === true;
           const isLast = messageIndex === messages.length - 1;
           const noteSaveState = noteSaveStates[message.id];
           const canSaveNote =
@@ -1671,6 +1680,9 @@ export function ChatPanel({
                     <p className="kr-page-error">
                       回答里有越界引用：
                       {invalidCitationNumbers.map((number) => `[${number}]`).join('、')}
+                      {invalidCitationsTruncated
+                        ? `（共 ${invalidCitationCount} 处，编号只保留前 ${invalidCitationNumbers.length} 个）`
+                        : ''}
                       ，这些编号没有对应来源，不能当作依据。
                     </p>
                   ) : invalidCitationCount > 0 ? (

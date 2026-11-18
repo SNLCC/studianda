@@ -57,6 +57,7 @@ import {
   type MemoryHit
 } from './memory-sources.js';
 import { citationSupport, invalidCitations } from './citations.js';
+import { invalidCitationSummaryFields } from './chat-audit-summary.js';
 import { inputCost, messages as budgetMessages } from './request-budget.js';
 import {
   attributeUnsupportedClaims,
@@ -1296,11 +1297,12 @@ async function answerQuestionInner(
             }
             return counts;
           }, {}),
-          // 缺证归因与越界引用是回答可信度的一部分：摘要里单独留计数，重开历史才能恢复展示。
+          // 缺证归因与越界引用是回答可信度的一部分：摘要里单独留计数与编号，
+          // 重开历史才能恢复展示（编号按上限截断，计数仍为全量）。
           source_changed: auditClaims.filter(
             (claim) => claim.verdict === 'unsupported' && claim.evidence_status === 'source_changed'
           ).length,
-          invalid_citations: (finalReading.invalid_citations ?? []).length,
+          ...invalidCitationSummaryFields(finalReading.invalid_citations ?? []),
           ...(finalReading.selection_snapshot?.status
             ? { selection_snapshot_status: finalReading.selection_snapshot.status }
             : {})

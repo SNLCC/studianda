@@ -94,6 +94,47 @@ describe('消息审计摘要落库与恢复', () => {
     }
   });
 
+  it('越界引用编号随摘要落库：超过上限只存前 20 个并标注截断，计数仍为全量', async () => {
+    const { dir, store, documentId } = await setupDocument('citation-ids');
+    try {
+      const sessionId = 'citation-ids-session';
+      const ids = Array.from({ length: 25 }, (_, index) => index + 1);
+      const assistant = store.addMessage({
+        documentId,
+        role: 'assistant',
+        content: '带越界引用编号的回答正文。',
+        metadata: {
+          sessionId,
+          response: {
+            answer: '带越界引用编号的回答正文。',
+            sources: [],
+            invalid_citations: ids,
+            audit: {
+              status: '已进行模型证据支持复核',
+              claims: [{ claim: 1, verdict: 'supported' }]
+            }
+          }
+        }
+      });
+      expect(assistant.auditSummary?.invalid_citations).toBe(25);
+      expect(assistant.auditSummary?.invalid_citation_ids).toEqual(ids.slice(0, 20));
+      expect(assistant.auditSummary?.invalid_citations_truncated).toBe(true);
+
+      store.close();
+      const reopened = new Store(dir);
+      try {
+        const row = reopened.listMessages(documentId, { sessionId }).at(-1)!;
+        expect(row.auditSummary?.invalid_citations).toBe(25);
+        expect(row.auditSummary?.invalid_citation_ids).toEqual(ids.slice(0, 20));
+        expect(row.auditSummary?.invalid_citations_truncated).toBe(true);
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('单篇消息：scope_kind=document，assistant 从完整 ChatResponse 自动压缩摘要；坏 JSON/旧消息降级不报错', async () => {
     const { dir, store, documentId } = await setupDocument('document');
     try {
@@ -137,6 +178,7 @@ describe('消息审计摘要落库与恢复', () => {
         claim_types: { DOCUMENT_INTERPRETATION: 2, HISTORICAL_FACT: 2 },
         source_changed: 1,
         invalid_citations: 2,
+        invalid_citation_ids: [3, 9],
         selection_snapshot_status: 'source_changed'
       });
 
@@ -148,7 +190,13 @@ describe('消息审计摘要落库与恢复', () => {
         expect(rows.at(-1)).toMatchObject({
           content: '单篇回答正文。',
           scopeKind: 'document',
-          auditSummary: { claims: 4, unsupported: 2, source_changed: 1, invalid_citations: 2 }
+          auditSummary: {
+            claims: 4,
+            unsupported: 2,
+            source_changed: 1,
+            invalid_citations: 2,
+            invalid_citation_ids: [3, 9]
+          }
         });
       } finally {
         reopened.close();
@@ -230,7 +278,13 @@ describe('消息审计摘要落库与恢复', () => {
       expect(posted.statusCode).toBe(200);
       expect(posted.json()).toMatchObject({
         scopeKind: 'document',
-        auditSummary: { claims: 2, unsupported: 1, source_changed: 0, invalid_citations: 1 }
+        auditSummary: {
+          claims: 2,
+          unsupported: 1,
+          source_changed: 0,
+          invalid_citations: 1,
+          invalid_citation_ids: [7]
+        }
       });
 
       const documentHistory = await server.inject({
@@ -244,7 +298,13 @@ describe('消息审计摘要落库与恢复', () => {
       expect(documentRows[0]).toMatchObject({
         content: '接口回答正文。',
         scopeKind: 'document',
-        auditSummary: { claims: 2, unsupported: 1, source_changed: 0, invalid_citations: 1 }
+        auditSummary: {
+          claims: 2,
+          unsupported: 1,
+          source_changed: 0,
+          invalid_citations: 1,
+          invalid_citation_ids: [7]
+        }
       });
 
       // 跨篇：建会话 + 直接落一条带摘要的 assistant 消息，GET 回读。
@@ -335,6 +395,7 @@ describe('消息审计摘要落库与恢复', () => {
           heading: 0,
           source_changed: 1,
           invalid_citations: 3,
+          invalid_citation_ids: [2, 5, 7],
           selection_snapshot_status: 'source_changed'
         }
       });
@@ -383,7 +444,13 @@ describe('消息审计摘要落库与恢复', () => {
       expect(history.statusCode).toBe(200);
       const rows = history.json() as ChatMessageRecord[];
       expect(rows.find((row) => row.content === '只带可见审计字段的回答。')?.auditSummary).toMatchObject(
-        { claims: 3, unsupported: 1, source_changed: 1, invalid_citations: 3 }
+        {
+          claims: 3,
+          unsupported: 1,
+          source_changed: 1,
+          invalid_citations: 3,
+          invalid_citation_ids: [2, 5, 7]
+        }
       );
       expect(rows.find((row) => row.content === '只带 claims 数组的回答。')?.auditSummary).toMatchObject(
         { claims: 2, unsupported: 2 }

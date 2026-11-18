@@ -6,6 +6,10 @@
  *   node scripts/audit-legal-completeness.mjs --package   # 额外校验 apps/desktop/release/win-unpacked
  *
  * 退出码：0 = 通过；1 = 有缺项/不一致（逐条打印原因）。
+ *
+ * 除"清单完备性"外，还做反向核对：legal/inventory.json 里的每个 npm 组件都必须在
+ * 锁文件（根目录 pnpm-lock.yaml，或 package-lock.json）里真实存在且版本一致；
+ * Electron/Chromium/Node 运行时、字体等非 npm 来源按显式分类跳过（见 6.5 节）。
  */
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
@@ -39,6 +43,92 @@ function normalize(text) {
 
 // 法律文本在 Git/CI 上可能因 core.autocrlf 出现 CRLF/LF 差异，内容比较按归一化换行处理。
 const sameTextFiles = (a, b) => normalize(readFileSync(a, 'utf8')) === normalize(readFileSync(b, 'utf8'));
+
+// ---------------------------------------------------------------------------
+// 锁文件解析（反向核对用）：只索引"组件名 -> 版本集合"，不引入 YAML 依赖。
+// pnpm-lock.yaml 的包键格式固定：name@version（可能带引号，snapshots 段还可能带
+// peer 后缀 `name@1.2.3(peer@4.5.6)`）；lockfile v6 则是路径式 /name/1.2.3。
+// ---------------------------------------------------------------------------
+function parsePnpmPackageKey(rawKey) {
+  let key = rawKey.trim();
+  if (
+    (key.startsWith("'") && key.endsWith("'")) ||
+    (key.startsWith('"') && key.endsWith('"'))
+  ) {
+    key = key.slice(1, -1);
+  }
+  key = key.replace(/\(.*\)$/, '');
+  if (key.startsWith('/')) {
+    const parts = key.split('/');
+    const version = parts.pop();
+    const name = parts.slice(1).join('/');
+    return name && version ? { name, version } : null;
+  }
+  const at = key.lastIndexOf('@');
+  if (at <= 0) return null;
+  return { name: key.slice(0, at), version: key.slice(at + 1) };
+}
+
+function addComponent(versionsByName, name, version) {
+  if (!name || !version) return;
+  if (!versionsByName.has(name)) versionsByName.set(name, new Set());
+  versionsByName.get(name).add(version);
+}
+
+function collectPnpmLockComponents(text) {
+  const versionsByName = new Map();
+  let section = null;
+  for (const line of normalize(text).split('\n')) {
+    if (line.trim() === '') continue;
+    if (!line.startsWith(' ')) {
+      section = line.match(/^([A-Za-z][A-Za-z0-9_-]*):\s*$/)?.[1] ?? null;
+      continue;
+    }
+    // packages/ 与 snapshots/ 都是 2 空格缩进的 `name@version:` 键；4 空格以上是字段。
+    if (section !== 'packages' && section !== 'snapshots') continue;
+    const key = line.match(/^ {2}(\S.*?):\s*$/)?.[1];
+    if (!key) continue;
+    const parsed = parsePnpmPackageKey(key);
+    if (parsed) addComponent(versionsByName, parsed.name, parsed.version);
+  }
+  return versionsByName;
+}
+
+function collectNpmLockComponents(lock) {
+  const versionsByName = new Map();
+  // package-lock v2/v3：packages 的键是 node_modules/... 路径。
+  for (const [key, entry] of Object.entries(lock.packages ?? {})) {
+    const marker = 'node_modules/';
+    if (!key.includes(marker) || !entry?.version) continue;
+    addComponent(versionsByName, key.slice(key.lastIndexOf(marker) + marker.length), entry.version);
+  }
+  // package-lock v1：嵌套 dependencies。
+  const visit = (dependencies) => {
+    for (const [name, dependency] of Object.entries(dependencies ?? {})) {
+      addComponent(versionsByName, name, dependency?.version);
+      visit(dependency?.dependencies);
+    }
+  };
+  visit(lock.dependencies);
+  return versionsByName;
+}
+
+function readLockfileComponents() {
+  const candidates = [
+    { file: 'pnpm-lock.yaml', parse: collectPnpmLockComponents },
+    { file: 'package-lock.json', parse: (text) => collectNpmLockComponents(JSON.parse(text)) },
+    {
+      file: 'apps/desktop/package-lock.json',
+      parse: (text) => collectNpmLockComponents(JSON.parse(text))
+    }
+  ];
+  for (const candidate of candidates) {
+    const full = path.join(root, candidate.file);
+    if (!existsSync(full)) continue;
+    return { file: candidate.file, versionsByName: candidate.parse(readFileSync(full, 'utf8')) };
+  }
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // 1) 仓库必备法律文件（缺失即失败）
@@ -325,6 +415,101 @@ if (existsSync(fontsPath)) {
     if (font.licenseFile && !existsSync(path.join(root, font.licenseFile))) {
       fail(`legal/fonts.json 引用的字体许可证不存在：${font.licenseFile}`);
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 6.5) 反向核对：清单里的每个 npm 组件必须真实存在于锁文件且版本一致
+//      防止清单只增不减、版本过期，变成"历史遗留的传说"。
+//
+// 清单不是单一来源，只有 npm 组件需要和锁文件交叉核对：
+//   runtime[]：Electron/Chromium/Node 运行时，来自官方发行包，不经过 npm；
+//   fonts[]：字体文件，来源与覆盖口径由 legal/fonts.json 管理；
+//   packages[]：默认视为 npm 依赖（取自安装包 node_modules）。
+// packages[] 里若出现非 npm 组件（安装器插件、原生二进制、WASM 等），必须登记在
+// NON_NPM_PACKAGES 显式白名单并写明来源；声明了非 npm ecosystem 却没登记的条目
+// 会直接报错——不允许用 try/catch 静默吞掉。
+// ---------------------------------------------------------------------------
+const NON_NPM_PACKAGES = new Map([
+  // 组件名 -> 来源说明，例如：
+  // ['winShell', 'NSIS 插件：官方发布页下载，不经过 npm']
+]);
+
+const reverse = {
+  checked: 0,
+  matched: 0,
+  missing: 0,
+  versionMismatch: 0,
+  skippedRuntime: 0,
+  skippedFonts: 0,
+  skippedAllowlisted: 0,
+  unregisteredNonNpm: 0
+};
+
+if (existsSync(inventoryPath)) {
+  const inventoryForLockCheck = JSON.parse(readFileSync(inventoryPath, 'utf8'));
+  reverse.skippedRuntime = (inventoryForLockCheck.runtime ?? []).length;
+  reverse.skippedFonts = (inventoryForLockCheck.fonts ?? []).length;
+  const lockfile = readLockfileComponents();
+
+  if (!lockfile) {
+    fail('反向核对失败：未找到 pnpm-lock.yaml 或 package-lock.json，无法核对清单里的 npm 组件');
+  } else {
+    for (const record of inventoryForLockCheck.packages ?? []) {
+      const name = typeof record?.name === 'string' ? record.name : '';
+      const version = typeof record?.version === 'string' ? record.version : '';
+      const ecosystem = String(record?.ecosystem ?? 'npm').toLowerCase();
+
+      if (NON_NPM_PACKAGES.has(name)) {
+        reverse.skippedAllowlisted += 1;
+        continue;
+      }
+      if (ecosystem !== 'npm') {
+        reverse.unregisteredNonNpm += 1;
+        fail(
+          `反向核对失败：inventory.json 的 packages[] 中 ${name || '?'} 声明为非 npm 来源` +
+            `（ecosystem=${ecosystem}），但未在 NON_NPM_PACKAGES 白名单登记来源`
+        );
+        continue;
+      }
+
+      reverse.checked += 1;
+      if (!name || !version) {
+        reverse.missing += 1;
+        fail(`反向核对失败：inventory.json 的 npm 组件 ${name || '?'} 缺少可核对的 name/version`);
+        continue;
+      }
+      const lockedVersions = lockfile.versionsByName.get(name);
+      if (!lockedVersions || lockedVersions.size === 0) {
+        reverse.missing += 1;
+        fail(
+          `反向核对失败：inventory.json 记录了 ${name}@${version}，` +
+            `但 ${lockfile.file} 中完全没有这个组件`
+        );
+        continue;
+      }
+      if (!lockedVersions.has(version)) {
+        reverse.versionMismatch += 1;
+        fail(
+          `反向核对失败：inventory.json 记录 ${name}@${version}，` +
+            `但 ${lockfile.file} 中的版本是 ${[...lockedVersions].sort().join('、')}`
+        );
+        continue;
+      }
+      reverse.matched += 1;
+    }
+
+    notes.push(
+      `清单反向核对（${lockfile.file}）：checked=${reverse.checked}，matched=${reverse.matched}，` +
+        `missing=${reverse.missing}，version-mismatch=${reverse.versionMismatch}；` +
+        `跳过非 npm 组件 ` +
+        `${reverse.skippedRuntime + reverse.skippedFonts + reverse.skippedAllowlisted} 个` +
+        `（runtime ${reverse.skippedRuntime}、fonts ${reverse.skippedFonts}、` +
+        `显式白名单 ${reverse.skippedAllowlisted}）` +
+        (reverse.unregisteredNonNpm > 0
+          ? `；另有 ${reverse.unregisteredNonNpm} 个未登记来源的非 npm 组件（见失败项）`
+          : '')
+    );
   }
 }
 

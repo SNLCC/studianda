@@ -1161,6 +1161,44 @@ export interface ZoteroDocumentImportResult extends DocumentDetail {
   localTitlePreserved?: boolean;
 }
 
+/**
+ * 迁移前 schema 快照（`migration-backups/reader-before-v<数字>-<时间戳>.sqlite3`）的保留份数。
+ *
+ * 每份是 VACUUM INTO 出的完整库副本（真实库约 7 MiB），不设上限会随每次升级累积成几十 MB。
+ * 数值集中定义在这里：单测与 `scripts/verify-migration.mjs` 都从源码读取，避免多处各写一份。
+ * 计入本次刚生成的那份；迁移成功后只保留最近 N 份，更早的自动删除。
+ */
+export const MIGRATION_BACKUP_KEEP = 3;
+
+/**
+ * 只识别自动生成的迁移快照名。
+ *
+ * 必须是 `reader-before-v<数字>-<非空后缀>.sqlite3`；`migration-backups/` 是普通目录，
+ * 用户可能手动放进去其它文件，不符合该模式的一律不参与保留策略、也绝不删除。
+ */
+const MIGRATION_BACKUP_NAME = /^reader-before-v(\d+)-(.+)\.sqlite3$/;
+
+function isMigrationBackupName(name: string): boolean {
+  return MIGRATION_BACKUP_NAME.test(name);
+}
+
+/** 取快照名里的时间戳部分；不属于自动命名格式时退回整个名字，保证排序确定。 */
+function migrationBackupStamp(name: string): string {
+  return MIGRATION_BACKUP_NAME.exec(name)?.[2] ?? name;
+}
+
+/**
+ * 快照「新 → 旧」排序：文件名里的时间戳是生成时的 ISO 时间（':'/'.' 已替换为 '-'），
+ * 可直接按字符串比较，不依赖文件 mtime，也不受版本号位数影响（v9/v10 不会排错）。
+ */
+function compareMigrationBackupsNewestFirst(a: string, b: string): number {
+  const stampA = migrationBackupStamp(a);
+  const stampB = migrationBackupStamp(b);
+  if (stampA !== stampB) return stampA < stampB ? 1 : -1;
+  // 时间戳相同（理论上不会发生）：按完整文件名倒序，保证排序稳定。
+  return a < b ? 1 : a > b ? -1 : 0;
+}
+
 export class Store {
   readonly dataDir: string;
   readonly papersDir: string;
@@ -2488,25 +2526,52 @@ export class Store {
   }
 
   /**
-   * 旧库升级前的 schema 快照（VACUUM INTO），保留最近 3 份。
+   * 旧库升级前的 schema 快照（VACUUM INTO）。
    * 备份失败必须中止迁移：宁可让用户重试，也不要无备份地改库。
+   * 返回本次快照的绝对路径；保留上限的清理在迁移成功之后由 pruneMigrationBackups 处理。
    */
-  private backupBeforeMigration(previousVersion: number): void {
+  private backupBeforeMigration(previousVersion: number): string {
     const folder = path.join(this.dataDir, 'migration-backups');
     mkdirSync(folder, { recursive: true });
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const target = path.join(folder, `reader-before-v${previousVersion}-${stamp}.sqlite3`);
     this.backupDatabase(target);
+    return target;
+  }
+
+  /**
+   * 迁移**成功之后**的快照保留清理：`migration-backups/` 只保留最近
+   * MIGRATION_BACKUP_KEEP 份迁移快照（含本次刚生成的那份），更早的删除。
+   *
+   * 约束（任何一条都不能放松）：
+   * - 只认 `reader-before-v<数字>-*.sqlite3`；同目录里用户手动放的其它文件不碰。
+   * - 本次刚生成的快照无条件保留：即使按时间排序它不在前 N 份里也不删。
+   * - 清理失败只写错误日志，绝不抛错影响启动；旧快照最多多留几份。
+   * - 必须在迁移成功路径上调用：迁移失败时快照是唯一救命稻草，不能清理。
+   */
+  private pruneMigrationBackups(currentBackupPath: string | null): void {
+    const folder = path.join(this.dataDir, 'migration-backups');
     try {
-      const files = readdirSync(folder)
-        .filter((name) => name.startsWith('reader-before-v') && name.endsWith('.sqlite3'))
-        .sort();
-      while (files.length > 3) {
-        const oldest = files.shift();
-        if (oldest) rmSync(path.join(folder, oldest), { force: true });
+      if (!existsSync(folder)) return;
+      const currentName = currentBackupPath ? path.basename(currentBackupPath) : '';
+      const snapshots = readdirSync(folder, { withFileTypes: true })
+        .filter((entry) => entry.isFile() && isMigrationBackupName(entry.name))
+        .map((entry) => entry.name)
+        .sort(compareMigrationBackupsNewestFirst);
+      // 先放入本次快照，再按「新 → 旧」补足到 N 份；其余全部删除。
+      const keep = new Set<string>();
+      if (currentName && snapshots.includes(currentName)) keep.add(currentName);
+      for (const name of snapshots) {
+        if (keep.size >= MIGRATION_BACKUP_KEEP) break;
+        keep.add(name);
       }
-    } catch {
-      // 清理失败不影响迁移；旧快照最多多留几份。
+      for (const name of snapshots) {
+        if (keep.has(name)) continue;
+        rmSync(path.join(folder, name), { force: true });
+      }
+    } catch (error) {
+      // 清理失败不影响启动；错误日志本身写失败也会被 appendErrorLog 内部吞掉。
+      appendErrorLog(this.dataDir, 'migration:prune-backups', error);
     }
   }
 
@@ -2537,8 +2602,10 @@ export class Store {
     //     zotero_collection_key（最近同步的 collection）、zotero_missing（Zotero 侧已删除标记，
     //     只标记不删本地文献）。都只是加列 + 一个索引，不重建表、不动旧行。
     const currentVersion = 26;
+    // 本次升级生成的快照路径；迁移成功后据此清理旧快照并保证这一份不被删。
+    let migrationBackupPath: string | null = null;
     if (previousVersion > 0 && previousVersion < currentVersion) {
-      this.backupBeforeMigration(previousVersion);
+      migrationBackupPath = this.backupBeforeMigration(previousVersion);
     }
     this.db.exec('BEGIN IMMEDIATE');
     try {
@@ -2732,7 +2799,8 @@ export class Store {
       this.db.exec('COMMIT');
     } catch (error) {
       // 整体回滚：schema、回填、schema_version 一起回到迁移前；迁移前快照仍保留在
-      // dataDir/migration-backups/，必要时可人工恢复。
+      // dataDir/migration-backups/，必要时可人工恢复。失败路径直接 rethrow，
+      // 不会走到下面的快照清理（失败时快照是唯一救命稻草，绝不能删）。
       try {
         this.db.exec('ROLLBACK');
       } catch {
@@ -2740,6 +2808,10 @@ export class Store {
       }
       throw error;
     }
+
+    // 只有事务提交成功才会执行到这里：清理更早的迁移快照，只保留最近
+    // MIGRATION_BACKUP_KEEP 份（本次刚生成的这份无条件保留）。清理失败只记日志，不影响启动。
+    this.pruneMigrationBackups(migrationBackupPath);
   }
 
   /** schema 17：按文献检索版本表 + chunks/结构/译文/文献改名触发器。 */

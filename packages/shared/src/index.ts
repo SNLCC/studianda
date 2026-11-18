@@ -2135,10 +2135,11 @@ export interface FlowDeleteResult {
 /**
  * 审计摘要（schema_version 24 起随 assistant 消息落库到 `messages.audit_summary`）。
  *
- * 只存计数与选区状态：`claims/supported/inference/unsupported/heading` 是逐段审计的状态计数，
- * `source_changed` 是被归因为「提问时原文已变更」的缺证件数（已包含在 `unsupported` 内，单列
- * 避免混成模型编造），`invalid_citations` 是越界引用数。**不存正文/原文/完整 ChatResponse**，
- * 避免库膨胀与重复存储；重开历史时界面只能恢复到计数级别，逐段明细不可回放。
+ * 存计数、越界引用编号与选区状态：`claims/supported/inference/unsupported/heading` 是逐段审计的
+ * 状态计数，`source_changed` 是被归因为「提问时原文已变更」的缺证件数（已包含在 `unsupported` 内，
+ * 单列避免混成模型编造），`invalid_citations` 是越界引用数、`invalid_citation_ids` 是这些引用的
+ * 具体编号。**不存正文/原文/完整 ChatResponse**，避免库膨胀与重复存储；重开历史时界面能恢复到
+ * 计数与越界引用编号级别，逐段明细不可回放。
  */
 export interface ChatAuditSummary {
   claims: number;
@@ -2151,6 +2152,15 @@ export interface ChatAuditSummary {
   source_changed?: number;
   /** 越界引用数（回答里没有对应来源的引用编号个数；旧响应可能没有该字段）。 */
   invalid_citations?: number;
+  /**
+   * 越界引用的具体编号（回答正文里的引用序号，如 `[3]` → 3；升序去重）。
+   *
+   * 产出方按上限（20 个）截断；旧响应/旧消息没有该字段（只有计数），
+   * 解析与展示都必须按「无编号」降级，不能报错。
+   */
+  invalid_citation_ids?: number[];
+  /** `invalid_citation_ids` 是否因上限只保留了前若干个；旧数据无该字段视为未截断。 */
+  invalid_citations_truncated?: boolean;
   /** 提问时冻结的选区快照相对当前原文的状态（没有快照时不存）。 */
   selection_snapshot_status?: 'current' | 'source_changed' | 'unknown';
 }
