@@ -13,6 +13,8 @@ export function registerOcrRoutes(
 ): void {
   const { store, secrets } = deps;
   const ocrJobs = new Map<string, OcrJobRecord>();
+  // 每个后台任务一个取消信号：取消时真的中断正在识别的页（destroy 取图 worker / tesseract 实例）。
+  const ocrJobAborts = new Map<string, AbortController>();
 
   app.post(`${API_PREFIX}/documents/:id/ocr/pages/:page`, async (request, reply) => {
     const { id, page: rawPage } = request.params as { id: string; page: string };
@@ -83,6 +85,7 @@ export function registerOcrRoutes(
       return badRequest(reply, '区域坐标必须是数字');
     }
     const jobId = randomUUID();
+    const controller = new AbortController();
     const record: OcrJobRecord = {
       id: jobId,
       state: 'queued',
@@ -92,18 +95,26 @@ export function registerOcrRoutes(
       startedAt: new Date().toISOString()
     };
     ocrJobs.set(jobId, record);
+    ocrJobAborts.set(jobId, controller);
     const wasCancelled = (): boolean => record.state === 'cancelling';
     void (async () => {
       record.state = 'running';
       record.stage = 'recognizing';
       record.progress = 10;
       try {
-        const result = await recognizeRegion(store, secrets, id, page, {
-          x0: coords[0] as number,
-          y0: coords[1] as number,
-          x1: coords[2] as number,
-          y1: coords[3] as number
-        });
+        const result = await recognizeRegion(
+          store,
+          secrets,
+          id,
+          page,
+          {
+            x0: coords[0] as number,
+            y0: coords[1] as number,
+            x1: coords[2] as number,
+            y1: coords[3] as number
+          },
+          { signal: controller.signal }
+        );
         if (wasCancelled()) {
           record.state = 'cancelled';
           record.progress = 0;
@@ -130,9 +141,13 @@ export function registerOcrRoutes(
         }
       } finally {
         record.finishedAt = new Date().toISOString();
+        ocrJobAborts.delete(jobId);
       }
     })();
-    const cleanup = setTimeout(() => ocrJobs.delete(jobId), 10 * 60 * 1000);
+    const cleanup = setTimeout(() => {
+      ocrJobs.delete(jobId);
+      ocrJobAborts.delete(jobId);
+    }, 10 * 60 * 1000);
     cleanup.unref?.();
     return { jobId };
   });
@@ -149,6 +164,8 @@ export function registerOcrRoutes(
     if (record.state === 'queued' || record.state === 'running') {
       record.state = 'cancelling';
       record.stage = 'cancelling';
+      // 真取消：中断正在渲图/识别的页；任务收尾时清理 worker/实例，不留后台线程与临时文件。
+      ocrJobAborts.get(jobId)?.abort();
     }
     return record;
   });

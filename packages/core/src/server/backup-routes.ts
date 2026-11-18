@@ -2,8 +2,10 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { API_ERROR_CODES, API_PREFIX, type BackupJobRecord } from '@studianda/shared';
 import {
+  BackupBusyError,
   BackupCancelledError,
   createSnapshot,
+  isBackupInProgress,
   listBackups,
   requestRestore,
   verifyBackup
@@ -11,22 +13,44 @@ import {
 import type { Store } from '../store.js';
 import { badRequest, notFound } from './http.js';
 
+const BACKUP_BUSY_MESSAGE = '已有备份任务正在进行中';
+
 /**
  * 备份相关路由（从 server.ts 拆出的第一个领域模块）。
  * 行为与原实现一致：同步 `/backups` 保留，另提供可轮询/取消的 job 接口。
  */
 export function registerBackupRoutes(app: FastifyInstance, store: Store): void {
   const backupJobs = new Map<string, BackupJobRecord>();
+  const hasActiveJob = (): boolean => {
+    for (const record of backupJobs.values()) {
+      if (record.state === 'queued' || record.state === 'running' || record.state === 'cancelling') {
+        return true;
+      }
+    }
+    return false;
+  };
 
   app.get(`${API_PREFIX}/backups`, async () => listBackups(store.dataDir));
 
   app.post(`${API_PREFIX}/backups`, async (request, reply) => {
     const body = (request.body ?? {}) as { include_logs?: unknown };
+    if (isBackupInProgress()) {
+      return reply.code(409).send({
+        error: API_ERROR_CODES.backupFailed,
+        message: BACKUP_BUSY_MESSAGE
+      });
+    }
     try {
       return await createSnapshot(store, {
         includeLogs: body.include_logs === true
       });
     } catch (error) {
+      if (error instanceof BackupBusyError) {
+        return reply.code(409).send({
+          error: API_ERROR_CODES.backupFailed,
+          message: error.message
+        });
+      }
       return reply.code(500).send({
         error: API_ERROR_CODES.backupFailed,
         message: error instanceof Error ? error.message : '备份失败'
@@ -52,8 +76,16 @@ export function registerBackupRoutes(app: FastifyInstance, store: Store): void {
     }
   });
 
-  // 备份任务：文件收集阶段可取消；zipSync 压缩阶段是同步阻塞（记录会停在 zip 阶段）。
-  app.post(`${API_PREFIX}/backups/start`, async (request) => {
+  // 备份任务：文件收集阶段可取消；zip 压缩在 worker 线程执行，进度事件会持续
+  // 推进到 zip 阶段，主线程（及其他路由）不再被同步压缩阻塞。
+  // 同一时间只允许一个备份任务：已有 queued/running/cancelling 任务时返回 409。
+  app.post(`${API_PREFIX}/backups/start`, async (request, reply) => {
+    if (hasActiveJob() || isBackupInProgress()) {
+      return reply.code(409).send({
+        error: API_ERROR_CODES.backupFailed,
+        message: BACKUP_BUSY_MESSAGE
+      });
+    }
     const body = (request.body ?? {}) as { include_logs?: unknown };
     const id = randomUUID();
     const record: BackupJobRecord = {

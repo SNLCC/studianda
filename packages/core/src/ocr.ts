@@ -22,6 +22,13 @@ import { OCR_LANGUAGE_MIN_BYTES, selectedOcrLanguages } from './ocr-languages.js
 import { requestMaxTokensFor, TASK_MAX_TOKENS } from './output-limit.js';
 import { CONTENT_SAFETY_RULES } from './prompts.js';
 import { reflowLines, textQuality } from './structure.js';
+import {
+  cropRegionOffMainThread,
+  ocrWorkerConcurrency,
+  OcrCancelledError,
+  renderPageOffMainThread,
+  type RenderTaskOptions
+} from './ocr-worker.js';
 
 interface RenderedPage {
   png: Buffer;
@@ -55,8 +62,6 @@ export const RENDER_LIMITS: Record<RenderPurpose, { maxScale: number; maxLongEdg
 
 /** 超大页缩小的下限：再低就识别不出内容，宁可略超像素上限也不无限缩小。 */
 const MIN_RENDER_SCALE = 0.05;
-
-let ocrPromise: Promise<Awaited<ReturnType<typeof createWorker>>> | null = null;
 
 export async function renderPdfPage(
   documentId: string,
@@ -174,30 +179,187 @@ function ocrFailureMessage(error: unknown, hint: string): string {
   return `本机 OCR 识别失败：${message}。${hint}`;
 }
 
-async function ocrEngine(
-  store: Store
-): Promise<Awaited<ReturnType<typeof createWorker>>> {
-  if (!ocrPromise) {
-    ocrPromise = (async () => {
-      // 语言数据先在主线程准备好，worker 只读本地文件（worker 内网络在真实环境不可靠）。
-      const langPath = await ensureOcrLanguageData(store);
-      const languages = ocrLanguages(store).join('+');
-      return await createWorker(languages, 1, {
-        cachePath: path.join(store.dataDir, 'ocr-tessdata'),
-        langPath,
-        gzip: false,
-        // 没有它时 tesseract 在 worker 加载失败时 throw 未捕获异常，整个核心进程退出。
-        errorHandler: () => {
-          // 具体原因由 createWorker 的 reject 返回；这里只负责阻止未捕获异常。
-        }
-      });
-    })().catch((error) => {
-      // 失败不缓存坏 Promise：下次识别可以重试（换网络/换镜像后能恢复）。
-      ocrPromise = null;
-      throw new Error(ocrFailureMessage(error, '可改用云端识别，或检查语言数据（STUDIANDA_OCR_LANG_PATH）。'));
+type OcrEngine = Awaited<ReturnType<typeof createWorker>>;
+
+interface OcrEngineSlot {
+  engine: OcrEngine;
+  busy: boolean;
+}
+
+/**
+ * tesseract 实例池（每实例自带一条 worker 线程，识别 CPU 不在主线程）。
+ *
+ * 池大小与取图 worker 共用 `STUDIANDA_OCR_WORKERS`（默认 2，硬上限 4）：
+ * 多页 OCR 时 N 页并行进入 N 个 tesseract 实例；单页请求只按需创建 1 个实例。
+ * 内存实测见 ocr-worker.ts 顶部注释与报告：tesseract 核心（无语言数据）约 23 MB/实例，
+ * 语言数据另计；默认 2 是在「并行收益」与「多实例内存」之间的折中。
+ */
+const ocrEngineSlots: OcrEngineSlot[] = [];
+const ocrEngineWakers = new Set<() => void>();
+let ocrEngineCreating = 0;
+
+function wakeOcrEngineWaiters(): void {
+  const wakers = [...ocrEngineWakers];
+  ocrEngineWakers.clear();
+  for (const wake of wakers) wake();
+}
+
+/** 等一个空闲槽：被唤醒后重新竞争（唤醒只是让循环再看一眼状态）。 */
+function waitForOcrEngine(signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = (): void => {
+      ocrEngineWakers.delete(wake);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const wake = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    };
+    const onAbort = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new OcrCancelledError());
+    };
+    ocrEngineWakers.add(wake);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/** 建实例：语言数据先在主线程准备好，worker 只读本地文件（worker 内网络在真实环境不可靠）。 */
+async function createOcrEngine(store: Store): Promise<OcrEngine> {
+  const langPath = await ensureOcrLanguageData(store);
+  const languages = ocrLanguages(store).join('+');
+  try {
+    return await createWorker(languages, 1, {
+      cachePath: path.join(store.dataDir, 'ocr-tessdata'),
+      langPath,
+      gzip: false,
+      // 没有它时 tesseract 在 worker 加载失败时 throw 未捕获异常，整个核心进程退出。
+      errorHandler: () => {
+        // 具体原因由 createWorker 的 reject 返回；这里只负责阻止未捕获异常。
+      }
     });
+  } catch (error) {
+    // 失败不缓存坏实例：下次识别可以重试（换语言数据后能恢复）。
+    throw new Error(
+      ocrFailureMessage(error, '可改用云端识别，或检查语言数据（STUDIANDA_OCR_LANG_PATH）。')
+    );
   }
-  return ocrPromise;
+}
+
+async function acquireOcrEngine(store: Store, signal?: AbortSignal): Promise<OcrEngineSlot> {
+  for (;;) {
+    if (signal?.aborted) throw new OcrCancelledError();
+    const free = ocrEngineSlots.find((slot) => !slot.busy);
+    if (free) {
+      free.busy = true;
+      return free;
+    }
+    if (ocrEngineSlots.length + ocrEngineCreating < ocrWorkerConcurrency()) {
+      ocrEngineCreating += 1;
+      try {
+        const engine = await createOcrEngine(store);
+        const slot: OcrEngineSlot = { engine, busy: true };
+        ocrEngineSlots.push(slot);
+        if (signal?.aborted) {
+          await disposeOcrEngine(slot);
+          throw new OcrCancelledError();
+        }
+        return slot;
+      } finally {
+        ocrEngineCreating -= 1;
+        wakeOcrEngineWaiters();
+      }
+    }
+    await waitForOcrEngine(signal);
+  }
+}
+
+function releaseOcrEngine(slot: OcrEngineSlot): void {
+  slot.busy = false;
+  wakeOcrEngineWaiters();
+}
+
+/** 取消或引擎出错后销毁实例：terminate 会强制结束 tesseract 的 worker 线程，不留后台线程。 */
+async function disposeOcrEngine(slot: OcrEngineSlot): Promise<void> {
+  const index = ocrEngineSlots.indexOf(slot);
+  if (index >= 0) ocrEngineSlots.splice(index, 1);
+  wakeOcrEngineWaiters();
+  try {
+    await slot.engine.terminate();
+  } catch {
+    // 实例可能已崩溃；terminate 失败不影响后续重建。
+  }
+}
+
+/** 取消信号与识别 promise 的竞速：取消时立刻返回，不等 tesseract 把这一页跑完。 */
+function withAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(new OcrCancelledError());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(new OcrCancelledError());
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    );
+  });
+}
+
+/** 用池里的实例识别已渲染好的 PNG；失败/取消都销毁实例，下次重建。 */
+async function recognizePngLocal(
+  store: Store,
+  png: Buffer,
+  signal?: AbortSignal
+): Promise<Awaited<ReturnType<OcrEngine['recognize']>>> {
+  const slot = await acquireOcrEngine(store, signal);
+  try {
+    const result = await withAbort(
+      slot.engine.recognize(png, {}, { blocks: true }) as Promise<
+        Awaited<ReturnType<OcrEngine['recognize']>>
+      >,
+      signal
+    );
+    releaseOcrEngine(slot);
+    return result;
+  } catch (error) {
+    await disposeOcrEngine(slot);
+    throw error;
+  }
+}
+
+/** 测试/诊断用：tesseract 实例池状态。 */
+export function ocrEnginePoolStats(): { instances: number; busy: number; creating: number } {
+  return {
+    instances: ocrEngineSlots.length,
+    busy: ocrEngineSlots.filter((slot) => slot.busy).length,
+    creating: ocrEngineCreating
+  };
+}
+
+/** 关闭 tesseract 实例池（测试收尾/应用退出）。 */
+export async function shutdownOcrEnginePool(): Promise<void> {
+  const idle = ocrEngineSlots.splice(0, ocrEngineSlots.length);
+  wakeOcrEngineWaiters();
+  await Promise.all(
+    idle.map(async (slot) => {
+      try {
+        await slot.engine.terminate();
+      } catch {
+        // 已退出/崩溃的实例忽略。
+      }
+    })
+  );
 }
 
 /** 空文本页自动 OCR：默认关闭，只在用户开启且选择本机模式时执行。 */
@@ -214,7 +376,8 @@ export async function ensureAutoOcr(
   const targets = pages && pages.length > 0
     ? [...new Set(pages)]
     : Array.from({ length: document.pages }, (_, index) => index + 1);
-  const done: number[] = [];
+  // 先逐页判断要不要识别（读缓存/文本层，都是主线程上的廉价操作），再把需要识别的页并发交出去。
+  const pending: number[] = [];
   for (const page of targets) {
     if (!Number.isInteger(page) || page < 1 || page > document.pages) continue;
     const saved = store.getPageEdit(documentId, page);
@@ -223,10 +386,38 @@ export async function ensureAutoOcr(
     // 否则问答与检索会拿一串不可读字符当原文。
     const existing = store.getPageText(documentId, page);
     if (existing.trim() && !textQuality(existing).suspect) continue;
-    const result = await recognizePage(store, secrets, documentId, page);
-    if (result.text.trim()) done.push(page);
+    pending.push(page);
   }
-  return done;
+  if (pending.length === 0) return [];
+  const done: number[] = [];
+  const controller = new AbortController();
+  let firstError: unknown = null;
+  let next = 0;
+  const concurrency = Math.max(1, Math.min(ocrWorkerConcurrency(), pending.length));
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      if (firstError) return;
+      const index = next;
+      next += 1;
+      if (index >= pending.length) return;
+      const page = pending[index]!;
+      try {
+        const result = await recognizePage(store, secrets, documentId, page, 2, {
+          signal: controller.signal
+        });
+        if (result.text.trim()) done.push(page);
+      } catch (error) {
+        // 与旧行为一致：任何一页失败就中止整轮自动 OCR（缺页由上层报告如实记录）；
+        // 先记下首个错误并取消其它在识别的页，再统一抛出。
+        if (!firstError) firstError = error;
+        controller.abort();
+        return;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+  if (firstError) throw firstError;
+  return done.sort((left, right) => left - right);
 }
 
 /** 自定义 /parse 兼容服务：上传页面 PNG，读取 JSON text。 */
@@ -842,67 +1033,24 @@ async function runMineruPage(
   }
 }
 
-/** 本机 Tesseract OCR：不依赖 sharp/libvips/OpenCV，只处理当前页图像。 */
-export async function recognizePage(
+/** tesseract 结果 → 归一化行框（页面归一化 0..1）+ 遮罩可见行 + 落库文本。 */
+function normalizeTesseractPage(
   store: Store,
-  secrets: SecretStore,
   documentId: string,
   page: number,
-  scale = 2
-): Promise<OcrPageResult> {
-  const config = parsingConfigForUse(store, secrets);
-  const rendered = await renderPdfPage(documentId, page, store, scale, 'ocr');
-  if (config.mode === 'custom') {
-    return recognizeCustom(store, secrets, documentId, page, rendered, config.service_url);
-  }
-  if (config.mode === 'vision') {
-    return recognizeVision(store, secrets, documentId, page, rendered, config);
-  }
-  if (config.mode === 'deepseek_ocr') {
-    return recognizeDeepSeekOcr(store, secrets, documentId, page, rendered, config);
-  }
-  if (config.mode === 'mineru_agent') {
-    return runMineruPage(store, 'mineru_agent', page, () =>
-      recognizeMineruAgent(store, secrets, documentId, page, rendered, config.service_url)
-    );
-  }
-  if (config.mode === 'mineru_online') {
-    return runMineruPage(store, 'mineru_online', page, () =>
-      recognizeMineruOnline(
-        store,
-        secrets,
-        documentId,
-        page,
-        rendered,
-        config.service_url,
-        config.mineru_online_model
-      )
-    );
-  }
-  if (config.mode !== 'local') {
-    throw new Error(
-      '当前识别方式暂未接入；本机识别支持 local/vision/deepseek_ocr/custom/mineru_online/mineru_agent。'
-    );
-  }
-  let result: Awaited<ReturnType<Awaited<ReturnType<typeof ocrEngine>>['recognize']>>;
-  try {
-    const engine = await ocrEngine(store);
-    result = await engine.recognize(rendered.png, {}, { blocks: true });
-  } catch (error) {
-    // worker 崩溃/识别失败：清掉缓存的 worker，下次可以重试；给可执行的中文原因。
-    ocrPromise = null;
-    throw new Error(ocrFailureMessage(error, '可改用云端识别，或检查语言数据（STUDIANDA_OCR_LANG_PATH）。'));
-  }
+  result: Awaited<ReturnType<OcrEngine['recognize']>>,
+  image: { width: number; height: number }
+): { text: string; lines: OcrLine[]; visibleLines: OcrLine[]; fullText: string } {
   const lines: OcrLine[] = [];
   for (const block of result.data.blocks ?? []) {
     for (const paragraph of block.paragraphs ?? []) {
       for (const line of paragraph.lines ?? []) {
         const box = line.bbox;
         const bbox: [number, number, number, number] = [
-          Math.max(0, Math.min(1, box.x0 / rendered.width)),
-          Math.max(0, Math.min(1, box.y0 / rendered.height)),
-          Math.max(0, Math.min(1, box.x1 / rendered.width)),
-          Math.max(0, Math.min(1, box.y1 / rendered.height))
+          Math.max(0, Math.min(1, box.x0 / image.width)),
+          Math.max(0, Math.min(1, box.y0 / image.height)),
+          Math.max(0, Math.min(1, box.x1 / image.width)),
+          Math.max(0, Math.min(1, box.y1 / image.height))
         ];
         lines.push({
           text: line.text.trim(),
@@ -931,14 +1079,100 @@ export async function recognizePage(
   // 如果把裁过的文本写进 page_edits，删除遮罩规则后页眉/页脚就再也回不来了。
   const fullText =
     lines.map((line) => line.text).filter(Boolean).join('\n') || result.data.text.trim();
-  store.cacheOcrPage(documentId, page, fullText, lines);
+  return { text, lines, visibleLines, fullText };
+}
+
+/**
+ * 本机 Tesseract 整页识别：取图（渲染 + PNG 编码）在 worker 线程，识别在 tesseract 自己的
+ * worker 线程（N 个实例池），主线程只做后处理（行框归一化，实测 ~0.5 ms/页）与落库。
+ */
+async function recognizeLocalPage(
+  store: Store,
+  documentId: string,
+  page: number,
+  scale: number,
+  options?: RenderTaskOptions
+): Promise<OcrPageResult> {
+  const documentPath = store.getDocumentPath(documentId);
+  if (!documentPath) throw new Error('PDF 副本不存在');
+  // 语言数据缺失要尽早报（与旧行为同一句中文提示），不要先白渲染一页。
+  await ensureOcrLanguageData(store);
+  const languages = ocrLanguages(store).join('+');
+  const rendered = await renderPageOffMainThread(
+    {
+      pdfPath: documentPath,
+      page,
+      scale,
+      maxScale: RENDER_LIMITS.ocr.maxScale,
+      maxLongEdge: RENDER_LIMITS.ocr.maxLongEdge,
+      minScale: MIN_RENDER_SCALE
+    },
+    options
+  );
+  let result: Awaited<ReturnType<OcrEngine['recognize']>>;
+  try {
+    result = await recognizePngLocal(store, rendered.png, options?.signal);
+  } catch (error) {
+    // 取消是正常收尾，不包装成「识别失败」；实例已在 recognizePngLocal 里销毁。
+    if (error instanceof OcrCancelledError) throw error;
+    throw new Error(ocrFailureMessage(error, '可改用云端识别，或检查语言数据（STUDIANDA_OCR_LANG_PATH）。'));
+  }
+  const normalized = normalizeTesseractPage(store, documentId, page, result, rendered);
+  store.cacheOcrPage(documentId, page, normalized.fullText, normalized.lines);
   return {
     page,
-    text,
-    lines: visibleLines,
+    text: normalized.text,
+    lines: normalized.visibleLines,
     image: { width: rendered.width, height: rendered.height },
-    engine: `tesseract.js:${ocrLanguages(store).join('+')}`
+    engine: `tesseract.js:${languages}`
   };
+}
+
+/** 本机 Tesseract OCR：不依赖 sharp/libvips/OpenCV，只处理当前页图像。 */
+export async function recognizePage(
+  store: Store,
+  secrets: SecretStore,
+  documentId: string,
+  page: number,
+  scale = 2,
+  options?: RenderTaskOptions
+): Promise<OcrPageResult> {
+  const config = parsingConfigForUse(store, secrets);
+  // 本机识别：整条取图链在 worker 线程，主线程不再被 pdfjs 光栅化占住。
+  if (config.mode === 'local') {
+    return recognizeLocalPage(store, documentId, page, scale, options);
+  }
+  const rendered = await renderPdfPage(documentId, page, store, scale, 'ocr');
+  if (config.mode === 'custom') {
+    return recognizeCustom(store, secrets, documentId, page, rendered, config.service_url);
+  }
+  if (config.mode === 'vision') {
+    return recognizeVision(store, secrets, documentId, page, rendered, config);
+  }
+  if (config.mode === 'deepseek_ocr') {
+    return recognizeDeepSeekOcr(store, secrets, documentId, page, rendered, config);
+  }
+  if (config.mode === 'mineru_agent') {
+    return runMineruPage(store, 'mineru_agent', page, () =>
+      recognizeMineruAgent(store, secrets, documentId, page, rendered, config.service_url)
+    );
+  }
+  if (config.mode === 'mineru_online') {
+    return runMineruPage(store, 'mineru_online', page, () =>
+      recognizeMineruOnline(
+        store,
+        secrets,
+        documentId,
+        page,
+        rendered,
+        config.service_url,
+        config.mineru_online_model
+      )
+    );
+  }
+  throw new Error(
+    '当前识别方式暂未接入；本机识别支持 local/vision/deepseek_ocr/custom/mineru_online/mineru_agent。'
+  );
 }
 
 export interface RegionRect {
@@ -1306,7 +1540,8 @@ export async function recognizeRegion(
   secrets: SecretStore,
   documentId: string,
   page: number,
-  region: RegionRect
+  region: RegionRect,
+  options?: RenderTaskOptions
 ): Promise<RegionRecognition> {
   const document = store.getDocument(documentId);
   if (!document) throw new Error('文档不存在');
@@ -1358,8 +1593,30 @@ export async function recognizeRegion(
     throw new Error(regionVisionUnsupportedMessage(config.mode));
   }
   if (fallbackTarget) assertRegionVisionAllowed(config, fallbackTarget);
-  const rendered = await renderPdfPage(documentId, page, store, 2, 'region');
-  const crop = await cropRenderedRegion(rendered, normalized);
+  // 本机识别：取图（渲染 + 裁区 + PNG 编码）整体在 worker 线程，主线程只做识别调度与落库；
+  // 云服务模式仍按原路径在主线程渲染（只发裁图，不在本次改造范围内）。
+  let crop: Buffer;
+  if (config.mode === 'local') {
+    const documentPath = store.getDocumentPath(documentId);
+    if (!documentPath) throw new Error('PDF 副本不存在');
+    await ensureOcrLanguageData(store);
+    crop = (
+      await cropRegionOffMainThread(
+        {
+          pdfPath: documentPath,
+          page,
+          region: normalized,
+          maxScale: RENDER_LIMITS.region.maxScale,
+          maxLongEdge: RENDER_LIMITS.region.maxLongEdge,
+          minScale: MIN_RENDER_SCALE
+        },
+        options
+      )
+    ).png;
+  } else {
+    const rendered = await renderPdfPage(documentId, page, store, 2, 'region');
+    crop = await cropRenderedRegion(rendered, normalized);
+  }
   let text = '';
   let engine = '';
   let engine_note = '';
@@ -1367,8 +1624,7 @@ export async function recognizeRegion(
   if (config.mode === 'local') {
     const parts: string[] = [];
     try {
-      const worker = await ocrEngine(store);
-      const result = await worker.recognize(crop, {}, { blocks: true });
+      const result = await recognizePngLocal(store, crop, options?.signal);
       for (const block of result.data.blocks ?? []) {
         for (const paragraph of block.paragraphs ?? []) {
           for (const line of paragraph.lines ?? []) {
@@ -1378,8 +1634,7 @@ export async function recognizeRegion(
         }
       }
     } catch (error) {
-      // 不缓存坏 worker：换网络/换数据源后可以重试。
-      ocrPromise = null;
+      if (error instanceof OcrCancelledError) throw error;
       throw new Error(ocrFailureMessage(error, '请检查语言数据或尝试扩大选区。'));
     }
     text = parts.join('\n');
