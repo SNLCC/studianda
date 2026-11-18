@@ -29,6 +29,7 @@ import {
   type ChatResponse,
   type ClearUserDataResult,
   type FileHealthReport,
+  type FlowListResponse,
   type HealthResponse,
   type ImportJobRecord,
   type MaintenanceStatus,
@@ -66,6 +67,7 @@ import {
 import { readCapacity } from './capacity.js';
 import { listBackups } from './backup.js';
 import { registerBackupRoutes } from './server/backup-routes.js';
+import { registerCorpusSessionRoutes } from './server/corpus-session-routes.js';
 import { registerOcrRoutes } from './server/ocr-routes.js';
 import {
   createDiagnosticsPackage,
@@ -74,6 +76,7 @@ import {
 } from './diagnostics.js';
 import { testModelConnection } from './model-test.js';
 import { appendErrorLog, redactSensitive } from './error-log.js';
+import { flowListResponse } from './flows.js';
 import { listProviders } from './providers.js';
 import { searchLibrary, searchLibraryDocuments } from './library-search.js';
 import {
@@ -562,6 +565,8 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   });
   registerBackupRoutes(app, options.store);
   registerOcrRoutes(app, { store: options.store, secrets: options.secrets });
+  // 跨文献（语料）会话（schema 23）：范围快照 + 可追问的跨篇精读会话。
+  registerCorpusSessionRoutes(app, { store: options.store, secrets: options.secrets });
 
   app.addHook('onRequest', async (request, reply) => {
     // 安全边界：
@@ -630,6 +635,13 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     closing: options.isClosing?.() ?? false
   }));
 
+  // 提示词分层 P1-2：只读列出 `<dataDir>/flows` 下通过校验的用户阅读流程（L1）。
+  // 只返回元数据与跳过原因，不返回流程正文；本版不做 UI、不提供写入接口。
+  app.get(
+    `${API_PREFIX}/flows`,
+    async (): Promise<FlowListResponse> => flowListResponse(options.store.dataDir)
+  );
+
   app.get(`${API_PREFIX}/documents`, async (request) => {
     const query = request.query as { trash?: string };
     return options.store.listDocuments(query.trash === 'true' || query.trash === '1');
@@ -667,6 +679,110 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       return options.store.deleteFolder(id);
     } catch (error) {
       return notFound(reply, error instanceof Error ? error.message : '文件夹不存在');
+    }
+  });
+
+  // 逻辑项目（schema_version 22）：不绑目录的文献分组，只存链接。
+  // 默认列表不含归档项目；`?archived=true|1`（或 `?includeArchived=true|1`）可连归档一起列出。
+  app.get(`${API_PREFIX}/projects`, async (request) => {
+    const query = request.query as { archived?: string; includeArchived?: string };
+    const includeArchived =
+      query.archived === 'true' ||
+      query.archived === '1' ||
+      query.includeArchived === 'true' ||
+      query.includeArchived === '1';
+    return options.store.listProjects(includeArchived);
+  });
+
+  app.post(`${API_PREFIX}/projects`, async (request, reply) => {
+    const body = (request.body ?? {}) as { name?: unknown; description?: unknown };
+    if (typeof body.name !== 'string') return badRequest(reply, 'name 必须是字符串');
+    if (body.description !== undefined && typeof body.description !== 'string') {
+      return badRequest(reply, 'description 必须是字符串');
+    }
+    try {
+      return options.store.createProject({
+        name: body.name,
+        description: typeof body.description === 'string' ? body.description : undefined
+      });
+    } catch (error) {
+      return badRequest(reply, error instanceof Error ? error.message : '创建项目失败');
+    }
+  });
+
+  app.patch(`${API_PREFIX}/projects/:id`, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body ?? {}) as {
+      name?: unknown;
+      description?: unknown;
+      archived?: unknown;
+    };
+    if (body.name !== undefined && typeof body.name !== 'string') {
+      return badRequest(reply, 'name 必须是字符串');
+    }
+    if (body.description !== undefined && typeof body.description !== 'string') {
+      return badRequest(reply, 'description 必须是字符串');
+    }
+    if (body.archived !== undefined && typeof body.archived !== 'boolean') {
+      return badRequest(reply, 'archived 必须是布尔值');
+    }
+    if (body.name === undefined && body.description === undefined && body.archived === undefined) {
+      return badRequest(reply, '需要至少一个可更新字段（name/description/archived）');
+    }
+    try {
+      return options.store.updateProject(id, {
+        ...(typeof body.name === 'string' ? { name: body.name } : {}),
+        ...(typeof body.description === 'string' ? { description: body.description } : {}),
+        ...(typeof body.archived === 'boolean' ? { archived: body.archived } : {})
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '更新项目失败';
+      if (message === '项目不存在') return notFound(reply, message);
+      return badRequest(reply, message);
+    }
+  });
+
+  app.delete(`${API_PREFIX}/projects/:id`, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try {
+      return options.store.deleteProject(id);
+    } catch (error) {
+      return notFound(reply, error instanceof Error ? error.message : '项目不存在');
+    }
+  });
+
+  app.get(`${API_PREFIX}/projects/:id/documents`, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try {
+      return options.store.listProjectDocuments(id);
+    } catch (error) {
+      return notFound(reply, error instanceof Error ? error.message : '项目不存在');
+    }
+  });
+
+  app.post(`${API_PREFIX}/projects/:id/documents`, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body ?? {}) as { documentId?: unknown };
+    if (typeof body.documentId !== 'string' || !body.documentId.trim()) {
+      return badRequest(reply, 'documentId 必须是字符串');
+    }
+    try {
+      return options.store.addProjectDocument(id, body.documentId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '加入项目失败';
+      if (message === '项目不存在' || message === '文档不存在') return notFound(reply, message);
+      return badRequest(reply, message);
+    }
+  });
+
+  app.delete(`${API_PREFIX}/projects/:id/documents/:documentId`, async (request, reply) => {
+    const { id, documentId } = request.params as { id: string; documentId: string };
+    try {
+      options.store.removeProjectDocument(id, documentId);
+      return { ok: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '移出项目失败';
+      return notFound(reply, message);
     }
   });
 
@@ -2888,10 +3004,15 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           rects?: unknown;
           color?: unknown;
           style?: unknown;
+          origin?: unknown;
         }
       | null;
     if (!body || typeof body.documentId !== 'string' || typeof body.page !== 'number') {
       return badRequest(reply, '需要 documentId 与 page');
+    }
+    // 内容来源：AI 译文/识别结果由系统写入时传 'ai'；用户手工新建不传（落库 'user'）。
+    if (body.origin !== undefined && body.origin !== 'user' && body.origin !== 'ai') {
+      return badRequest(reply, 'origin 必须是 user 或 ai');
     }
     if (!options.store.getDocument(body.documentId)) return notFound(reply, '文档不存在');
     try {
@@ -2902,7 +3023,8 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         content: typeof body.content === 'string' ? body.content : '',
         rects: typeof body.rects === 'string' ? body.rects : '',
         color: typeof body.color === 'string' ? body.color : 'yellow',
-        style: typeof body.style === 'string' ? body.style : 'highlight'
+        style: typeof body.style === 'string' ? body.style : 'highlight',
+        origin: body.origin as 'user' | 'ai' | undefined
       });
     } catch (error) {
       return badRequest(reply, error instanceof Error ? error.message : '保存批注失败');
@@ -3865,9 +3987,15 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       quote?: unknown;
       content?: unknown;
       externalKey?: unknown;
+      origin?: unknown;
     };
     if (body.documentId != null && typeof body.documentId !== 'string') {
       return badRequest(reply, 'documentId 必须是字符串');
+    }
+    // 内容来源：「回答存为笔记」等系统代写 AI 内容的路径必须显式传 'ai'；
+    // 用户手工新建不传（落库 'user'）。只接受这两个值，避免拼写错误把 AI 内容误标成用户内容。
+    if (body.origin !== undefined && body.origin !== 'user' && body.origin !== 'ai') {
+      return badRequest(reply, 'origin 必须是 user 或 ai');
     }
     const documentId = typeof body.documentId === 'string' ? body.documentId.trim() : '';
     const pageValue = body.page == null ? 0 : body.page;
@@ -3885,7 +4013,8 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         quote: typeof body.quote === 'string' ? body.quote : '',
         content: typeof body.content === 'string' ? body.content : '',
         // 外部稳定标识（例如「回答存为笔记」的 chat-answer:...）：同 key 重复保存返回已有笔记。
-        externalKey: typeof body.externalKey === 'string' ? body.externalKey : undefined
+        externalKey: typeof body.externalKey === 'string' ? body.externalKey : undefined,
+        origin: body.origin as 'user' | 'ai' | undefined
       });
     } catch (error) {
       return badRequest(reply, error instanceof Error ? error.message : '保存笔记失败');

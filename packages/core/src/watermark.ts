@@ -233,6 +233,121 @@ function resolveWatermarkFamily(
 }
 
 /**
+ * 水印条 PNG 的基准像素尺寸（`scale = 1`）：高 36px（落在需求给的 32–48px 内），
+ * 宽按文案自适应。贴进 PDF 时传 `scale: 2/3` 提高像素密度，版面尺寸由调用方按页面算，
+ * 所以倍率只影响清晰度、不影响比例。
+ */
+export const WATERMARK_STRIP_BASE_HEIGHT = 36;
+const WATERMARK_STRIP_BASE_FONT_SIZE = 20;
+
+export interface WatermarkStripOptions {
+  /** 渲染倍率：1 = 基准高 36px；贴进 PDF 建议 2–3（缩放/打印后仍清晰）。默认 1。 */
+  scale?: number;
+  /**
+   * 可选：随包的开源字体（OFL/Apache，可商用）路径；只用于本次渲染，不复制、不再分发。
+   * 不给则用平台默认字体渲染，中文不可用时自动退回 ASCII 文案（与烧录水印同一套逻辑）。
+   */
+  fontPath?: string;
+  /** 字体族名；给了 `fontPath` 时按注册后的 family 用。 */
+  fontFamily?: string;
+  /** 底带透明度，默认 0.55；设 0 得到完全透明的背景（只画文字）。 */
+  scrimOpacity?: number;
+}
+
+interface ResolvedWatermarkLabel {
+  /** 实际要画的文案（中文字形不可用时是 ASCII 兜底文案）。 */
+  text: string;
+  /** 中文字体族（可能已退回 `sans-serif`）。 */
+  family: string;
+  /** 是否退回了 ASCII 文案。 */
+  asciiFallback: boolean;
+}
+
+/**
+ * 解析水印文案与字体（烧录水印与 PDF 水印条共用，避免两套字体查找逻辑漂移）。
+ *
+ * 字体只接受调用方显式给的路径或随包字体；不复制、不分发字体文件。
+ * 中文字形不可用时统一退回 `sans-serif` + shared 的 ASCII 文案。
+ */
+function resolveWatermarkLabel(
+  kind: ImageWatermarkKind,
+  fontPath?: string,
+  fontFamily?: string
+): ResolvedWatermarkLabel {
+  const label = imageWatermarkText(kind);
+  const asciiLabel = imageWatermarkAsciiText(kind);
+  let family = resolveWatermarkFamily(
+    label,
+    fontPath ?? bundledWatermarkFont(),
+    fontFamily
+  );
+  const asciiFallback = !cjkGlyphsAvailable(family, label);
+  if (asciiFallback) family = 'sans-serif';
+  return { text: asciiFallback ? asciiLabel : label, family, asciiFallback };
+}
+
+/**
+ * 渲染「水印条」PNG：透明/半透明底带 + 只有一行水印文案，宽度按文案自适应。
+ *
+ * 用途：带批注 PDF 的 AI 标识要**烧进像素**（图片对象贴到页面），而不是可选中、
+ * 可随手删掉的页脚文字。与 `burnImageWatermark` 共用同一套文案与字体解析逻辑，
+ * 像素高度按 `scale` 放大（默认 1 = 36px，PDF 调用方传 3），调用方按页面宽度等比缩放。
+ *
+ * 失败即抛 `WatermarkError`（fail-closed）：调用方不得把未标识的产物落盘。
+ */
+export async function renderWatermarkStrip(
+  kind: ImageWatermarkKind,
+  options: WatermarkStripOptions = {}
+): Promise<Uint8Array> {
+  const scale = options.scale ?? 1;
+  if (!Number.isFinite(scale) || scale <= 0 || scale > 8) {
+    throw new WatermarkError(`invalid watermark strip scale: ${String(options.scale)}`);
+  }
+  const scrimOpacity = options.scrimOpacity ?? 0.55;
+  if (!Number.isFinite(scrimOpacity) || scrimOpacity < 0 || scrimOpacity > 1) {
+    throw new WatermarkError('invalid watermark strip scrim opacity');
+  }
+  const { text, family } = resolveWatermarkLabel(kind, options.fontPath, options.fontFamily);
+
+  const fontSize = Math.max(8, Math.round(WATERMARK_STRIP_BASE_FONT_SIZE * scale));
+  const height = Math.max(16, Math.round(WATERMARK_STRIP_BASE_HEIGHT * scale));
+  const paddingX = Math.max(2, Math.round(fontSize * 0.5));
+  const font = `${fontSize}px ${family}`;
+
+  let width: number;
+  try {
+    const measure = createCanvas(1, 1).getContext('2d');
+    measure.font = font;
+    width = Math.max(1, Math.ceil(measure.measureText(text).width + paddingX * 2));
+  } catch (error) {
+    throw new WatermarkError(`failed to measure watermark text: ${(error as Error).message}`);
+  }
+
+  let png: Uint8Array;
+  try {
+    const canvas = createCanvas(width, height);
+    const context = canvas.getContext('2d');
+    // 画布默认全透明；scrimOpacity > 0 时铺一层半透明底带，让白字在任何底色上都可读。
+    if (scrimOpacity > 0) {
+      context.fillStyle = `rgba(0, 0, 0, ${scrimOpacity})`;
+      context.fillRect(0, 0, width, height);
+    }
+    context.font = font;
+    context.textBaseline = 'middle';
+    context.fillStyle = 'rgba(255, 255, 255, 0.95)';
+    context.fillText(text, paddingX, height / 2);
+    png = Uint8Array.from(canvas.toBuffer('image/png'));
+  } catch (error) {
+    throw new WatermarkError(`failed to encode watermark strip: ${(error as Error).message}`);
+  }
+  // 隐式标识同样写进这张小图：即便被单独抽出，PNG 里仍带 AIGC（AI 类）或 Source（OCR）。
+  for (const { keyword, value } of imageWatermarkMetadata(kind, text)) {
+    png = insertPngTextChunk(png, keyword, value);
+  }
+  return png;
+}
+
+/**
  * 烧录标准化水印。
  *
  * 失败即抛 `WatermarkError`（fail-closed）：调用方不得把未标识的图片当成功产物落盘。
@@ -241,17 +356,11 @@ export async function burnImageWatermark(
   image: Uint8Array,
   options: BurnWatermarkOptions
 ): Promise<BurnWatermarkResult> {
-  const label = imageWatermarkText(options.kind);
-  const asciiLabel = imageWatermarkAsciiText(options.kind);
-
-  let family = resolveWatermarkFamily(
-    label,
-    options.fontPath ?? bundledWatermarkFont(),
+  const { text, asciiFallback, family } = resolveWatermarkLabel(
+    options.kind,
+    options.fontPath,
     options.fontFamily
   );
-  const asciiFallback = !cjkGlyphsAvailable(family, label);
-  if (asciiFallback) family = 'sans-serif';
-  const text = asciiFallback ? asciiLabel : label;
 
   let canvas;
   let context;

@@ -21,6 +21,7 @@ import type {
   EmbeddingStatus,
   FolderOverview,
   FolderSummary,
+  FlowListResponse,
   FileHealthReport,
   BackupJobRecord,
   HealthResponse,
@@ -506,6 +507,8 @@ export interface ApiClient {
   /** 页遮罩重建索引的进度/状态（改规则后进度条与失败原因）。 */
   getMaskIndexStatus(documentId: string): Promise<MaskIndexStatus>;
   getSettings(): Promise<SettingsMap>;
+  /** 提示词分层 P1-2：只读列出 `<dataDir>/flows` 下的 L1 用户阅读流程。 */
+  listFlows(): Promise<FlowListResponse>;
   listProviders(): Promise<ProviderPreset[]>;
   getModelServices(): Promise<ModelServicesConfig>;
   getModelServicesImpact(connectionId: string): Promise<ModelServicesImpact>;
@@ -1662,6 +1665,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       ),
 
     getSettings: () => request<SettingsMap>('/settings'),
+    listFlows: () => request<FlowListResponse>('/flows'),
     listProviders: () => request<ProviderPreset[]>('/providers'),
     getModelServices: () => request<ModelServicesConfig>('/model-services'),
     getTokenizerStatus: () =>

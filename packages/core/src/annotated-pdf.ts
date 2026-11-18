@@ -5,16 +5,38 @@ import {
   PDFHexString,
   PDFName,
   PDFRef,
+  degrees,
   type PDFPage
 } from 'pdf-lib';
-import { looksLikeAiContent, markdownPlainText, type AnnotationRecord } from '@studianda/shared';
-import { AI_EXPORT_REFUSED_MESSAGE, isAiExportRefused } from './export-marker.js';
+import {
+  looksLikeAiContent,
+  markdownPlainText,
+  type AnnotationRecord,
+  type ImageWatermarkKind
+} from '@studianda/shared';
+import {
+  AI_EXPORT_REFUSED_MESSAGE,
+  AI_EXPORT_REFUSED_PHRASE,
+  isAiExportRefused
+} from './export-marker.js';
+import { renderWatermarkStrip } from './watermark.js';
 
 export interface AnnotatedPdfUnplacedDetail {
   id: string;
   page: number | null;
   reason: string;
   detail: string;
+}
+
+/**
+ * `buildAnnotatedPdf` 的可注入依赖。
+ *
+ * 生产路径全部用默认实现；`renderWatermarkStrip` 只为测试保留——用来模拟
+ * 「水印条生成失败 / 生成的不是合法 PNG」并验证 fail-closed 真的拒绝产出，而不是形同虚设。
+ */
+export interface AnnotatedPdfOptions {
+  /** 可选：注入水印条渲染函数（默认用 core 的 `renderWatermarkStrip`，scale=3）。 */
+  renderWatermarkStrip?: (kind: ImageWatermarkKind) => Promise<Uint8Array>;
 }
 
 export interface AnnotatedPdfResult {
@@ -49,6 +71,22 @@ const POPUP_HEIGHT = 160;
 const POPUP_GAP = 8;
 const TITLE = '勘读 · Studianda';
 const DETAIL_LIMIT = 50;
+
+/**
+ * 含 AI 内容的带批注 PDF：页脚「烧进像素」的图片水印参数。
+ *
+ * 批注里粘贴的 AI 内容可能是回答、译文或视觉识别文本，统一用 shared 的
+ * `generated` 文案（「AI 生成 · 勘读 Studianda」），不猜测具体来源类型。
+ */
+const AI_WATERMARK_KIND: ImageWatermarkKind = 'generated';
+/** 水印条宽度占页面可视宽度的比例（需求要求 22–28%）。 */
+const AI_WATERMARK_PAGE_WIDTH_RATIO = 0.24;
+/** 距页面可见边缘的留白比例（按短边算），避免贴边被裁切。 */
+const AI_WATERMARK_MARGIN_RATIO = 0.03;
+/** 贴到页面上的不透明度；图片本身仍有半透明底带，叠起来约 0.5。 */
+const AI_WATERMARK_OPACITY = 0.85;
+/** 水印条按 3x 渲染：嵌入的是高清位图，缩放/打印后文字边缘仍清楚。 */
+const AI_WATERMARK_STRIP_SCALE = 3;
 
 /**
  * 文件级失败（加密/损坏/占用/读写失败）统一包成中文：server 的 409 映射靠
@@ -91,6 +129,23 @@ function fileLevelExportError(error: unknown): Error {
   const wrapped = new Error(`${EXPORT_FAILURE_PREFIX}（${exportFailureReason(error)}）`);
   wrapped.name = 'AnnotatedPdfExportError';
   return wrapped;
+}
+
+/**
+ * 含 AI 内容的带批注 PDF 必须把图片水印真的写进每一页；任何一步（渲染水印条、
+ * embedPng、按页面尺寸贴图、写后核验）失败都拒绝产出。
+ *
+ * 文案保留 `AI_EXPORT_REFUSED_PHRASE`，server 据此映射 4xx 明确错误，而不是
+ * 笼统的 409「原文件未改动」；同时点明是「图片水印标识未能写入」。
+ */
+function aiWatermarkRefused(detail: string, error: unknown): Error {
+  const reason = error instanceof Error ? error.message : String(error);
+  const refused = new Error(
+    `${AI_EXPORT_REFUSED_PHRASE}：含 AI 生成内容，但图片水印标识未能写入（${detail}：` +
+      `${reason.trim().slice(0, 180)}）；为避免产出无标识文件，已中止导出。`
+  );
+  refused.name = 'AiExportRefusedError';
+  return refused;
 }
 
 /** 给用户看的未写入原因（REASON_TEXT）。 */
@@ -201,6 +256,175 @@ function pdfRect(box: VisibleBox, rect: PdfRect): PdfRect {
     box.left + x1 * box.width,
     box.bottom + (1 - y0) * box.height
   ];
+}
+
+export interface WatermarkPlacement {
+  /** `page.drawImage` 的 x（图片局部原点的用户空间坐标）。 */
+  x: number;
+  y: number;
+  /** 图片在版面视觉方向上的宽/高（pt）。 */
+  width: number;
+  height: number;
+  /** 逆时针旋转角：0 / 90 / 180 / 270。 */
+  rotate: number;
+  /** 图片在用户空间的轴对齐包围盒 [left, bottom, right, top]，供核验用。 */
+  bounds: PdfRect;
+}
+
+/**
+ * 计算图片水印在页面上的贴图位置（纯函数，便于单测）。
+ *
+ * 页面尺寸用**可见区域**（CropBox），并按 `/Rotate` 换成视觉方向：
+ * 90°/270° 时视觉宽高互换，水印仍落在**视觉右下角**且文字正立。
+ * 返回的 `rotate` 是给 pdf-lib 的逆时针角度（pdf-lib 的 `rotate` 以图片左下角为轴）。
+ */
+export function imageWatermarkPlacement(
+  box: { left: number; bottom: number; width: number; height: number },
+  rotation: number,
+  imageWidth: number,
+  imageHeight: number
+): WatermarkPlacement {
+  if (!(imageWidth > 0) || !(imageHeight > 0)) {
+    throw new Error('水印图片尺寸不合法');
+  }
+  if (!(box.width > 0) || !(box.height > 0)) {
+    throw new Error('页面可见区域不合法');
+  }
+  if (!Number.isFinite(rotation)) {
+    throw new Error('页面旋转角度不合法');
+  }
+  // /Rotate 必须是 90 的倍数；不是就拒绝（fail-closed），不要硬猜方向。
+  const angle = ((Math.round(rotation) % 360) + 360) % 360;
+  if (angle % 90 !== 0) {
+    throw new Error('页面旋转角度不合法');
+  }
+  const swapped = angle === 90 || angle === 270;
+  const visualWidth = swapped ? box.height : box.width;
+  const visualHeight = swapped ? box.width : box.height;
+  const margin = Math.max(4, Math.min(visualWidth, visualHeight) * AI_WATERMARK_MARGIN_RATIO);
+  const aspect = imageHeight / imageWidth;
+  // 宽度取页面可视宽度的 24%，纵横比由 PNG 决定；极扁页面再按可用高度收窄，避免越界。
+  const width = Math.min(
+    visualWidth * AI_WATERMARK_PAGE_WIDTH_RATIO,
+    Math.max(1, visualHeight - margin * 2) / aspect
+  );
+  const height = width * aspect;
+  const right = box.left + box.width;
+  const top = box.bottom + box.height;
+
+  switch (angle) {
+    case 0: {
+      const x = right - margin - width;
+      const y = box.bottom + margin;
+      return { x, y, width, height, rotate: 0, bounds: [x, y, x + width, y + height] };
+    }
+    case 90: {
+      // 视觉右下角 = 原始页右上角；图片局部 +x 转到用户空间 +y，局部 +y 转到 -x。
+      const x = right - margin;
+      const y = top - margin - width;
+      return {
+        x,
+        y,
+        width,
+        height,
+        rotate: 90,
+        bounds: [x - height, y, x, y + width]
+      };
+    }
+    case 180: {
+      // 视觉右下角 = 原始页左上角；整张图倒转 180°。
+      const x = box.left + margin + width;
+      const y = top - margin;
+      return {
+        x,
+        y,
+        width,
+        height,
+        rotate: 180,
+        bounds: [box.left + margin, y - height, x, y]
+      };
+    }
+    default: {
+      // 270°：视觉右下角 = 原始页左下角；图片局部 +x 转到用户空间 -y。
+      const x = box.left + margin;
+      const y = box.bottom + margin + width;
+      return {
+        x,
+        y,
+        width,
+        height,
+        rotate: 270,
+        bounds: [x, y - width, x + height, y]
+      };
+    }
+  }
+}
+
+/** 页面资源里的 /XObject 数量（画图片水印前后各数一次，用于写后核验）。 */
+function xObjectCount(page: PDFPage): number {
+  const resources = page.node.Resources();
+  if (!(resources instanceof PDFDict)) return 0;
+  const xobjects = resources.lookupMaybe(PDFName.of('XObject'), PDFDict);
+  return xobjects ? xobjects.keys().length : 0;
+}
+
+/**
+ * 把 AI 图片水印条贴到**每一页**右下角（按页面实际 CropBox 尺寸与 /Rotate 计算）。
+ *
+ * fail-closed：渲染、embed、逐页贴图任一失败都抛「拒绝导出」错误；
+ * 贴完再逐页核验 /XObject 数量确实 +1，防止某页静默漏写。
+ */
+async function addAiWatermarkToEveryPage(
+  pdf: PDFDocument,
+  renderStrip: (kind: ImageWatermarkKind) => Promise<Uint8Array>
+): Promise<void> {
+  let strip: Uint8Array;
+  try {
+    strip = await renderStrip(AI_WATERMARK_KIND);
+  } catch (error) {
+    throw aiWatermarkRefused('水印条渲染失败', error);
+  }
+  if (!(strip instanceof Uint8Array) || strip.byteLength === 0) {
+    throw aiWatermarkRefused('水印条为空', new Error('renderWatermarkStrip 返回空字节'));
+  }
+  let image;
+  try {
+    image = await pdf.embedPng(strip);
+  } catch (error) {
+    throw aiWatermarkRefused('水印图片嵌入失败', error);
+  }
+
+  const pages = pdf.getPages();
+  const before = pages.map((page) => xObjectCount(page));
+  try {
+    pages.forEach((page, index) => {
+      const box = visibleBoxOf(page);
+      if (!box) throw new Error(`第 ${index + 1} 页的可见区域不合法`);
+      const rotation = rotationOf(page);
+      if (rotation === null) throw new Error(`第 ${index + 1} 页的旋转角度无法确定`);
+      const placement = imageWatermarkPlacement(box, rotation, image.width, image.height);
+      page.drawImage(image, {
+        x: placement.x,
+        y: placement.y,
+        width: placement.width,
+        height: placement.height,
+        rotate: degrees(placement.rotate),
+        opacity: AI_WATERMARK_OPACITY
+      });
+    });
+  } catch (error) {
+    throw aiWatermarkRefused('水印未写入每一页', error);
+  }
+
+  pages.forEach((page, index) => {
+    const expected = (before[index] ?? 0) + 1;
+    if (xObjectCount(page) !== expected) {
+      throw aiWatermarkRefused(
+        `第 ${index + 1} 页水印核验失败`,
+        new Error(`/XObject 数量应为 ${expected}`)
+      );
+    }
+  });
 }
 
 /** /QuadPoints 顺序：上左、上右、下左、下右。 */
@@ -329,14 +553,19 @@ function messageOf(
 }
 
 /**
- * 批注里是否出现了「AI 内容」的标识。
+ * 批注里是否含「AI 内容」。
  *
- * 「复制回答 / 复制译文 / 复制识别文本」都会强制在末尾追加带「不得删除、篡改或隐匿本标识」
- * 的标识文字；用户把它粘进批注后，这段文字会留在批注正文里。存为笔记的 AI 文件头还带
- * `<!-- AI-generated by Studianda` 注释。命中任一标记即认为这份 PDF 含 AI 生成内容。
+ * 判定「字段优先、文本兜底」：
+ * - `origin === 'ai'`：系统把 AI 译文/识别结果写进批注时落的来源字段，即使用户删掉
+ *   正文里的标识文字仍然可靠（这正是只靠文本判断的盲区）；
+ * - 文本兜底：迁移前的老批注没有 origin 字段，用户从「复制回答 / 复制译文 / 复制识别
+ *   文本」粘进来的内容会带「不得删除、篡改或隐匿本标识」的标识文字，命中任一标记
+ *   仍按 AI 内容处理。
  */
 function hasAiContentInAnnotations(annotations: AnnotationRecord[]): boolean {
-  return annotations.some((annotation) => looksLikeAiContent(annotation.content));
+  return annotations.some(
+    (annotation) => annotation.origin === 'ai' || looksLikeAiContent(annotation.content)
+  );
 }
 
 /**
@@ -401,7 +630,8 @@ export function assertAiMetadataWritten(pdf: PDFDocument): void {
 /** 生成带批注的 PDF 副本；原文件字节不改。文件级失败包成中文 409 话术。 */
 export async function buildAnnotatedPdf(
   original: Uint8Array | null | undefined,
-  annotations: AnnotationRecord[]
+  annotations: AnnotationRecord[],
+  options: AnnotatedPdfOptions = {}
 ): Promise<AnnotatedPdfResult> {
   if (!original || !(original instanceof Uint8Array) || original.byteLength === 0) {
     throw fileLevelExportError(new Error('没有读到原文件内容'));
@@ -587,9 +817,16 @@ export async function buildAnnotatedPdf(
 
   let bytes: Uint8Array;
   try {
-    // 批注里若含 AI 回答/译文（带复制标识），副本一并写入 AI 元数据，与 Markdown 导出口径一致。
-    // 写入后必须核验元数据真的存在：写不进就拒绝产出（fail-closed），绝不生成无标识副本。
+    // 批注里若含 AI 回答/译文（带复制标识），副本一并写入 AI 元数据与页脚图片水印，
+    // 与 Markdown 导出口径一致。显式标识是「烧进像素」的图片对象，不是可选中删除的文本。
+    // 写入后必须核验元数据与逐页图片都真的存在：写不进就拒绝产出（fail-closed），
+    // 绝不生成无标识副本。
     if (hasAiContentInAnnotations(annotations)) {
+      await addAiWatermarkToEveryPage(
+        pdf,
+        options.renderWatermarkStrip ??
+          ((kind) => renderWatermarkStrip(kind, { scale: AI_WATERMARK_STRIP_SCALE }))
+      );
       markAiMetadata(pdf);
       assertAiMetadataWritten(pdf);
     }

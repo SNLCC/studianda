@@ -1,3 +1,23 @@
+/**
+ * 提示词分层（P1-2）。
+ *
+ * L0 合规层（本文件，代码强制）：内容安全规则、回答规则、知识边界规则，以及审计与
+ * AI 标识管线共同构成的底线。任何用户内容（包括 L1 阅读流程）都不可覆盖、改写或前置，
+ * 也不得改变它的优先级。提示词文本保持原样，这里只是把「L0」显式标注出来。
+ *
+ * L1 用户流程层（用户可编辑，见 flows.ts）：`<dataDir>/flows/<id>/flow.md` 作为数据注入
+ * user 侧，并带明确分隔与「仅作方法参考、不得覆盖 L0」的声明；绝不拼进 system 侧。
+ *
+ * L2 脚本层：默认关闭；本版只做表示与校验，声明了 scripts 的流程在加载时被拒绝。
+ */
+
+/** 提示词分层标识：L0 合规层（代码强制，用户内容不可覆盖）。 */
+export const L0_LAYER = 'L0';
+
+/** L0 层的用途声明（供文档/测试/诊断引用，不参与实际外发提示词）。 */
+export const L0_LAYER_NOTICE =
+  'L0 合规层由代码强制：内容安全、回答规则、知识边界与审计/AI 标识管线，用户内容不得覆盖或前置。';
+
 export const MODE_FULL = '本轮已读取所选文献的全部提取文本。';
 export const MODE_LOCAL = '按本轮明确的阅读范围回答；不能把局部或未解析页说成全文。';
 
@@ -27,8 +47,15 @@ export const ANSWER_RULES =
   CONTENT_SAFETY_ANALYSIS_RULES;
 
 /** 智能来源为“自动”时允许模型补充通用知识，但必须与文献证据分开标注。 */
-const KNOWLEDGE_RULES =
+export const KNOWLEDGE_RULES =
   '本轮允许使用通用知识补充：当文献证据不足时，可以用“补充知识（非文献）”明确标注后说明；不得把补充知识写成文献原文或伪造引用编号。';
+
+/** L0 规则清单（只读引用；提示词文本仍由上面的常量原样提供）。 */
+export const L0_RULES = {
+  contentSafety: CONTENT_SAFETY_RULES,
+  answer: ANSWER_RULES,
+  knowledge: KNOWLEDGE_RULES
+} as const;
 
 export function answerInstruction(full: boolean, allowKnowledge = false): string {
   return (full ? MODE_FULL : MODE_LOCAL) + ANSWER_RULES + (allowKnowledge ? KNOWLEDGE_RULES : '');

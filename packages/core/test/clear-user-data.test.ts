@@ -2,11 +2,32 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PDFDocument } from 'pdf-lib';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ClearUserDataResult } from '@studianda/shared';
 import { SecretStore } from '../src/secrets.js';
 import { buildServer } from '../src/server.js';
 import { Store } from '../src/store.js';
+
+// 「文件被占用」在 CI（Windows）上不稳定复现：仅对 `flows/` 下的删除操作注入 EBUSY/EPERM，
+// 其余路径照常走真实 fs，用来验证残留路径被记录而不是让整次清空抛错。
+const fsMock = vi.hoisted(() => ({ failFlowsDelete: false }));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  const isFlowsPath = (target: unknown): boolean =>
+    fsMock.failFlowsDelete && /(^|[\\/])flows([\\/]|$)/.test(String(target));
+  return {
+    ...actual,
+    rmSync: ((target: Parameters<typeof actual.rmSync>[0], options?: Parameters<typeof actual.rmSync>[1]) => {
+      if (isFlowsPath(target)) throw Object.assign(new Error('EBUSY: resource busy'), { code: 'EBUSY' });
+      return actual.rmSync(target, options);
+    }) as typeof actual.rmSync,
+    unlinkSync: ((target: Parameters<typeof actual.unlinkSync>[0]) => {
+      if (isFlowsPath(target)) throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+      return actual.unlinkSync(target);
+    }) as typeof actual.unlinkSync
+  };
+});
 
 /**
  * 清空全部本地用户数据（合规整改 P1-6）。
@@ -118,6 +139,19 @@ beforeAll(async () => {
   );
   mkdirSync(path.join(dataDir, 'diagnostics'), { recursive: true });
   writeFileSync(path.join(dataDir, 'diagnostics', 'studianda-diagnostics-a.zip'), 'diag');
+  // 用户自定义阅读流程（flows/<id>/flow.json + flow.md）：清空时整目录删除。
+  mkdirSync(path.join(dataDir, 'flows', 'my-reading'), { recursive: true });
+  writeFileSync(path.join(dataDir, 'flows', 'my-reading', 'flow.md'), '# 我的读法\n');
+  writeFileSync(
+    path.join(dataDir, 'flows', 'my-reading', 'flow.json'),
+    JSON.stringify({
+      id: 'my-reading',
+      name: '我的读法',
+      version: 1,
+      updated_at: '2026-11-18T00:00:00Z',
+      sha256: '0'.repeat(64)
+    })
+  );
   mkdirSync(path.join(dataDir, 'cache', 'retrieval-index'), { recursive: true });
   writeFileSync(path.join(dataDir, 'cache', 'retrieval-index', 'digest.json'), '{}');
   // 上传临时文件与 Markdown 扫描/导入结果文件（可能含用户笔记路径/报告）。
@@ -204,6 +238,10 @@ describe('POST /api/v1/maintenance/clear-user-data', () => {
     expect(readdirSync(path.join(dataDir, 'backups'))).toHaveLength(0);
     expect(readdirSync(path.join(dataDir, 'migration-backups'))).toHaveLength(0);
     expect(readdirSync(path.join(dataDir, 'diagnostics'))).toHaveLength(0);
+    expect(existsSync(path.join(dataDir, 'flows'))).toBe(false);
+    expect(existsSync(path.join(dataDir, 'flows', 'my-reading', 'flow.md'))).toBe(false);
+    expect(existsSync(path.join(dataDir, 'flows', 'my-reading', 'flow.json'))).toBe(false);
+    expect(body.failed).toEqual([]);
     expect(existsSync(path.join(dataDir, 'cache'))).toBe(false);
     expect(readdirSync(path.join(dataDir, 'imports'))).toHaveLength(0);
     expect(existsSync(path.join(dataDir, 'markdown-scan-result.json.gz'))).toBe(false);
@@ -225,5 +263,29 @@ describe('POST /api/v1/maintenance/clear-user-data', () => {
     // 数据库文件本身没有被删（Windows 上打开的文件删不掉），清空后仍可正常读写。
     expect(existsSync(path.join(dataDir, 'reader.sqlite3'))).toBe(true);
     expect(store.createFolder('清空后新建')).toMatchObject({ name: '清空后新建' });
+  });
+});
+
+describe('flows 文件被占用时', () => {
+  it('把删不掉的 flows 文件路径记进 failed，而不是让清空抛错', () => {
+    const lockedDataDir = mkdtempSync(path.join(tmpdir(), 'studianda-clear-user-data-locked-'));
+    const lockedStore = new Store(lockedDataDir);
+    try {
+      mkdirSync(path.join(lockedDataDir, 'flows', 'my-reading'), { recursive: true });
+      writeFileSync(path.join(lockedDataDir, 'flows', 'my-reading', 'flow.md'), '# 被占用');
+      writeFileSync(path.join(lockedDataDir, 'flows', 'my-reading', 'flow.json'), '{}');
+      fsMock.failFlowsDelete = true;
+      const result = lockedStore.clearUserData();
+      expect(result.ok).toBe(true);
+      expect(result.failed).toEqual(
+        expect.arrayContaining(['flows/my-reading/flow.md', 'flows/my-reading/flow.json'])
+      );
+      // 模拟占用中：文件仍在，界面按 failed 列出的路径提示用户关闭占用程序后手动删除。
+      expect(existsSync(path.join(lockedDataDir, 'flows', 'my-reading', 'flow.md'))).toBe(true);
+    } finally {
+      fsMock.failFlowsDelete = false;
+      lockedStore.close();
+      rmSync(lockedDataDir, { recursive: true, force: true });
+    }
   });
 });

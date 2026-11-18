@@ -4,13 +4,37 @@
     "PUT /api/v1/documents/:p/navigation",
     "GET /api/v1/secrets/status",
     "POST /api/v1/secrets",
-    "DELETE /api/v1/secrets/:p"
+    "DELETE /api/v1/secrets/:p",
+    "GET /api/v1/projects",
+    "POST /api/v1/projects",
+    "PATCH /api/v1/projects/:p",
+    "DELETE /api/v1/projects/:p",
+    "GET /api/v1/projects/:p/documents",
+    "POST /api/v1/projects/:p/documents",
+    "DELETE /api/v1/projects/:p/documents/:p",
+    "GET /api/v1/corpus-sessions",
+    "POST /api/v1/corpus-sessions",
+    "GET /api/v1/corpus-sessions/:p/messages",
+    "POST /api/v1/corpus-sessions/:p/ask",
+    "DELETE /api/v1/corpus-sessions/:p"
   ],
   "reason": {
     "DELETE /api/v1/documents/:p/navigation": "兼容保留：整页导航覆盖接口；新客户端只用 POST /navigation/entries，保留路由以便旧数据兼容。",
     "PUT /api/v1/documents/:p/navigation": "兼容保留：整页覆盖接口；新客户端只用 POST /navigation/entries。",
     "GET /api/v1/secrets/status": "壳专用：桌面主进程用 Electron safeStorage 管理密钥，通过 IPC 读取状态，不经 api-client。",
     "POST /api/v1/secrets": "壳专用：桌面主进程启动 Core 后经本机 HTTP 推送解密后的密钥；Host 接入时补进共享客户端。",
-    "DELETE /api/v1/secrets/:p": "壳专用：桌面主进程直接删除 safeStorage 中的条目，不经 Core。"
+    "DELETE /api/v1/secrets/:p": "壳专用：桌面主进程直接删除 safeStorage 中的条目，不经 Core。",
+    "GET /api/v1/projects": "逻辑项目（schema 22）本版只交付数据层 + 服务端接口，前端与 api-client 接入在下一轮；届时从白名单删除。",
+    "POST /api/v1/projects": "逻辑项目（schema 22）本版只交付数据层 + 服务端接口，前端与 api-client 接入在下一轮；届时从白名单删除。",
+    "PATCH /api/v1/projects/:p": "逻辑项目（schema 22）本版只交付数据层 + 服务端接口，前端与 api-client 接入在下一轮；届时从白名单删除。",
+    "DELETE /api/v1/projects/:p": "逻辑项目（schema 22）本版只交付数据层 + 服务端接口，前端与 api-client 接入在下一轮；届时从白名单删除。",
+    "GET /api/v1/projects/:p/documents": "逻辑项目（schema 22）本版只交付数据层 + 服务端接口，前端与 api-client 接入在下一轮；届时从白名单删除。",
+    "POST /api/v1/projects/:p/documents": "逻辑项目（schema 22）本版只交付数据层 + 服务端接口，前端与 api-client 接入在下一轮；届时从白名单删除。",
+    "DELETE /api/v1/projects/:p/documents/:p": "逻辑项目（schema 22）本版只交付数据层 + 服务端接口，前端与 api-client 接入在下一轮；届时从白名单删除。",
+    "GET /api/v1/corpus-sessions": "跨文献会话（schema 23）本版只交付数据层 + 服务端接口，api-client 与前端接入在下一轮；届时从白名单删除。",
+    "POST /api/v1/corpus-sessions": "跨文献会话（schema 23）本版只交付数据层 + 服务端接口，api-client 与前端接入在下一轮；届时从白名单删除。",
+    "GET /api/v1/corpus-sessions/:p/messages": "跨文献会话（schema 23）本版只交付数据层 + 服务端接口，api-client 与前端接入在下一轮；届时从白名单删除。",
+    "POST /api/v1/corpus-sessions/:p/ask": "跨文献会话（schema 23）本版只交付数据层 + 服务端接口，api-client 与前端接入在下一轮；届时从白名单删除。",
+    "DELETE /api/v1/corpus-sessions/:p": "跨文献会话（schema 23）本版只交付数据层 + 服务端接口，api-client 与前端接入在下一轮；届时从白名单删除。"
   }
 }

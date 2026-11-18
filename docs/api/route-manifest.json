@@ -3,15 +3,16 @@
   "apiVersion": 1,
   "note": "由 scripts/check-contract.mjs 生成；不要手工编辑。",
   "counts": {
-    "serverRoutes": 210,
-    "clientRoutes": 205,
-    "missingFromClient": 5,
+    "serverRoutes": 223,
+    "clientRoutes": 206,
+    "missingFromClient": 17,
     "clientOnly": 0,
-    "allowlistedMissing": 5
+    "allowlistedMissing": 17
   },
   "serverRoutes": [
     "DELETE /api/v1/annotations/:p",
     "DELETE /api/v1/annotations/:p/purge",
+    "DELETE /api/v1/corpus-sessions/:p",
     "DELETE /api/v1/documents/:p",
     "DELETE /api/v1/documents/:p/book-summary",
     "DELETE /api/v1/documents/:p/chat-sessions/:p",
@@ -23,10 +24,14 @@
     "DELETE /api/v1/notes/:p",
     "DELETE /api/v1/notes/:p/purge",
     "DELETE /api/v1/notes/folders",
+    "DELETE /api/v1/projects/:p",
+    "DELETE /api/v1/projects/:p/documents/:p",
     "DELETE /api/v1/secrets/:p",
     "GET /api/v1/backlinks",
     "GET /api/v1/backups",
     "GET /api/v1/backups/jobs/:p",
+    "GET /api/v1/corpus-sessions",
+    "GET /api/v1/corpus-sessions/:p/messages",
     "GET /api/v1/diagnostics",
     "GET /api/v1/documents",
     "GET /api/v1/documents/:p",
@@ -68,6 +73,7 @@
     "GET /api/v1/documents/:p/visual-nodes",
     "GET /api/v1/documents/import/jobs/:p",
     "GET /api/v1/embeddings/status",
+    "GET /api/v1/flows",
     "GET /api/v1/folders",
     "GET /api/v1/health",
     "GET /api/v1/library-search",
@@ -92,6 +98,8 @@
     "GET /api/v1/notes/tags",
     "GET /api/v1/parsing/config",
     "GET /api/v1/parsing/ocr-languages",
+    "GET /api/v1/projects",
+    "GET /api/v1/projects/:p/documents",
     "GET /api/v1/providers",
     "GET /api/v1/reference-graph",
     "GET /api/v1/search",
@@ -117,6 +125,7 @@
     "PATCH /api/v1/folders/:p",
     "PATCH /api/v1/notes/:p",
     "PATCH /api/v1/notes/:p/folder",
+    "PATCH /api/v1/projects/:p",
     "POST /api/v1/annotations",
     "POST /api/v1/annotations/:p/restore",
     "POST /api/v1/backups",
@@ -127,6 +136,8 @@
     "POST /api/v1/chat/ask",
     "POST /api/v1/chat/ask/stream",
     "POST /api/v1/chat/budget",
+    "POST /api/v1/corpus-sessions",
+    "POST /api/v1/corpus-sessions/:p/ask",
     "POST /api/v1/documents",
     "POST /api/v1/documents/:p/book-summary/cancel",
     "POST /api/v1/documents/:p/book-summary/start",
@@ -192,6 +203,8 @@
     "POST /api/v1/parsing/ocr-languages/download",
     "POST /api/v1/plan",
     "POST /api/v1/plan-reading",
+    "POST /api/v1/projects",
+    "POST /api/v1/projects/:p/documents",
     "POST /api/v1/search",
     "POST /api/v1/search-plan",
     "POST /api/v1/secrets",
@@ -222,24 +235,84 @@
     "PUT /api/v1/zotero/config"
   ],
   "missingFromClient": [
+    "DELETE /api/v1/corpus-sessions/:p",
     "DELETE /api/v1/documents/:p/navigation",
+    "DELETE /api/v1/projects/:p",
+    "DELETE /api/v1/projects/:p/documents/:p",
     "DELETE /api/v1/secrets/:p",
+    "GET /api/v1/corpus-sessions",
+    "GET /api/v1/corpus-sessions/:p/messages",
+    "GET /api/v1/projects",
+    "GET /api/v1/projects/:p/documents",
     "GET /api/v1/secrets/status",
+    "PATCH /api/v1/projects/:p",
+    "POST /api/v1/corpus-sessions",
+    "POST /api/v1/corpus-sessions/:p/ask",
+    "POST /api/v1/projects",
+    "POST /api/v1/projects/:p/documents",
     "POST /api/v1/secrets",
     "PUT /api/v1/documents/:p/navigation"
   ],
   "allowlistedMissing": [
     {
+      "entry": "DELETE /api/v1/corpus-sessions/:p",
+      "reason": "跨文献会话（schema 23）本版只交付数据层 + 服务端接口，api-client 与前端接入在下一轮；届时从白名单删除。"
+    },
+    {
       "entry": "DELETE /api/v1/documents/:p/navigation",
       "reason": "兼容保留：整页导航覆盖接口；新客户端只用 POST /navigation/entries，保留路由以便旧数据兼容。"
+    },
+    {
+      "entry": "DELETE /api/v1/projects/:p",
+      "reason": "逻辑项目（schema 22）本版只交付数据层 + 服务端接口，前端与 api-client 接入在下一轮；届时从白名单删除。"
+    },
+    {
+      "entry": "DELETE /api/v1/projects/:p/documents/:p",
+      "reason": "逻辑项目（schema 22）本版只交付数据层 + 服务端接口，前端与 api-client 接入在下一轮；届时从白名单删除。"
     },
     {
       "entry": "DELETE /api/v1/secrets/:p",
       "reason": "壳专用：桌面主进程直接删除 safeStorage 中的条目，不经 Core。"
     },
     {
+      "entry": "GET /api/v1/corpus-sessions",
+      "reason": "跨文献会话（schema 23）本版只交付数据层 + 服务端接口，api-client 与前端接入在下一轮；届时从白名单删除。"
+    },
+    {
+      "entry": "GET /api/v1/corpus-sessions/:p/messages",
+      "reason": "跨文献会话（schema 23）本版只交付数据层 + 服务端接口，api-client 与前端接入在下一轮；届时从白名单删除。"
+    },
+    {
+      "entry": "GET /api/v1/projects",
+      "reason": "逻辑项目（schema 22）本版只交付数据层 + 服务端接口，前端与 api-client 接入在下一轮；届时从白名单删除。"
+    },
+    {
+      "entry": "GET /api/v1/projects/:p/documents",
+      "reason": "逻辑项目（schema 22）本版只交付数据层 + 服务端接口，前端与 api-client 接入在下一轮；届时从白名单删除。"
+    },
+    {
       "entry": "GET /api/v1/secrets/status",
       "reason": "壳专用：桌面主进程用 Electron safeStorage 管理密钥，通过 IPC 读取状态，不经 api-client。"
+    },
+    {
+      "entry": "PATCH /api/v1/projects/:p",
+      "reason": "逻辑项目（schema 22）本版只交付数据层 + 服务端接口，前端与 api-client 接入在下一轮；届时从白名单删除。"
+    },
+    {
+      "entry": "POST /api/v1/corpus-sessions",
+      "reason": "跨文献会话（schema 23）本版只交付数据层 + 服务端接口，api-client 与前端接入在下一轮；届时从白名单删除。"
+    },
+    {
+      "entry": "POST /api/v1/corpus-sessions/:p/ask",
+      "reason": "跨文献会话（schema 23）本版只交付数据层 + 服务端接口，api-client 与前端接入在下一轮；届时从白名单删除。"
+    },
+    {
+      "entry": "POST /api/v1/projects",
+      "reason": "逻辑项目（schema 22）本版只交付数据层 + 服务端接口，前端与 api-client 接入在下一轮；届时从白名单删除。"
+    },
+    {
+      "entry": "POST /api/v1/projects/:p/documents",
+      "reason": "逻辑项目（schema 22）本版只交付数据层 + 服务端接口，前端与 api-client 接入在下一轮；届时从白名单删除。"
     },
     {
       "entry": "POST /api/v1/secrets",

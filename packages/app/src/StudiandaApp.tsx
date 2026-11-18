@@ -7809,13 +7809,16 @@ function ReaderView({
         page: source.page,
         quote: source.locate || source.quotes?.[0] || source.snippet.slice(0, 200),
         content: markdown,
-        externalKey
+        externalKey,
+        // 系统代写的 AI 回答：落库标记来源。导出判定优先读该字段，用户删掉正文里的
+        // AI 标识文字后仍会被识别为 AI 内容（文本兜底只覆盖迁移前的老数据）。
+        origin: 'ai'
       });
       void queryClient.invalidateQueries({ queryKey: ['notes'] });
       return;
     }
     // 独立笔记：走同一个 /notes 接口（documentId=''），externalKey 才能一起带上做去重。
-    await api.createNote({ documentId: '', page: 0, content: markdown, externalKey });
+    await api.createNote({ documentId: '', page: 0, content: markdown, externalKey, origin: 'ai' });
     void queryClient.invalidateQueries({ queryKey: ['standalone-notes'] });
   };
 

@@ -4,7 +4,8 @@ import type {
   ChatSource,
   CorpusDocumentReport,
   DiscoveryReportRecord,
-  ReadingPlanRecord
+  ReadingPlanRecord,
+  SkippedFlowRecord
 } from '@studianda/shared';
 import { FAILED_ANSWER_PREFIX } from '@studianda/shared';
 import { ensureAutoOcr } from './ocr.js';
@@ -45,6 +46,7 @@ import {
   type AuditReport
 } from './audit.js';
 import { answerInstruction } from './prompts.js';
+import { composeFlowInstruction, loadFlows } from './flows.js';
 import { contrastPages, falsificationReport } from './falsify.js';
 import { REREAD_SKIPPED_NOTE, worthRereading } from './reread.js';
 import { inputCost, messages, PER_MESSAGE_COST } from './request-budget.js';
@@ -821,6 +823,28 @@ export async function callChatModel(
   throw truncated ?? new ModelResponseFormatError('模型没有返回可显示的正文。');
 }
 
+/**
+ * L1 流程结果 → 响应字段。
+ *
+ * 无流程时不返回这两个字段（与未接入提示词分层前的响应一致）；有失效流程时
+ * 即使没有成功注入的流程也返回 skipped_flows，让用户知道为什么没生效。
+ */
+export function flowResponseFields(flows: {
+  applied: string[];
+  skipped: SkippedFlowRecord[];
+}): Pick<ChatResponse, 'applied_flows' | 'skipped_flows'> {
+  const fields: Pick<ChatResponse, 'applied_flows' | 'skipped_flows'> = {};
+  if (flows.applied.length > 0) fields.applied_flows = flows.applied;
+  if (flows.skipped.length > 0) fields.skipped_flows = flows.skipped;
+  return fields;
+}
+
+/** 读取并装配本机 L1 流程（无目录/无有效流程时 text 为空串）。 */
+function flowCompositionFor(store: Store): ReturnType<typeof composeFlowInstruction> {
+  const loaded = loadFlows(store.dataDir);
+  return composeFlowInstruction(loaded.flows, loaded.skipped);
+}
+
 async function synthesize(
   store: Store,
   config: ReadingChatConfig,
@@ -854,8 +878,14 @@ async function synthesize(
   historyDropped: number;
   /** 本轮综合**实际送入模型**的材料原文（多批/续读用于 coverage.final_context）。 */
   finalContext: string;
+  /** L1 用户阅读流程的注入结果（无流程时 applied/skipped 都为空）。 */
+  flows: { applied: string[]; skipped: SkippedFlowRecord[] };
 }> {
   const baseInstruction = answerInstruction(full, allowKnowledge);
+  // 提示词分层 P1-2：L1 用户阅读流程只作为 data 追加到 user 侧材料末尾（带分隔与声明），
+  // 绝不拼进 system；L0 合规层由 answerInstruction 原样提供，用户流程无法覆盖或前置。
+  const flowInstruction = flowCompositionFor(store);
+  const flowBlock = flowInstruction.text ? `\n\n${flowInstruction.text}` : '';
   // 笔记/批注是补充材料：容量不足时先缩短派生分析、再丢它，不能让它挤掉逐字证据，
   // 也不能因为附了笔记把原本能回答的请求顶成"超出上下文容量"。
   let instruction =
@@ -887,7 +917,8 @@ async function synthesize(
       `分批阅读记录（派生资料，不是原文；引号内摘引才是逐字核验内容）：\n${readingRecords}\n\n` +
       `verified_quotes：\n${verified}` +
       (visualMaterial ? `\n\n${visualMaterial}` : '') +
-      memory
+      memory +
+      flowBlock
     );
   };
   // 材料 room 跟随会话模型的「手动容量」；auto/未配置模型时 chatInputLimit 与
@@ -968,7 +999,8 @@ async function synthesize(
     historyDropped: preparedHistory.dropped,
     // 多批/续读总是保存**实际送入**的完整材料
     // （无长度门限、不截断成假内容）；单遍仍由调用方不写 coverage.final_context（值为空串）。
-    finalContext: material
+    finalContext: material,
+    flows: { applied: flowInstruction.applied, skipped: flowInstruction.skipped }
   };
 }
 
@@ -2405,6 +2437,8 @@ export async function answerWithCorpus(
   return {
     answer: auditedAnswer,
     sources: allSources,
+    // L1 用户阅读流程：只报告实际注入/跳过的，不改变 L0 与原有字段语义。
+    ...flowResponseFields(synthesized.flows),
     plan,
     reading_scope: 'corpus',
     // 继续阅读所需信息：任务编号 + 剩余页；全部读完时任务已销掉，不再显示继续入口。
@@ -2800,6 +2834,7 @@ export async function answerWithReading(
       return {
         answer: synthesized.answer,
         sources: synthesized.sources,
+        ...flowResponseFields(synthesized.flows),
         plan: continuePlan,
         ...continueFields,
         unread_pages: remaining,
@@ -3146,6 +3181,9 @@ export async function answerWithReading(
       plan.breadth === 'document' && unreadPages.length === 0 && qualityPages.length === 0,
       allowKnowledge
     );
+    // 提示词分层 P1-2：单遍路径同样把 L1 流程作为 data 追加到 user 材料（不进 system）。
+    const singleFlow = flowCompositionFor(store);
+    const singleFlowBlock = singleFlow.text ? `\n\n${singleFlow.text}` : '';
     let singleMemory = memoryMaterial ? `\n\n${memoryMaterial}` : '';
     // 网页背景比笔记更"可丢"：容量不够时先丢它（笔记是用户自己的记录，优先级更高）。
     let background = externalBackground;
@@ -3158,7 +3196,7 @@ export async function answerWithReading(
     const buildSingleMaterial = (memory = singleMemory): string =>
       `问题：${question}${selection ? `\n选文：${selection}` : ''}\n当前页：第 ${page} 页\n\n文献原文参考：\n${material}${
         visualText ? `\n\n${visualText}` : ''
-      }${memory}`;
+      }${memory}${singleFlowBlock}`;
     let singleMaterial = buildSingleMaterial();
     // 笔记/批注是补充材料：若因为附了它而超出输入上限，先丢补充材料再按原口径处理，
     // 不能把原本能回答的问题顶成「预计输入超出上限」。
@@ -3336,6 +3374,7 @@ export async function answerWithReading(
     return {
       answer: finalAnswer,
       sources: allSources,
+      ...flowResponseFields(singleFlow),
       plan: effectivePlan,
       falsify,
       gap_search: {
@@ -3825,6 +3864,7 @@ export async function answerWithReading(
   return {
     answer: finalAnswer,
     sources: allSources,
+    ...flowResponseFields(synthesized.flows),
     plan: effectivePlan,
     falsify,
     gap_search: {

@@ -41,8 +41,11 @@ import type {
   ChatMessageRecord,
   ChatSource,
   ClearUserDataResult,
+  ContentOrigin,
+  CorpusSessionRecord,
   CreateAnnotationInput,
   CreateNoteInput,
+  CreateProjectInput,
   DocumentChatSessionRecord,
   DocumentCategoryCounts,
   DocumentDetail,
@@ -63,6 +66,9 @@ import type {
   NoteFolderRecord,
   NotePurgeResult,
   NoteRecord,
+  ProjectDeleteResult,
+  ProjectDocumentRecord,
+  ProjectSummary,
   QuoteLocation,
   ReadingTaskSummary,
   ReferenceEntryInput,
@@ -78,7 +84,8 @@ import type {
   TranslationPageRecord,
   TranslationSegmentRecord,
   UpdateAnnotationInput,
-  UpdateNoteInput
+  UpdateNoteInput,
+  UpdateProjectInput
 } from '@studianda/shared';
 import {
   REFERENCE_GRAPH_ALL_NODE_LIMIT,
@@ -119,6 +126,16 @@ import {
 } from './structure.js';
 
 const NAV_SYNC_LIMIT = 80;
+
+/**
+ * 跨文献会话消息在 `messages` 表里的 document_id 哨兵：空串 = 不属于任何单篇文献。
+ *
+ * `messages` 确实绑了 document_id：既有读取/删除/编辑/摘要接口都先按 document_id 过滤，
+ * 而 `addMessage` 还要求该文献存在。跨文献会话没有单篇归属，所以复用该表时把 document_id
+ * 写成空串、只靠 session_id 归属：这些消息不会出现在任何单篇文献的阅读会话里，
+ * 单篇文献被彻底删除（purgeDocument 按 document_id 清 messages）时也不会误删它们。
+ */
+const CORPUS_MESSAGE_DOCUMENT_ID = '';
 
 function mapTranslationPage(row: Record<string, unknown>): TranslationPageRecord {
   return {
@@ -314,6 +331,11 @@ function parseTags(value: string): string[] {
   return [];
 }
 
+/** 项目名唯一索引冲突（node:sqlite message 形如 `UNIQUE constraint failed: projects.name`）。 */
+function isUniqueConstraintError(error: unknown): boolean {
+  return error instanceof Error && /UNIQUE constraint failed/i.test(error.message);
+}
+
 function toSummary(row: DocumentRow, dataDir: string): DocumentSummary {
   const fileState = fileStateOf(row, dataDir);
   const docType = row.doc_type ?? '';
@@ -353,6 +375,17 @@ interface NoteRow {
   created: string;
   folder_path?: string | null;
   tags?: string | null;
+  origin?: string | null;
+}
+
+/**
+ * 内容来源归一：只认 `'ai'`，其余（含迁移前没有 origin 列的老数据）一律 `'user'`。
+ *
+ * 与表列 `origin TEXT NOT NULL DEFAULT 'user'` 保持一致；老库迁移后靠文本兜底
+ * （`looksLikeAiContent`）识别历史 AI 内容，字段只覆盖系统写入路径。
+ */
+function normalizeContentOrigin(value: unknown): ContentOrigin {
+  return value === 'ai' ? 'ai' : 'user';
 }
 
 /** 笔记标签清洗：trim、去 `#`、去控制字符、去重（忽略大小写）、数量/长度上限。 */
@@ -415,6 +448,7 @@ function toNote(row: NoteRow): NoteRecord {
     quote: row.quote ?? '',
     content: row.content ?? '',
     created: row.created ?? '',
+    origin: normalizeContentOrigin(row.origin),
     folderPath: row.folder_path ?? '',
     tags: parseNoteTags(row.tags)
   };
@@ -431,6 +465,7 @@ interface AnnotationRow {
   style: string;
   created: string;
   deleted: number;
+  origin?: string | null;
 }
 
 function toAnnotation(row: AnnotationRow): AnnotationRecord {
@@ -443,7 +478,8 @@ function toAnnotation(row: AnnotationRow): AnnotationRecord {
     rects: row.rects ?? '',
     color: row.color ?? 'yellow',
     style: row.style ?? 'highlight',
-    created: row.created ?? ''
+    created: row.created ?? '',
+    origin: normalizeContentOrigin(row.origin)
   };
 }
 
@@ -1684,7 +1720,8 @@ export class Store {
         content: row.content ?? '',
         sources,
         metadata,
-        created: row.created
+        created: row.created,
+        ...(row.session_id ? { sessionId: row.session_id } : {})
       };
     });
     if (!sessionId) return messages;
@@ -2051,6 +2088,155 @@ export class Store {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // 跨文献（语料）会话（schema_version 23）：范围是建立时的文献 id 快照。
+  // document_chat_sessions 的主键与「一会话一篇文献」语义完全不变；这里是另一张表。
+  // 消息复用 messages：document_id 空串哨兵 + session_id，详见 CORPUS_MESSAGE_DOCUMENT_ID。
+  // ---------------------------------------------------------------------------
+
+  /** 读一个跨文献会话（含范围快照，按写入顺序）；不存在返回 null。 */
+  getCorpusSession(id: string): CorpusSessionRecord | null {
+    const row = this.db
+      .prepare(
+        'SELECT id, title, created_at, updated_at, archived_at FROM corpus_sessions WHERE id = ?'
+      )
+      .get(id) as
+      | {
+          id?: string;
+          title?: string | null;
+          created_at?: string | null;
+          updated_at?: string | null;
+          archived_at?: string | null;
+        }
+      | undefined;
+    if (!row?.id) return null;
+    const documents = this.db
+      .prepare('SELECT document_id FROM corpus_session_documents WHERE session_id = ? ORDER BY rowid')
+      .all(id) as unknown as Array<{ document_id?: string }>;
+    return {
+      id: String(row.id),
+      title: String(row.title ?? ''),
+      createdAt: String(row.created_at ?? ''),
+      updatedAt: String(row.updated_at ?? ''),
+      archivedAt: String(row.archived_at ?? ''),
+      documentIds: documents
+        .map((item) => String(item.document_id ?? ''))
+        .filter((documentId) => documentId.length > 0)
+    };
+  }
+
+  /** 列出跨文献会话（最近更新的在前；归档列本版只读不写）。 */
+  listCorpusSessions(): CorpusSessionRecord[] {
+    const rows = this.db
+      .prepare('SELECT id FROM corpus_sessions ORDER BY updated_at DESC, created_at DESC, id')
+      .all() as unknown as Array<{ id?: string }>;
+    return rows.flatMap((row) => {
+      const session = row.id ? this.getCorpusSession(String(row.id)) : null;
+      return session ? [session] : [];
+    });
+  }
+
+  /**
+   * 建跨文献会话：会话行 + 范围快照行同一事务写入。
+   *
+   * 只做去重/去空白，不校验文献是否存在——范围是用户的显式决定，当前已删除的文献也保留在
+   * 快照里（恢复后仍可读）；读取时跳过并如实报告，而不是建立时静默改写用户的快照。
+   */
+  createCorpusSession(title: string, documentIds: readonly string[]): CorpusSessionRecord {
+    const ids = [...new Set(documentIds.map((documentId) => documentId.trim()).filter(Boolean))];
+    if (ids.length === 0) throw new Error('至少需要一篇文献');
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db
+        .prepare(
+          'INSERT INTO corpus_sessions(id, title, created_at, updated_at, archived_at) VALUES (?, ?, ?, ?, ?)'
+        )
+        .run(id, title.trim().slice(0, 120), now, now, '');
+      const insertDocument = this.db.prepare(
+        'INSERT INTO corpus_session_documents(session_id, document_id) VALUES (?, ?)'
+      );
+      for (const documentId of ids) insertDocument.run(id, documentId);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    const created = this.getCorpusSession(id);
+    if (!created) throw new Error('创建跨文献会话后无法读取');
+    return created;
+  }
+
+  /** 追问/建会话后刷新 updated_at（列表按它排序）。 */
+  touchCorpusSession(id: string, at = new Date().toISOString()): void {
+    this.db.prepare('UPDATE corpus_sessions SET updated_at = ? WHERE id = ?').run(at, id);
+  }
+
+  /**
+   * 删跨文献会话：删消息（只删 document_id 空串、session_id 为该会话的行）+ 范围快照 + 会话行。
+   * 返回删除的消息条数；会话不存在返回 null。
+   */
+  deleteCorpusSession(id: string): number | null {
+    if (!this.getCorpusSession(id)) return null;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const result = this.db
+        .prepare('DELETE FROM messages WHERE document_id = ? AND session_id = ?')
+        .run(CORPUS_MESSAGE_DOCUMENT_ID, id);
+      this.db.prepare('DELETE FROM corpus_session_documents WHERE session_id = ?').run(id);
+      this.db.prepare('DELETE FROM corpus_sessions WHERE id = ?').run(id);
+      this.db.exec('COMMIT');
+      return Number(result.changes ?? 0);
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  /**
+   * 往跨文献会话里落一条消息（追问的 user 与回答的 assistant）。
+   *
+   * 直接写 messages，不用 `addMessage`：后者要求 document_id 对应一篇真实文献，而跨文献会话
+   * 的消息没有单篇归属。
+   */
+  addCorpusSessionMessage(input: {
+    sessionId: string;
+    role: 'user' | 'assistant';
+    content: string;
+    sources?: ChatSource[];
+    metadata?: Record<string, unknown>;
+  }): ChatMessageRecord {
+    if (!this.getCorpusSession(input.sessionId)) throw new Error('跨文献会话不存在');
+    const result = this.db
+      .prepare(
+        'INSERT INTO messages(document_id, role, content, sources, metadata, session_id) VALUES (?, ?, ?, ?, ?, ?)'
+      )
+      .run(
+        CORPUS_MESSAGE_DOCUMENT_ID,
+        input.role,
+        input.content,
+        JSON.stringify(input.sources ?? []),
+        JSON.stringify(input.metadata ?? {}),
+        input.sessionId
+      );
+    return {
+      id: Number(result.lastInsertRowid),
+      documentId: CORPUS_MESSAGE_DOCUMENT_ID,
+      role: input.role,
+      content: input.content,
+      sources: input.sources ?? [],
+      metadata: input.metadata ?? {},
+      created: new Date().toISOString(),
+      sessionId: input.sessionId
+    };
+  }
+
+  /** 读跨文献会话消息（按 id 升序；只按 session_id 归属，不会串到单篇文献或别的跨文献会话）。 */
+  listCorpusSessionMessages(sessionId: string): ChatMessageRecord[] {
+    return this.listMessages(CORPUS_MESSAGE_DOCUMENT_ID, { sessionId });
+  }
+
   deleteMessageIds(ids: readonly number[]): number {
     if (ids.length === 0) return 0;
     const remove = this.db.prepare('DELETE FROM messages WHERE id = ?');
@@ -2214,7 +2400,11 @@ export class Store {
     }
     // 备份必须在 BEGIN 之前（VACUUM INTO 不能在事务内执行）。
     // 20：基线新增全书摘要缓存 + 选区冻结快照（selection_snapshots）。
-    const currentVersion = 20;
+    // 21：notes/annotations 新增内容来源 origin（AI 生成标记不再只靠正文文本判断）。
+    // 22：新增逻辑项目 projects + 项目文献链接 project_documents（不绑目录，文献仍全局唯一）。
+    // 23：新增跨文献语料会话 corpus_sessions + 范围快照 corpus_session_documents（只建表，
+    //     消息复用 messages 的 session_id；document_chat_sessions 主键与语义不变）。
+    const currentVersion = 23;
     if (previousVersion > 0 && previousVersion < currentVersion) {
       this.backupBeforeMigration(previousVersion);
     }
@@ -2321,6 +2511,22 @@ export class Store {
     if (!noteColumns.has('manual_order')) {
       this.db.exec('ALTER TABLE notes ADD COLUMN manual_order REAL DEFAULT 0');
     }
+    // schema_version 20 → 21：内容来源（'ai' = 系统代写 AI 生成内容，'user' = 用户内容）。
+    // 老库先 ALTER 补列，默认 'user'；迁移前的 AI 笔记仍由导出时的文本兜底识别。
+    // NOT NULL + 常量默认值对 SQLite 的 ALTER ADD COLUMN 是合法写法，不需要重建表。
+    if (!noteColumns.has('origin')) {
+      this.db.exec("ALTER TABLE notes ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'");
+    }
+    // annotations 同样补 origin：AI 译文/识别结果写入批注时由系统置 'ai'。
+    // PRAGMA 单独查一次，避免和上面 notes 的列集合混用。
+    const annotationColumns = new Set(
+      (this.db.prepare('PRAGMA table_info(annotations)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    );
+    if (!annotationColumns.has('origin')) {
+      this.db.exec("ALTER TABLE annotations ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'");
+    }
     if (previousVersion < 19) this.backfillNoteManualOrder();
     this.db.exec(
       `CREATE INDEX IF NOT EXISTS note_external_key ON notes(document_id, external_key)`
@@ -2348,7 +2554,7 @@ export class Store {
     }
     this.db
       .prepare('INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)')
-      .run('schema_version', '20');
+      .run('schema_version', '23');
       this.db.exec('COMMIT');
     } catch (error) {
       // 整体回滚：schema、回填、schema_version 一起回到迁移前；迁移前快照仍保留在
@@ -2992,6 +3198,278 @@ export class Store {
       throw error;
     }
     return { movedDocuments };
+  }
+
+  // ---------------------------------------------------------------------------
+  // 逻辑项目（schema_version 22）：不绑目录，只给文献做逻辑分组；只存链接，不复制文献。
+  // 名称唯一（大小写不敏感）：应用层先查一次给中文错误，DB 的 NOCASE 唯一索引兜底并发写入。
+  // ---------------------------------------------------------------------------
+
+  private projectRawRow(id: string): {
+    id: string;
+    name: string;
+    description: string;
+    archivedAt: string;
+    createdAt: string;
+    updatedAt: string;
+  } | null {
+    const row = this.db
+      .prepare(
+        'SELECT id, name, description, archived_at, created_at, updated_at FROM projects WHERE id = ?'
+      )
+      .get(id) as
+      | {
+          id?: string;
+          name?: string;
+          description?: string;
+          archived_at?: string;
+          created_at?: string;
+          updated_at?: string;
+        }
+      | undefined;
+    if (!row?.id) return null;
+    return {
+      id: String(row.id),
+      name: String(row.name ?? ''),
+      description: String(row.description ?? ''),
+      archivedAt: String(row.archived_at ?? ''),
+      createdAt: String(row.created_at ?? ''),
+      updatedAt: String(row.updated_at ?? '')
+    };
+  }
+
+  /** 项目关联文献数：只数未进应用回收站的文献（与文献列表口径一致）。 */
+  private projectDocumentCount(id: string): number {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM project_documents pd
+         JOIN documents d ON d.id = pd.document_id
+         WHERE pd.project_id = ? AND d.deleted = 0`
+      )
+      .get(id) as { n?: number } | undefined;
+    return Number(row?.n ?? 0);
+  }
+
+  private projectSummaryOf(row: {
+    id: string;
+    name: string;
+    description: string;
+    archivedAt: string;
+    createdAt: string;
+    updatedAt: string;
+  }): ProjectSummary {
+    return {
+      id: row.id,
+      name: row.name,
+      description: row.description,
+      archivedAt: row.archivedAt,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      documentCount: this.projectDocumentCount(row.id)
+    };
+  }
+
+  private projectNameOf(input: string): string {
+    const name = input.trim();
+    if (!name) throw new Error('请输入项目名称');
+    if (name.length > 60) throw new Error('项目名称过长（最多 60 个字符）');
+    if (/[\u0000-\u001f\u007f]/.test(name)) throw new Error('项目名称包含控制字符');
+    return name;
+  }
+
+  private projectDescriptionOf(input: string): string {
+    const value = input.trim();
+    if (value.length > 2000) throw new Error('项目描述过长（最多 2000 个字符）');
+    return value;
+  }
+
+  /** 同名判断大小写不敏感（与 DB 唯一索引一致）。 */
+  private projectNameTaken(name: string, exceptId?: string): boolean {
+    const row = this.db
+      .prepare('SELECT id FROM projects WHERE name = ? COLLATE NOCASE AND id <> ? LIMIT 1')
+      .get(name, exceptId ?? '') as { id?: string } | undefined;
+    return Boolean(row?.id);
+  }
+
+  /** 链接变化（加入/移除文献）同样算项目更新：列表「最近更新时间」随之刷新。 */
+  private touchProject(id: string, at = new Date().toISOString()): void {
+    this.db.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(at, id);
+  }
+
+  /** 列出项目（默认不含归档）；documentCount 只数未进回收站的文献。 */
+  listProjects(includeArchived = false): ProjectSummary[] {
+    const rows = this.db
+      .prepare(
+        `SELECT id, name, description, archived_at, created_at, updated_at
+         FROM projects
+         WHERE ? = 1 OR archived_at = ''
+         ORDER BY created_at ASC, name ASC`
+      )
+      .all(includeArchived ? 1 : 0) as unknown as Array<{
+      id?: string;
+      name?: string;
+      description?: string;
+      archived_at?: string;
+      created_at?: string;
+      updated_at?: string;
+    }>;
+    return rows.flatMap((row) => {
+      if (!row.id) return [];
+      return [
+        this.projectSummaryOf({
+          id: String(row.id),
+          name: String(row.name ?? ''),
+          description: String(row.description ?? ''),
+          archivedAt: String(row.archived_at ?? ''),
+          createdAt: String(row.created_at ?? ''),
+          updatedAt: String(row.updated_at ?? '')
+        })
+      ];
+    });
+  }
+
+  getProject(id: string): ProjectSummary | null {
+    const row = this.projectRawRow(id);
+    return row ? this.projectSummaryOf(row) : null;
+  }
+
+  createProject(input: CreateProjectInput): ProjectSummary {
+    const name = this.projectNameOf(input.name ?? '');
+    const description = this.projectDescriptionOf(input.description ?? '');
+    if (this.projectNameTaken(name)) throw new Error(`已存在同名项目：${name}`);
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO projects(id, name, description, archived_at, created_at, updated_at)
+           VALUES (?, ?, ?, '', ?, ?)`
+        )
+        .run(id, name, description, now, now);
+    } catch (error) {
+      // 并发下应用层检查可能穿透：把唯一索引冲突翻译成同一个中文错误，不抛裸 SQLite 错误。
+      if (isUniqueConstraintError(error)) throw new Error(`已存在同名项目：${name}`);
+      throw error;
+    }
+    const created = this.projectRawRow(id);
+    if (!created) throw new Error('创建项目后无法读取');
+    return this.projectSummaryOf(created);
+  }
+
+  /** 改名/改描述/归档都在这里：只更新传了的字段，名称冲突给出中文错误。 */
+  updateProject(id: string, patch: UpdateProjectInput): ProjectSummary {
+    const current = this.projectRawRow(id);
+    if (!current) throw new Error('项目不存在');
+    const name = patch.name === undefined ? current.name : this.projectNameOf(patch.name);
+    const description =
+      patch.description === undefined
+        ? current.description
+        : this.projectDescriptionOf(patch.description);
+    let archivedAt = current.archivedAt;
+    if (patch.archived === true && !archivedAt) archivedAt = new Date().toISOString();
+    else if (patch.archived === false) archivedAt = '';
+    const changed =
+      name !== current.name ||
+      description !== current.description ||
+      archivedAt !== current.archivedAt;
+    if (changed) {
+      if (name !== current.name && this.projectNameTaken(name, id)) {
+        throw new Error(`已存在同名项目：${name}`);
+      }
+      try {
+        this.db
+          .prepare(
+            'UPDATE projects SET name = ?, description = ?, archived_at = ?, updated_at = ? WHERE id = ?'
+          )
+          .run(name, description, archivedAt, new Date().toISOString(), id);
+      } catch (error) {
+        if (isUniqueConstraintError(error)) throw new Error(`已存在同名项目：${name}`);
+        throw error;
+      }
+    }
+    const updated = this.projectRawRow(id);
+    if (!updated) throw new Error('项目不存在');
+    return this.projectSummaryOf(updated);
+  }
+
+  archiveProject(id: string): ProjectSummary {
+    if (!this.projectRawRow(id)) throw new Error('项目不存在');
+    const now = new Date().toISOString();
+    this.db
+      .prepare("UPDATE projects SET archived_at = ?, updated_at = ? WHERE id = ? AND archived_at = ''")
+      .run(now, now, id);
+    const updated = this.projectRawRow(id);
+    if (!updated) throw new Error('项目不存在');
+    return this.projectSummaryOf(updated);
+  }
+
+  /** 删项目只删链接、不删文献；返回解除关联的文献数（含回收站里的文献链接）。 */
+  deleteProject(id: string): ProjectDeleteResult {
+    if (!this.projectRawRow(id)) throw new Error('项目不存在');
+    const countRow = this.db
+      .prepare('SELECT COUNT(*) AS n FROM project_documents WHERE project_id = ?')
+      .get(id) as { n?: number } | undefined;
+    const detachedDocuments = Number(countRow?.n ?? 0);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.prepare('DELETE FROM project_documents WHERE project_id = ?').run(id);
+      this.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    return { id, deleted: true, detachedDocuments };
+  }
+
+  /** 把文献加入项目（重复加入幂等）；只建链接，不改文献归属。 */
+  addProjectDocument(projectId: string, documentId: string): ProjectDocumentRecord {
+    if (!this.projectRawRow(projectId)) throw new Error('项目不存在');
+    const document = this.getDocument(documentId);
+    if (!document) throw new Error('文档不存在');
+    const now = new Date().toISOString();
+    const result = this.db
+      .prepare(
+        'INSERT OR IGNORE INTO project_documents(project_id, document_id, added_at) VALUES (?, ?, ?)'
+      )
+      .run(projectId, documentId, now);
+    if (result.changes > 0) this.touchProject(projectId, now);
+    const link = this.db
+      .prepare('SELECT added_at FROM project_documents WHERE project_id = ? AND document_id = ?')
+      .get(projectId, documentId) as { added_at?: string } | undefined;
+    return { ...document, projectId, addedAt: String(link?.added_at ?? now) };
+  }
+
+  removeProjectDocument(projectId: string, documentId: string): void {
+    if (!this.projectRawRow(projectId)) throw new Error('项目不存在');
+    const result = this.db
+      .prepare('DELETE FROM project_documents WHERE project_id = ? AND document_id = ?')
+      .run(projectId, documentId);
+    if (result.changes === 0) throw new Error('文献不在该项目中');
+    this.touchProject(projectId);
+  }
+
+  /** 项目下的文献（只读链接；隐藏进应用回收站的文献，恢复后自动重新出现）。 */
+  listProjectDocuments(projectId: string): ProjectDocumentRecord[] {
+    if (!this.projectRawRow(projectId)) throw new Error('项目不存在');
+    const rows = this.db
+      .prepare(
+        `SELECT pd.document_id, pd.added_at
+         FROM project_documents pd
+         JOIN documents d ON d.id = pd.document_id
+         WHERE pd.project_id = ? AND d.deleted = 0
+         ORDER BY pd.added_at DESC, d.name ASC`
+      )
+      .all(projectId) as unknown as Array<{ document_id?: string; added_at?: string }>;
+    const records: ProjectDocumentRecord[] = [];
+    for (const row of rows) {
+      const documentId = String(row.document_id ?? '');
+      if (!documentId) continue;
+      const document = this.getDocument(documentId);
+      if (!document) continue;
+      records.push({ ...document, projectId, addedAt: String(row.added_at ?? '') });
+    }
+    return records;
   }
 
   listDocuments(trash = false): DocumentSummary[] {
@@ -4003,7 +4481,9 @@ export class Store {
       'doc_navigation',
       'doc_navigation_state',
       'page_masks',
-      'visual_cache'
+      'visual_cache',
+      // 22：项目只存文献链接；彻底删除文献时链接一并清掉（外键级联是兜底，这里显式删）。
+      'project_documents'
     ];
     // 彻底删除文献前先记下该文献下笔记/批注的资源引用，删除后回收变成孤儿的资源。
     const noteIds = (
@@ -4097,7 +4577,7 @@ export class Store {
    * 目录导航/块与 FTS/结构/参考文献用户编辑/阅读任务与断点/视觉读页缓存/嵌入与审计缓存/
    * 检索版本）、独立问答会话、文件夹、笔记附件记录与文件、PDF 副本、上传临时文件、
    * Markdown 扫描/导入结果与任务快照、备份（backups/、migration-backups/ 与恢复标记）、
-   * 诊断包、检索缓存目录。
+   * 诊断包、检索缓存目录、用户自定义阅读流程目录 flows/。
    * **保留** settings（模型/服务/界面配置）与 secrets（密钥）：清空后不需要重新配置模型。
    *
    * Windows 注意：**不删除正在使用的数据库文件**（只按表删行，事务提交即生效），
@@ -4122,7 +4602,8 @@ export class Store {
       notes: countOf('notes'),
       annotations: countOf('annotations'),
       messages: countOf('messages'),
-      sessions: countOf('document_chat_sessions'),
+      // 23：跨文献会话也算「会话」；消息已包含在上面的 messages 总数里。
+      sessions: countOf('document_chat_sessions') + countOf('corpus_sessions'),
       translations: countOf('translation_segments'),
       note_assets: countOf('note_assets')
     };
@@ -4154,6 +4635,12 @@ export class Store {
       'note_assets',
       'note_folders',
       'folders',
+      // 22：逻辑项目与项目文献链接（先删链接表再删项目表）。
+      'project_documents',
+      'projects',
+      // 23：跨文献会话范围快照与会话行；消息在 messages 里一并清掉。
+      'corpus_session_documents',
+      'corpus_sessions',
       'messages',
       'document_chat_sessions',
       'translation_pages',
@@ -4271,6 +4758,46 @@ export class Store {
     removeFolderContents(path.join(this.dataDir, NOTE_ASSET_DIR), NOTE_ASSET_DIR);
     removeFolderContents(path.join(this.dataDir, 'migration-backups'), 'migration-backups');
     removeFolderContents(path.join(this.dataDir, 'diagnostics'), 'diagnostics');
+    // 用户自定义阅读流程（flows/<id>/flow.json + flow.md，见 flows.ts）：整目录删除。
+    // Windows 上有文件被占用时整目录删不掉，退回逐个删除并把残留路径（含具体文件）记进 failed。
+    const flowsRoot = path.join(this.dataDir, 'flows');
+    try {
+      rmSync(flowsRoot, { recursive: true, force: true });
+    } catch {
+      const removeFlowEntries = (folder: string, label: string): boolean => {
+        let entries: Dirent[];
+        try {
+          entries = readdirSync(folder, { withFileTypes: true });
+        } catch {
+          failed.push(`${label}/`);
+          return false;
+        }
+        let ok = true;
+        for (const entry of entries) {
+          const target = path.join(folder, entry.name);
+          const rel = `${label}/${entry.name}`;
+          if (entry.isDirectory()) {
+            if (!removeFlowEntries(target, rel)) ok = false;
+          } else {
+            try {
+              unlinkSync(target);
+            } catch {
+              failed.push(rel);
+              ok = false;
+            }
+          }
+        }
+        if (!ok) return false;
+        try {
+          rmSync(folder, { recursive: false, force: true });
+        } catch {
+          failed.push(`${label}/`);
+          return false;
+        }
+        return true;
+      };
+      removeFlowEntries(flowsRoot, 'flows');
+    }
     // 运行日志（可能含脱敏错误上下文）也属于本机数据：best-effort 删除，写日志的句柄会重建文件。
     for (const name of ['application.log', 'application.log.1']) {
       const target = path.join(this.dataDir, name);
@@ -4330,7 +4857,7 @@ export class Store {
   listAnnotations(documentId: string, trash = false): AnnotationRecord[] {
     const rows = this.db
       .prepare(
-        `SELECT id, document_id, page, quote, content, rects, color, style, created, deleted
+        `SELECT id, document_id, page, quote, content, rects, color, style, created, deleted, origin
          FROM annotations WHERE document_id = ? AND deleted = ? ORDER BY page, created`
       )
       .all(documentId, trash ? 1 : 0) as unknown as AnnotationRow[];
@@ -4340,7 +4867,7 @@ export class Store {
   listNotes(documentId: string, trash = false): NoteRecord[] {
     const rows = this.db
       .prepare(
-        `SELECT id, document_id, page, quote, content, created, folder_path, tags
+        `SELECT id, document_id, page, quote, content, created, folder_path, tags, origin
          FROM notes WHERE document_id = ? AND deleted = ? ORDER BY page, created`
       )
       .all(documentId, trash ? 1 : 0) as unknown as NoteRow[];
@@ -4351,7 +4878,7 @@ export class Store {
   listStandaloneNotes(trash = false): NoteRecord[] {
     const rows = this.db
       .prepare(
-        `SELECT id, document_id, page, quote, content, created, folder_path, tags, rowid
+        `SELECT id, document_id, page, quote, content, created, folder_path, tags, origin, rowid
          FROM notes WHERE (document_id = '' OR document_id IS NULL) AND deleted = ?
          ORDER BY folder_path ASC, manual_order ASC, created ASC`
       )
@@ -4364,7 +4891,7 @@ export class Store {
     const rows = this.db
       .prepare(
         `SELECT n.id, n.document_id, n.page, n.quote, substr(n.content, 1, 400) AS content,
-                n.created, n.folder_path, n.tags
+                n.created, n.folder_path, n.tags, n.origin
          FROM notes n LEFT JOIN documents d ON d.id = n.document_id
          WHERE n.deleted = 0 AND (n.document_id IS NULL OR n.document_id = '' OR d.deleted = 0)
          ORDER BY n.created DESC LIMIT 2000`
@@ -4377,7 +4904,7 @@ export class Store {
   getNote(id: string): NoteRecord | null {
     const row = this.db
       .prepare(
-        'SELECT id, document_id, page, quote, content, created, folder_path, tags FROM notes WHERE id = ? AND deleted = 0'
+        'SELECT id, document_id, page, quote, content, created, folder_path, tags, origin FROM notes WHERE id = ? AND deleted = 0'
       )
       .get(id) as unknown as NoteRow | undefined;
     return row ? toNote(row) : null;
@@ -4418,13 +4945,15 @@ export class Store {
     // 文件夹路径及其祖先必须登记，否则 Markdown 导入产生的文件夹无法重命名/删除。
     this.ensureNoteFolderHierarchy(folderPath);
     const manualOrder = this.nextNoteManualOrder(folderPath);
+    // 内容来源：只有显式声明 'ai'（系统代写 AI 内容）才落 'ai'，其余（含旧调用方）为 'user'。
+    const origin = normalizeContentOrigin(input.origin);
     // 内容写入与资源引用同步必须同成同败：任何一步失败都回滚，避免内容有图但索引没登记。
     this.db.exec('BEGIN IMMEDIATE');
     try {
       this.db
         .prepare(
-          `INSERT INTO notes(id, document_id, page, quote, content, external_key, folder_path, tags, manual_order)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO notes(id, document_id, page, quote, content, external_key, folder_path, tags, manual_order, origin)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           id,
@@ -4435,7 +4964,8 @@ export class Store {
           externalKey,
           folderPath,
           JSON.stringify(normalizeTags(input.tags)),
-          manualOrder
+          manualOrder,
+          origin
         );
       this.syncNoteAssetRefs('note', id, input.content?.trim() ?? '');
       this.db.exec('COMMIT');
@@ -4479,7 +5009,7 @@ export class Store {
   updateNote(id: string, input: UpdateNoteInput): NoteRecord {
     const row = this.db
       .prepare(
-        'SELECT id, document_id, page, quote, content, created, folder_path, tags FROM notes WHERE id = ? AND deleted = 0'
+        'SELECT id, document_id, page, quote, content, created, folder_path, tags, origin FROM notes WHERE id = ? AND deleted = 0'
       )
       .get(id) as unknown as NoteRow | undefined;
     if (!row) throw new Error('笔记不存在');
@@ -5083,12 +5613,18 @@ export class Store {
         if (annotation.content) parts.push(annotation.content, '');
       }
     }
-    // 只有内容里确实带 AI 标识（存为笔记的文件头 / 复制粘贴的标识文字）时才写文件头；
-    // 纯用户自己的笔记与批注导出不加 AI 元数据。含 AI 内容却写不进标识头时，
-    // `buildMarkedMarkdownExport` 会拒绝产出（fail-closed），异常由路由返回 4xx。
+    // 判定「字段优先、文本兜底」：
+    // - origin 字段覆盖系统写入路径（「回答存为笔记」等），即使用户删掉正文里的标识文字
+    //   仍然会被判为 AI 内容——这正是文本判断的盲区；
+    // - 文本兜底保留给迁移前的老数据（那时还没有 origin 列，AI 笔记只靠文件头标识区分）。
+    const joinedText = [
+      ...notes.map((note) => note.content ?? ''),
+      ...annotations.map((annotation) => annotation.content ?? '')
+    ].join('\n');
     const containsAi =
-      notes.some((note) => looksLikeAiContent(note.content)) ||
-      annotations.some((annotation) => looksLikeAiContent(annotation.content));
+      notes.some((note) => note.origin === 'ai') ||
+      annotations.some((annotation) => annotation.origin === 'ai') ||
+      looksLikeAiContent(joinedText);
     const body = parts.filter((part) => part != null).join('\n').replace(/\n{3,}/g, '\n\n') + '\n';
     return {
       markdown: buildMarkedMarkdownExport(body, containsAi),
@@ -6113,13 +6649,15 @@ export class Store {
       }
     }
     const id = randomUUID();
+    // 内容来源：AI 译文/识别结果由系统写入批注时显式传 'ai'；用户手工新建为 'user'。
+    const origin = normalizeContentOrigin(input.origin);
     this.db.exec('BEGIN IMMEDIATE');
     try {
       this.db
         .prepare(
           `INSERT INTO annotations
-           (id, document_id, page, quote, content, rects, color, style, deleted, external_key, created)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`
+           (id, document_id, page, quote, content, rects, color, style, deleted, external_key, created, origin)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`
         )
         .run(
           id,
@@ -6131,7 +6669,8 @@ export class Store {
           input.color ?? 'yellow',
           input.style ?? 'highlight',
           input.externalKey ?? '',
-          new Date().toISOString()
+          new Date().toISOString(),
+          origin
         );
       this.syncNoteAssetRefs('annotation', id, input.content ?? '');
       this.db.exec('COMMIT');
@@ -6141,7 +6680,7 @@ export class Store {
     }
     const row = this.db
       .prepare(
-        `SELECT id, document_id, page, quote, content, rects, color, style, created, deleted
+        `SELECT id, document_id, page, quote, content, rects, color, style, created, deleted, origin
          FROM annotations WHERE id = ?`
       )
       .get(id) as unknown as AnnotationRow;
@@ -6236,7 +6775,7 @@ export class Store {
   private getAnnotation(id: string): AnnotationRecord | null {
     const row = this.db
       .prepare(
-        `SELECT id, document_id, page, quote, content, rects, color, style, created, deleted
+        `SELECT id, document_id, page, quote, content, rects, color, style, created, deleted, origin
          FROM annotations WHERE id = ? AND deleted = 0`
       )
       .get(id) as unknown as AnnotationRow | undefined;

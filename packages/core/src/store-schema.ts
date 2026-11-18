@@ -38,6 +38,32 @@ export const SCHEMA_SQL = `      CREATE TABLE IF NOT EXISTS schema_meta(
         created TEXT DEFAULT CURRENT_TIMESTAMP
       );
 
+      -- schema_version 22：逻辑项目（不绑目录，只给文献做逻辑分组）+ 文献链接表。
+      -- 文献仍全局唯一（documents）；一个文献可属于多个项目；删项目只删链接、不删文献。
+      -- 名称唯一性由 NOCASE 唯一索引保证（大小写不敏感；应用层先查一次给出中文错误，
+      -- 唯一索引兜底并发写入，避免把裸 SQLite 约束错误抛给用户）。
+      CREATE TABLE IF NOT EXISTS projects(
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        archived_at TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS projects_name_unique
+        ON projects(name COLLATE NOCASE);
+
+      -- 项目 ↔ 文献链接。外键级联依赖连接上的 PRAGMA foreign_keys = ON（Store 已开启）：
+      -- 删项目/删文献时链接自动清掉；应用层同时显式删除，双保险。
+      CREATE TABLE IF NOT EXISTS project_documents(
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY(project_id, document_id)
+      );
+      CREATE INDEX IF NOT EXISTS project_documents_document
+        ON project_documents(document_id);
+
       -- schema_version 10：笔记图片资源登记表 + 引用表（笔记/批注 → 资源）。
       CREATE TABLE IF NOT EXISTS note_assets(
         asset_id TEXT PRIMARY KEY,
@@ -73,6 +99,8 @@ export const SCHEMA_SQL = `      CREATE TABLE IF NOT EXISTS schema_meta(
         style TEXT DEFAULT 'highlight',
         translation_excerpt TEXT DEFAULT '',
         external_key TEXT DEFAULT '',
+        -- schema_version 21：内容来源（'ai' = 系统代写的 AI 生成内容，'user' = 用户内容）。
+        origin TEXT NOT NULL DEFAULT 'user',
         created TEXT DEFAULT CURRENT_TIMESTAMP
       );
 
@@ -127,7 +155,9 @@ export const SCHEMA_SQL = `      CREATE TABLE IF NOT EXISTS schema_meta(
         created TEXT DEFAULT CURRENT_TIMESTAMP,
         deleted INTEGER DEFAULT 0,
         -- schema_version 19：手动排序位置（越小越靠前，只由拖拽排序改变）。
-        manual_order REAL DEFAULT 0
+        manual_order REAL DEFAULT 0,
+        -- schema_version 21：内容来源（'ai' = 系统代写的 AI 生成内容，'user' = 用户内容）。
+        origin TEXT NOT NULL DEFAULT 'user'
       );
 
       CREATE TABLE IF NOT EXISTS note_folders(
@@ -162,6 +192,30 @@ export const SCHEMA_SQL = `      CREATE TABLE IF NOT EXISTS schema_meta(
       CREATE INDEX IF NOT EXISTS document_chat_sessions_document
         ON document_chat_sessions(document_id, updated);
       CREATE INDEX IF NOT EXISTS messages_session ON messages(document_id, session_id, id);
+
+      -- schema_version 23：跨文献（语料）会话。**不改** document_chat_sessions 的主键，
+      -- 也不把其 document_id 改成可空：跨篇会话是另一张表，范围冻结在建立时的文献快照
+      -- （之后库里的新文献不自动加入）；消息复用 messages，document_id 用空串哨兵
+      -- 表示「不属于任何单篇文献」，只靠 session_id 归属。
+      CREATE TABLE IF NOT EXISTS corpus_sessions(
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        archived_at TEXT NOT NULL DEFAULT ''
+      );
+      CREATE INDEX IF NOT EXISTS corpus_sessions_updated
+        ON corpus_sessions(updated_at);
+
+      -- 会话 ↔ 文献快照。故意不建 documents 外键：文献被移入回收站/彻底删除后，
+      -- 这里仍保留当初选择的范围，读取时会跳过该文献并在响应里如实报告（而不是静默缩范围）。
+      CREATE TABLE IF NOT EXISTS corpus_session_documents(
+        session_id TEXT NOT NULL REFERENCES corpus_sessions(id) ON DELETE CASCADE,
+        document_id TEXT NOT NULL,
+        PRIMARY KEY(session_id, document_id)
+      );
+      CREATE INDEX IF NOT EXISTS corpus_session_documents_document
+        ON corpus_session_documents(document_id);
 
       -- schema_version 13：独立问答的会话与消息（不依附文献，阅读内 messages 表不变）。
       -- 会话保存完整历史；context_summary/summary_upto 记录「更早轮次压缩摘要」：

@@ -118,6 +118,47 @@ export interface FolderOverview {
 }
 
 /**
+ * 逻辑项目（schema_version 22）：**不绑定目录**，只给文献做逻辑分组。
+ *
+ * 文献本身仍全局唯一（documents 表）；项目只保存链接（project_documents）。
+ * 一个文献可以同时属于多个项目；删项目只删链接、不删文献，删文献才连带删链接。
+ * 名称唯一性由数据库唯一索引保证（大小写不敏感）。
+ */
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  description: string;
+  /** 归档时间（ISO 文本）；空串 = 未归档。归档项目默认不出现在列表里。 */
+  archivedAt: string;
+  createdAt: string;
+  updatedAt: string;
+  /** 关联文献数（不含应用回收站里的文献）。 */
+  documentCount: number;
+}
+
+/** `POST /projects` 的入参。 */
+export interface CreateProjectInput {
+  name: string;
+  description?: string;
+}
+
+/** `PATCH /projects/:id` 的入参（只更新传了的字段）。 */
+export interface UpdateProjectInput {
+  name?: string;
+  description?: string;
+  /** true = 归档；false = 取消归档。不传则不改归档状态。 */
+  archived?: boolean;
+}
+
+/** `DELETE /projects/:id` 的结果：只解除文献链接，文献本身保留。 */
+export interface ProjectDeleteResult {
+  id: string;
+  deleted: boolean;
+  /** 被解除关联的文献数（文献本身仍在文献库里）。 */
+  detachedDocuments: number;
+}
+
+/**
  * Zotero itemType → 中文类型名。
  *
  * 覆盖 Zotero 常见条目类型；未知类型由界面回退显示原始 itemType，
@@ -269,6 +310,14 @@ export interface DocumentDetail extends DocumentSummary {
   sha256: string;
 }
 
+/** 项目里的文献链接（项目只存链接；文献本身仍全局唯一）。 */
+export interface ProjectDocumentRecord extends DocumentSummary {
+  /** 所属项目 id。 */
+  projectId: string;
+  /** 加入该项目的时间（ISO 文本）。 */
+  addedAt: string;
+}
+
 /** 重新连接（relink）结果：页数可能变化，批注页码可能越界，必须如实告知用户。 */
 export interface RelinkResult extends DocumentDetail {
   page_count_before: number;
@@ -276,6 +325,17 @@ export interface RelinkResult extends DocumentDetail {
   annotations_out_of_range: number;
   warning: string | null;
 }
+
+/**
+ * 笔记/批注内容的来源（落库字段，schema_version 21）。
+ *
+ * - `'user'`：用户自己写入/编辑的内容；迁移前的老数据一律按这个值处理（列默认值）。
+ * - `'ai'`：由系统代写 AI 生成内容（「回答存为笔记」、AI 译文/识别结果写入批注等）。
+ *
+ * 导出标识判定**优先读这个字段**（系统写入路径可靠）；文本里的 AI 标识字样只作为
+ * 历史数据（迁移前没有该列）的兜底，不再作为唯一依据。
+ */
+export type ContentOrigin = 'user' | 'ai';
 
 export interface AnnotationRecord {
   id: string;
@@ -287,6 +347,12 @@ export interface AnnotationRecord {
   color: string;
   style: string;
   created: string;
+  /**
+   * 内容来源：`'ai'` = 系统代写的 AI 生成内容，`'user'` = 用户内容。
+   *
+   * Store 读出的记录一定带该字段（老库迁移后为 `'user'`）；手工构造的测试夹具可省略。
+   */
+  origin?: ContentOrigin;
   /** 批注摘引对应的译文（只读派生，不落库）；没有译文时为空数组。 */
   translation?: AnnotationTranslationItem[];
   translation_engine?: string;
@@ -347,6 +413,11 @@ export interface CreateAnnotationInput {
   color?: string;
   style?: string;
   externalKey?: string;
+  /**
+   * 内容来源：AI 译文/识别结果由系统写入批注时传 `'ai'`；
+   * 用户手工新建（默认）不传，落库为 `'user'`。
+   */
+  origin?: ContentOrigin;
 }
 
 export interface UpdateAnnotationInput {
@@ -362,6 +433,12 @@ export interface NoteRecord {
   quote: string;
   content: string;
   created: string;
+  /**
+   * 内容来源：`'ai'` = 系统代写的 AI 生成内容（如回答存为笔记），`'user'` = 用户内容。
+   *
+   * Store 读出的记录一定带该字段（老库迁移后为 `'user'`）；手工构造的测试夹具可省略。
+   */
+  origin?: ContentOrigin;
   /** Markdown 导入时的来源文件夹层级（相对路径，'' = 根目录）。 */
   folderPath?: string;
   /** 笔记标签（规范化、去重后的字符串数组）。 */
@@ -382,6 +459,11 @@ export interface CreateNoteInput {
   folderPath?: string;
   /** 笔记标签（规范化、去重后的字符串数组）。 */
   tags?: string[];
+  /**
+   * 内容来源：「回答存为笔记」等系统代写 AI 内容的路径必须传 `'ai'`；
+   * 用户手工新建（默认）不传，落库为 `'user'`。
+   */
+  origin?: ContentOrigin;
 }
 
 export interface UpdateNoteInput {
@@ -1576,6 +1658,13 @@ export interface ChatMessageRecord {
   sources: ChatSource[];
   metadata: Record<string, unknown>;
   created: string;
+  /**
+   * 消息归属的会话 id（`messages.session_id`）。
+   *
+   * 阅读伙伴按 (document_id, session_id) 归属；跨文献会话消息的 documentId 是空串哨兵，
+   * 只靠 sessionId 归属，因此把列值一并返回，调用方不必再按 document 反推。
+   */
+  sessionId?: string;
 }
 
 /** 阅读伙伴（按文献）的会话清单记录；消息归属靠消息 metadata 里的 sessionId。 */
@@ -1590,6 +1679,37 @@ export interface DocumentChatSessionRecord {
   summaryUpto?: number;
   /** 会话消息版本：任何消息增删改都会递增；摘要写回用它做条件更新。 */
   transcriptVersion?: number;
+}
+
+/**
+ * 跨文献（语料）会话：范围是建立时的文献 id **快照**，之后库里新增文献不会自动加入。
+ *
+ * 与 `document_chat_sessions` 相互独立：后者一会话绑定一篇文献（主键 document_id + id 不变），
+ * 这里范围跨多篇，消息复用 `messages`（document_id 为空串哨兵，见 listCorpusSessionMessages）。
+ */
+export interface CorpusSessionRecord {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  /** 归档时间（空串 = 未归档；本版只有列，没有归档接口）。 */
+  archivedAt: string;
+  /** 会话范围快照，按用户建立会话时给出的顺序（去重后）。 */
+  documentIds: string[];
+}
+
+/** 跨文献会话范围里的一篇文献（读取时按当前库状态解析，已删除的不返回）。 */
+export interface CorpusSessionDocumentSummary {
+  id: string;
+  name: string;
+  pages: number;
+}
+
+/** 跨文献会话的 HTTP 视图：附带当前可读的文献清单与读取时被跳过的文献 id。 */
+export interface CorpusSessionSummary extends CorpusSessionRecord {
+  documents: CorpusSessionDocumentSummary[];
+  /** 范围快照里当前已删除/不存在、读取时被跳过的文献 id（必须在响应里如实报告）。 */
+  skippedDocumentIds: string[];
 }
 
 /**
@@ -1821,6 +1941,39 @@ export interface CoverageLedgerRowRecord {
   gap_search_pages?: number[];
 }
 
+/**
+ * 提示词分层 P1-2：L1 用户阅读流程（文件系统 `<dataDir>/flows/<id>/`）。
+ *
+ * 只读清单里的元数据；流程正文不随路由外发，是否注入由精读链路决定。
+ */
+export interface FlowSummaryRecord {
+  id: string;
+  name: string;
+  /** 正整数版本号；文件里写成数字字符串也可归一。 */
+  version: number;
+  updated_at: string;
+  /** flow.md 的 sha256（小写十六进制），与 flow.json 声明一致才加载。 */
+  sha256: string;
+  /** flow.md 原始字符数（截断前）。 */
+  chars: number;
+  /** 是否因超过 `max_chars` 被截断后再注入。 */
+  truncated: boolean;
+}
+
+/** 加载时被跳过的用户流程及原因（不静默失效）。 */
+export interface SkippedFlowRecord {
+  id: string;
+  reason: string;
+}
+
+/** `GET /api/v1/flows` 的只读响应。 */
+export interface FlowListResponse {
+  flows: FlowSummaryRecord[];
+  skipped: SkippedFlowRecord[];
+  /** L1 流程正文的长度上限（超过则截断并标注）。 */
+  max_chars: number;
+}
+
 export interface ChatResponse {
   answer: string | null;
   sources: ChatSource[];
@@ -1861,6 +2014,15 @@ export interface ChatResponse {
   /** `needs_confirmation` 为真时的估算明细（页数/预计 token/阈值等）。 */
   budget?: BudgetEstimate;
   notice?: string;
+  /**
+   * 提示词分层 P1-2：本轮实际注入的 L1 用户阅读流程 id（按注入顺序）。
+   *
+   * 流程只作为 data 注入 user 侧的方法参考，L0 合规层仍由代码强制、未被覆盖；
+   * 没有流程时不返回该字段（响应与未接入前一致）。
+   */
+  applied_flows?: string[];
+  /** 本轮检查到但因校验失败被跳过的用户阅读流程及原因（含脚本层被拒绝）。 */
+  skipped_flows?: SkippedFlowRecord[];
   blocked_sources?: string[];
   source_routing?: {
     claims: number;
