@@ -132,7 +132,12 @@ export interface ProjectSummary {
   archivedAt: string;
   createdAt: string;
   updatedAt: string;
-  /** 关联文献数（不含应用回收站里的文献）。 */
+  /**
+   * 关联文献数（不含应用回收站里的文献）。
+   *
+   * 与「按项目检索/精读」解析出的范围**同一口径**（`listProjectDocuments` 只返回未进回收站
+   * 的文献），所以客户端直接用这个数就知道项目里有多少文献可用于检索/阅读，不需要再加字段。
+   */
   documentCount: number;
 }
 
@@ -1598,9 +1603,35 @@ export interface SearchRequest {
   scope?: 'all' | 'tags' | 'documents';
   scopeTags?: string[];
   scopeDocuments?: string[];
+  /**
+   * 逻辑项目 id：按该项目**当前**文献集合检索。
+   *
+   * 服务端用项目现有读取口径把 `projectId` 解析成文献 id 集合，再走原来的检索逻辑
+   * （不是新的 SQL 查询）；与 `scopeDocuments` / `scopeTags` 互斥（同时给 400）。
+   * 给 `projectId` 时 `documentId` 只作为排序锚点，可以省略；响应改为 `ProjectSearchResult`。
+   */
+  projectId?: string;
   mode?: 'close' | 'wide';
   selection?: string;
   limit?: number;
+}
+
+/**
+ * `POST /search` 带 `projectId` 时的响应（不带 `projectId` 时仍是 `SearchHit[]`，行为不变）。
+ *
+ * 带范围回执：客户端能区分「项目里没有文献」（`scope.empty=true`，不是错误）与
+ * 「项目里有文献但这次没命中」（`scope.empty=false` 且 `hits` 为空）。
+ */
+export interface ProjectSearchResult {
+  hits: SearchHit[];
+  scope: {
+    kind: 'project';
+    projectId: string;
+    /** 本次检索实际使用的文献 id（项目当前可读文献；移出项目的文献不再出现）。 */
+    documentIds: string[];
+    /** true = 项目当前没有可用于检索的文献；此时 `hits` 必为空数组，响应仍是 200。 */
+    empty: boolean;
+  };
 }
 
 export interface ChatSource {
@@ -1816,6 +1847,14 @@ export interface ChatRequest {
   scope_documents?: string[];
   /** 跨文献范围：按标签圈定（与 scope_documents 二选一，优先显式文献）。 */
   scope_tags?: string[];
+  /**
+   * 逻辑项目 id：用该项目**当前**文献集合代替 `scope_documents` 作为跨文献精读范围。
+   *
+   * 服务端按项目现有读取口径解析成文献 id（与显式 `scope_documents` 完全同语义），
+   * 并视为 `reading_scope='corpus'`（项目范围本身就是跨文献）；与 `scope_documents` /
+   * `scope_tags` 互斥（同时给 400）；项目不存在 404，项目没有文献 400。
+   */
+  projectId?: string;
   /** 语音提问的原始转写（随消息元数据保存，用于回显原始说法）。 */
   voice_original?: string;
   /** 用户改写过的联网查询词；有值时优先用它发搜索。 */

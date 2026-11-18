@@ -62,7 +62,24 @@ const EXPECTED_TABLES = [
   'corpus_sessions',
   'corpus_session_documents'
 ];
-const EXPECTED_VERSION = '23';
+
+/**
+ * 期望的目标版本从 `store.ts` 的 `currentVersion` 实时读取，不再手抄。
+ * 手抄会随每次迁移过期（本脚本已因此误报过一次 23≠24），而误报比漏报更浪费排查时间。
+ */
+function readExpectedVersion() {
+  const source = readFileSync(
+    new URL('../packages/core/src/store.ts', import.meta.url),
+    'utf8'
+  );
+  const match = source.match(/const currentVersion\s*=\s*(\d+)\s*;/);
+  if (!match) {
+    throw new Error('无法从 store.ts 读取 currentVersion，拒绝用默认值猜测');
+  }
+  return match[1];
+}
+
+const EXPECTED_VERSION = readExpectedVersion();
 
 /** @type {string[]} */
 const failures = [];

@@ -18,6 +18,7 @@ import {
   normalizeCorpusSessionDocumentIds,
   skippedDocumentsNotice
 } from '../corpus-sessions.js';
+import { resolveProjectScope } from '../project-scope.js';
 import type { SecretStore } from '../secrets.js';
 import type { Store } from '../store.js';
 import { badRequest, notFound } from './http.js';
@@ -31,11 +32,13 @@ export interface CorpusSessionRouteOptions {
  * 跨文献（语料）会话的最小可用版：把一次跨文献精读变成一个可继续追问的会话。
  *
  * - 范围在建立会话时冻结为 documentIds 快照（之后新增文献不自动加入）；
+ * - 建立时支持 `projectId` 代替显式 `documentIds`：服务端解析成项目**当前**文献集合再固化快照，
+ *   之后项目增删文献不影响已建会话（快照语义不变）；
  * - 消息复用 `messages`（document_id 空串哨兵 + session_id），服务端负责落 user/assistant；
  * - 追问直接复用 `answerWithCorpus()`：同一会话的后续问题按快照范围 + 已落库历史继续；
  * - 范围里已删除的文献**跳过并报告**（响应 skipped_document_ids + notice），不静默缩范围。
  *
- * 本版不接 UI / 项目绑定；预算闸门也还没接到这条路由（见开发报告）。
+ * 本版不接 UI；预算闸门也还没接到这条路由（见开发报告）。
  */
 export function registerCorpusSessionRoutes(
   app: FastifyInstance,
@@ -240,9 +243,33 @@ export function registerCorpusSessionRoutes(
   };
 
   app.post(`${API_PREFIX}/corpus-sessions`, async (request, reply) => {
-    const body = (request.body ?? {}) as { documentIds?: unknown; title?: unknown };
-    const documentIds = normalizeCorpusSessionDocumentIds(body.documentIds);
-    if (documentIds.length === 0) {
+    const body = (request.body ?? {}) as {
+      documentIds?: unknown;
+      projectId?: unknown;
+      title?: unknown;
+    };
+    // 范围来源二选一：显式 documentIds，或用 projectId 代替（服务端解析成项目当前文献集合）。
+    // 两者同时给是调用方歧义，明确 400；项目不存在 404；项目为空 400（建会话至少要一篇文献）。
+    const rawProjectId = body.projectId;
+    const projectId = typeof rawProjectId === 'string' ? rawProjectId.trim() : '';
+    if (rawProjectId !== undefined && !projectId) {
+      return badRequest(reply, 'projectId 必须是非空字符串');
+    }
+    let documentIds = normalizeCorpusSessionDocumentIds(body.documentIds);
+    if (projectId) {
+      if (documentIds.length > 0) {
+        return badRequest(
+          reply,
+          'projectId 与 documentIds 不能同时给：请二选一（用项目范围时不要显式传文献列表）'
+        );
+      }
+      const projectScope = resolveProjectScope(store, projectId);
+      if (projectScope === null) return notFound(reply, '项目不存在');
+      if (projectScope.length === 0) {
+        return badRequest(reply, '项目里没有可用于跨文献会话的文献');
+      }
+      documentIds = projectScope;
+    } else if (documentIds.length === 0) {
       return badRequest(reply, '需要 documentIds：至少一篇文献');
     }
     const readable: DocumentDetail[] = [];

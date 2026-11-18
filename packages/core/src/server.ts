@@ -153,6 +153,7 @@ import { readingBatchBudget } from './reading-chat.js';
 import { retrieve, warmRetrievalIndex } from './retrieval.js';
 import { annotateSearchHits } from './section-context.js';
 import { resolveScopeIds } from './scope.js';
+import { resolveProjectScope } from './project-scope.js';
 import type { SecretStore } from './secrets.js';
 import { AttachmentChangedError, DuplicateImportError, ImportCancelledError, type Store } from './store.js';import {
   normalizeDocumentChatSessions,
@@ -4369,42 +4370,96 @@ export function buildServer(options: ServerOptions): FastifyInstance {
 
   app.post(`${API_PREFIX}/search`, async (request, reply) => {
     const body = (request.body ?? {}) as Partial<SearchRequest>;
-    if (typeof body.query !== 'string' || !body.query.trim() || typeof body.documentId !== 'string') {
-      return badRequest(reply, '需要 query 与 documentId');
+    const rawProjectId = body.projectId;
+    // 不带 projectId：原逻辑原样保留（query + documentId，documentIds 由 scopeDocuments 圈定）。
+    if (rawProjectId === undefined) {
+      if (typeof body.query !== 'string' || !body.query.trim() || typeof body.documentId !== 'string') {
+        return badRequest(reply, '需要 query 与 documentId');
+      }
+      if (!options.store.getDocument(body.documentId)) return notFound(reply, '文档不存在');
+      const documents = options.store.listDocuments(false);
+      let scopeIds: string[];
+      try {
+        scopeIds = resolveScopeIds(
+          documents.map((document) => ({ id: document.id, tags: document.tags })),
+          {
+            documentId: body.documentId,
+            crossBook: Boolean(body.crossBook),
+            scope: body.scope,
+            scopeTags: body.scopeTags,
+            scopeDocuments: body.scopeDocuments
+          }
+        );
+      } catch (error) {
+        return badRequest(reply, error instanceof Error ? error.message : '跨文献范围无效');
+      }
+      try {
+        const hits = await retrieve(
+          options.store,
+          options.secrets,
+          body.query,
+          body.documentId,
+          typeof body.page === 'number' && Number.isFinite(body.page) ? body.page : 1,
+          body.mode === 'wide' ? 'wide' : 'close',
+          typeof body.limit === 'number' && Number.isFinite(body.limit) ? body.limit : 20,
+          {
+            selection: typeof body.selection === 'string' ? body.selection : undefined,
+            scopeDocumentIds: scopeIds,
+            includeDerived: true
+          }
+        );
+        return await annotateSearchHits(options.store, hits, { warm: true });
+      } catch (error) {
+        return badRequest(reply, error instanceof Error ? error.message : '检索失败');
+      }
     }
-    if (!options.store.getDocument(body.documentId)) return notFound(reply, '文档不存在');
-    const documents = options.store.listDocuments(false);
-    let scopeIds: string[];
-    try {
-      scopeIds = resolveScopeIds(
-        documents.map((document) => ({ id: document.id, tags: document.tags })),
-        {
-          documentId: body.documentId,
-          crossBook: Boolean(body.crossBook),
-          scope: body.scope,
-          scopeTags: body.scopeTags,
-          scopeDocuments: body.scopeDocuments
-        }
-      );
-    } catch (error) {
-      return badRequest(reply, error instanceof Error ? error.message : '跨文献范围无效');
+
+    // 带 projectId：服务端把项目解析成**当前**文献集合，再走上面的同一套检索/标注逻辑
+    // （只复用项目现有读取口径，不新增 SQL 查询）。与显式范围互斥，避免两个来源打架。
+    if (typeof body.query !== 'string' || !body.query.trim()) {
+      return badRequest(reply, '需要 query');
     }
+    const projectId = typeof rawProjectId === 'string' ? rawProjectId.trim() : '';
+    if (!projectId) return badRequest(reply, 'projectId 必须是非空字符串');
+    const explicitDocuments = Array.isArray(body.scopeDocuments)
+      ? body.scopeDocuments.filter((id) => typeof id === 'string' && id.trim() !== '')
+      : [];
+    if (explicitDocuments.length > 0) {
+      return badRequest(reply, 'projectId 与 scopeDocuments 不能同时给：请二选一');
+    }
+    const explicitTags = Array.isArray(body.scopeTags)
+      ? body.scopeTags.filter((tag) => typeof tag === 'string' && tag.trim() !== '')
+      : [];
+    if (explicitTags.length > 0) {
+      return badRequest(reply, 'projectId 与 scopeTags 不能同时给：请二选一');
+    }
+    const projectScopeIds = resolveProjectScope(options.store, projectId);
+    if (projectScopeIds === null) return notFound(reply, '项目不存在');
+    const scope = {
+      kind: 'project' as const,
+      projectId,
+      documentIds: projectScopeIds,
+      empty: projectScopeIds.length === 0
+    };
+    // 空项目不是错误：明确回空结果 + 范围回执，客户端据此区分「项目里没有文献」与「没命中」。
+    if (projectScopeIds.length === 0) return { hits: [], scope };
     try {
       const hits = await retrieve(
         options.store,
         options.secrets,
         body.query,
-        body.documentId,
+        // documentId 在项目范围里只作为排序锚点（不加入范围）；不传也能检索整个项目。
+        typeof body.documentId === 'string' && body.documentId.trim() ? body.documentId : undefined,
         typeof body.page === 'number' && Number.isFinite(body.page) ? body.page : 1,
         body.mode === 'wide' ? 'wide' : 'close',
         typeof body.limit === 'number' && Number.isFinite(body.limit) ? body.limit : 20,
         {
           selection: typeof body.selection === 'string' ? body.selection : undefined,
-          scopeDocumentIds: scopeIds,
+          scopeDocumentIds: projectScopeIds,
           includeDerived: true
         }
       );
-      return await annotateSearchHits(options.store, hits, { warm: true });
+      return { hits: await annotateSearchHits(options.store, hits, { warm: true }), scope };
     } catch (error) {
       return badRequest(reply, error instanceof Error ? error.message : '检索失败');
     }
@@ -4529,9 +4584,25 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       reading_chapter_index?: unknown;
       scopeDocuments?: unknown;
       scope_documents?: unknown;
+      projectId?: unknown;
     };
     if (typeof body.question !== 'string' || body.question.trim() === '') {
       return badRequest(reply, '需要 question');
+    }
+    // 逻辑项目范围：projectId 代替显式文献列表（与精读入口同一口径）。
+    // 同时给 400、项目不存在 404、项目没有文献 400——空范围不能静默退化成"全库"。
+    const rawProjectId = body.projectId;
+    let scopeDocuments = scopeDocumentIds(body.scopeDocuments, body.scope_documents);
+    if (rawProjectId !== undefined) {
+      const projectId = typeof rawProjectId === 'string' ? rawProjectId.trim() : '';
+      if (!projectId) return badRequest(reply, 'projectId 必须是非空字符串');
+      if (scopeDocuments.length > 0) {
+        return badRequest(reply, 'projectId 与 scopeDocuments 不能同时给：请二选一');
+      }
+      const projectScope = resolveProjectScope(options.store, projectId);
+      if (projectScope === null) return notFound(reply, '项目不存在');
+      if (projectScope.length === 0) return badRequest(reply, '项目里还没有可用于估算的文献');
+      scopeDocuments = projectScope;
     }
     const settings = options.store.getSettings();
     const thresholds = budgetThresholds(settings);
@@ -4541,8 +4612,11 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       selection: typeof body.selection === 'string' ? body.selection : '',
       page
     });
-    const scopeDocuments = scopeDocumentIds(body.scopeDocuments, body.scope_documents);
-    const corpus = isCorpusBudgetRequest(body.reading_scope, body.documentId, scopeDocuments);
+    // 项目范围本身就是跨文献：给了 projectId 就按跨文献口径估算，不依赖调用方是否带 reading_scope。
+    const corpus =
+      rawProjectId !== undefined
+        ? true
+        : isCorpusBudgetRequest(body.reading_scope, body.documentId, scopeDocuments);
     try {
       if (corpus) {
         const scopeIds =
@@ -4689,6 +4763,53 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     }
   };
 
+  /**
+   * 跨文献精读入口：把逻辑项目 `projectId` 解析成项目**当前**文献集合，
+   * 用解析结果代替显式 `scope_documents` 后交给原有链路（预算闸门与阅读完全同语义）。
+   *
+   * 规则与建跨文献会话一致：与显式范围同时给是调用方歧义 → 400；
+   * 项目不存在 → 404；项目没有文献 → 400（空范围不能静默退化成"全库"）。
+   * 项目范围本身就是跨文献：解析成功后一并把 reading_scope 定为 'corpus'，不让调用方
+   * 因为漏传这个开关而把项目范围静默降级成"只读当前一篇"。
+   * 返回 null 表示错误响应已发送，调用方直接返回。
+   */
+  const applyChatProjectScope = (
+    body: Partial<ChatRequest>,
+    reply: FastifyReply
+  ): Partial<ChatRequest> | null => {
+    const rawProjectId = body.projectId;
+    if (rawProjectId === undefined) return body;
+    const projectId = typeof rawProjectId === 'string' ? rawProjectId.trim() : '';
+    if (!projectId) {
+      badRequest(reply, 'projectId 必须是非空字符串');
+      return null;
+    }
+    const explicitDocuments = Array.isArray(body.scope_documents)
+      ? body.scope_documents.filter((id) => typeof id === 'string' && id.trim() !== '')
+      : [];
+    if (explicitDocuments.length > 0) {
+      badRequest(reply, 'projectId 与 scope_documents 不能同时给：请二选一');
+      return null;
+    }
+    const explicitTags = Array.isArray(body.scope_tags)
+      ? body.scope_tags.filter((tag) => typeof tag === 'string' && tag.trim() !== '')
+      : [];
+    if (explicitTags.length > 0) {
+      badRequest(reply, 'projectId 与 scope_tags 不能同时给：请二选一');
+      return null;
+    }
+    const scopeDocumentIds = resolveProjectScope(options.store, projectId);
+    if (scopeDocumentIds === null) {
+      notFound(reply, '项目不存在');
+      return null;
+    }
+    if (scopeDocumentIds.length === 0) {
+      badRequest(reply, '项目里还没有可用于精读的文献');
+      return null;
+    }
+    return { ...body, reading_scope: 'corpus', scope_documents: scopeDocumentIds };
+  };
+
   // 同一文献同一时刻只处理一轮问答：两个窗口同时提问会让 user/assistant 交错落库。
   // 进程内集合足够（单机 Core）。
   const activeChatTurns = new Set<string>();
@@ -4715,7 +4836,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   };
 
   app.post(`${API_PREFIX}/chat/ask/stream`, async (request, reply) => {
-    const body = request.body as Partial<ChatRequest> | null;
+    let body = request.body as Partial<ChatRequest> | null;
     // 语音直接提问（全模态）可以没有文字问题：录音本身就是问题。
     const hasAudio = Boolean(body?.audio && typeof body.audio === 'object');
     const questionText = typeof body?.question === 'string' ? body.question : '';
@@ -4725,6 +4846,10 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     if (typeof body.documentId !== 'string' || !body.documentId.trim()) {
       return badRequest(reply, '独立会话已移除，请先从文献库打开一篇文献再提问');
     }
+    // 跨文献精读入口：projectId 代替显式 scope_documents（预算闸门与阅读都按解析后的范围）。
+    const scopedBody = applyChatProjectScope(body, reply);
+    if (!scopedBody) return reply;
+    body = scopedBody;
     const gate = await budgetGate(body);
     if (gate?.exceeded) {
       // 预算确认不是错误：返回 200 + needs_confirmation，前端弹确认框后带 confirm_budget 重发。
@@ -4831,7 +4956,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   });
 
   app.post(`${API_PREFIX}/chat/ask`, async (request, reply) => {
-    const body = request.body as Partial<ChatRequest> | null;
+    let body = request.body as Partial<ChatRequest> | null;
     // 与 stream 端点同口径：录音可以直接作为问题。
     const hasAudio = Boolean(body?.audio && typeof body.audio === 'object');
     const questionText = typeof body?.question === 'string' ? body.question : '';
@@ -4841,6 +4966,10 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     if (typeof body.documentId !== 'string' || !body.documentId.trim()) {
       return badRequest(reply, '独立会话已移除，请先从文献库打开一篇文献再提问');
     }
+    // 跨文献精读入口：projectId 代替显式 scope_documents（预算闸门与阅读都按解析后的范围）。
+    const scopedBody = applyChatProjectScope(body, reply);
+    if (!scopedBody) return reply;
+    body = scopedBody;
     const gate = await budgetGate(body);
     if (gate?.exceeded) {
       // 与 stream 端点同口径：200 + needs_confirmation，不是错误。

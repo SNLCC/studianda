@@ -77,6 +77,7 @@ import type {
   PendingRestore,
   ProjectDeleteResult,
   ProjectDocumentRecord,
+  ProjectSearchResult,
   ProjectSummary,
   QuoteLocation,
   ProviderPreset,
@@ -143,9 +144,17 @@ export class ApiRequestError extends Error {
   }
 }
 
-/** 建立跨文献会话（`POST /corpus-sessions`）的入参：范围是文献 id 快照，至少一篇。 */
+/**
+ * 建立跨文献会话（`POST /corpus-sessions`）的入参：范围二选一。
+ *
+ * - 显式 `documentIds`：至少一篇，按给定顺序固化快照；
+ * - `projectId`：服务端解析成项目**当前**文献集合再固化快照（之后项目增删文献不影响会话）。
+ *
+ * 两者同时给会 400；项目不存在 404；项目没有文献 400。
+ */
 export interface CreateCorpusSessionInput {
-  documentIds: string[];
+  documentIds?: string[];
+  projectId?: string;
   title?: string;
 }
 
@@ -878,7 +887,13 @@ export interface ApiClient {
     page?: number,
     mode?: 'close' | 'wide'
   ): Promise<SearchHit[]>;
-  searchScoped(request: SearchRequest): Promise<SearchHit[]>;
+  /**
+   * 跨文献检索（`POST /search`）。
+   *
+   * 不带 `projectId` 时返回命中数组（原行为）；带 `projectId` 时服务端把项目解析成当前
+   * 文献集合再检索，返回带范围回执的 `ProjectSearchResult`（空项目是 200 + `scope.empty`）。
+   */
+  searchScoped(request: SearchRequest): Promise<SearchHit[] | ProjectSearchResult>;
   searchLibrary(query: string, kinds: LibrarySearchKind[]): Promise<LibrarySearchHit[]>;
   /** 命中检索条件的文献 id（文献工作台的搜索过滤用）。 */
   searchLibraryDocuments(query: string, kinds: LibrarySearchKind[]): Promise<string[]>;
@@ -2454,7 +2469,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     },
 
     searchScoped: (input) =>
-      request<SearchHit[]>('/search', {
+      request<SearchHit[] | ProjectSearchResult>('/search', {
         method: 'POST',
         body: JSON.stringify(input)
       }),
