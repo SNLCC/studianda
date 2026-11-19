@@ -27,6 +27,14 @@ import {
   NOTE_ASSET_EXT,
   NOTE_ASSET_MIME_BY_EXT
 } from './store/note-assets.js';
+import * as noteDomain from './store/notes.js';
+import * as annotationDomain from './store/annotations.js';
+import * as documentDomain from './store/documents.js';
+import {
+  normalizeKey,
+  parsePageEditBoxes,
+  type ImportDuplicateCandidate
+} from './store/documents.js';
 import { NoteAssetReindexer } from './note-asset-reindexer.js';
 import {
   highestMetadataSource,
@@ -59,7 +67,6 @@ import type {
   ChatMessageRecord,
   ChatSource,
   ClearUserDataResult,
-  ContentOrigin,
   CorpusSessionRecord,
   CreateAnnotationInput,
   CreateNoteInput,
@@ -261,255 +268,14 @@ function navigationReason(status: NavigationStatus): string {
   }
 }
 
-interface DocumentRow {
-  id: string;
-  name: string;
-  pages: number;
-  current_page: number;
-  created: string;
-  author: string;
-  publication: string;
-  doi: string;
-  title_key: string;
-  size_bytes: number;
-  sha256: string;
-  path: string;
-  deleted: number;
-  tags: string;
-  storage_kind: string;
-  file_stamp: string;
-  external_path: string;
-  external_key: string;
-  doc_type: string;
-  folder_id: string;
-  manual_order: number;
-  /** 题录来源；''（含迁移前老行）= 未知，读取接口返回 null。 */
-  metadata_source: string;
-  /** Zotero 顶层条目 key；'' = 不是 Zotero 来源（或迁移前的记录）。 */
-  zotero_item_key: string;
-  /** 最近一次同步的 Zotero collection key；'' = 未记录。 */
-  zotero_collection_key: string;
-  /** 1 = 最近同步确认已在 Zotero 侧删除（本地文献保留）。 */
-  zotero_missing: number;
-}
+// 文献域的原始行映射/文件状态/摘要与详情组装已随文献域搬到 ./store/documents.ts
+// （DocumentRow / fileStateOf / parseTags / toSummary / toDetail / ImportDuplicateCandidate），
+// 本文件不再持有第二份映射。
 
-function fileStateOf(row: DocumentRow, dataDir: string): FileState {
-  const kind = row.storage_kind || 'copy';
-  const filePath =
-    kind === 'zotero' && row.external_path
-      ? row.external_path
-      : row.path
-        ? path.resolve(dataDir, row.path)
-        : path.join(dataDir, `${row.id}.pdf`);
-  if (!existsSync(filePath)) {
-    return {
-      state: 'missing',
-      detail:
-        kind === 'zotero'
-          ? 'Zotero 本机附件不可用；文献索引、批注与笔记仍在。请重新连接。'
-          : '应用内 PDF 副本不存在；文献列表、批注与笔记仍在，阅读与检索需要重新连接 PDF。',
-      storageKind: kind
-    };
-  }
-  // 存在但不可读（被占用/权限不足）不能算"可用"，否则阅读时才报错。
-  try {
-    accessSync(filePath, constants.R_OK);
-  } catch {
-    return {
-      state: 'unknown',
-      detail: '文件存在但无法读取（可能被其他程序占用或权限不足）；请关闭占用程序或检查权限。',
-      storageKind: kind
-    };
-  }
-  if (kind === 'zotero' && row.file_stamp) {
-    try {
-      const stats = statSync(filePath);
-      const current = `${stats.size}:${Math.trunc(stats.mtimeMs)}`;
-      if (current !== row.file_stamp) {
-        return {
-          state: 'changed',
-          detail:
-            'Zotero 本机附件已改变（大小或修改时间变化），索引可能已过期；请重新连接后再阅读。',
-          storageKind: kind
-        };
-      }
-    } catch {
-      return {
-        state: 'unknown',
-        detail: '无法读取附件信息（权限或占用）；请检查后重试。',
-        storageKind: kind
-      };
-    }
-  }
-  return {
-    state: 'ok',
-    detail: kind === 'zotero' ? 'Zotero 本机附件可用。' : '应用内 PDF 副本可用。',
-    storageKind: kind
-  };
-}
-
-function parseTags(value: string): string[] {
-  try {
-    const parsed = JSON.parse(value || '[]') as unknown;
-    if (Array.isArray(parsed) && parsed.every((tag) => typeof tag === 'string')) {
-      return parsed;
-    }
-  } catch {
-    // 损坏的标签按空处理
-  }
-  return [];
-}
-
-function toSummary(row: DocumentRow, dataDir: string): DocumentSummary {
-  const fileState = fileStateOf(row, dataDir);
-  const docType = row.doc_type ?? '';
-  return {
-    id: row.id,
-    name: row.name,
-    pages: row.pages,
-    currentPage: row.current_page,
-    created: row.created,
-    author: row.author ?? '',
-    publication: row.publication ?? '',
-    sizeBytes: row.size_bytes ?? 0,
-    tags: parseTags(row.tags),
-    deleted: Boolean(row.deleted),
-    fileState,
-    // 列表接口直接带缺失标记，前端卡片不必再自己 stat。
-    missing_file: fileState.state === 'missing',
-    // 文献类型与文件夹始终由服务端算好带回，界面不需要重复映射。
-    docType,
-    docCategory: documentCategoryOf(docType),
-    folderId: row.folder_id ?? '',
-    // 默认排序位置：越小越靠前；只由拖拽（moveDocument）改变。
-    manualOrder: Number(row.manual_order ?? 0),
-    // 题录来源：未知（老库/手工构造）明确返回 null，不猜来源。
-    metadataSource: normalizeMetadataSource(row.metadata_source),
-    // Zotero 侧删除标记：只提示，不删除本地文献。
-    zoteroMissing: Number(row.zotero_missing ?? 0) === 1
-  };
-}
-
-function toDetail(row: DocumentRow, dataDir: string): DocumentDetail {
-  return { ...toSummary(row, dataDir), sha256: row.sha256 ?? '' };
-}
-
-interface NoteRow {
-  id: string;
-  document_id: string | null;
-  page: number;
-  quote: string;
-  content: string;
-  created: string;
-  folder_path?: string | null;
-  tags?: string | null;
-  origin?: string | null;
-}
-
-/**
- * 内容来源归一：只认 `'ai'`，其余（含迁移前没有 origin 列的老数据）一律 `'user'`。
- *
- * 与表列 `origin TEXT NOT NULL DEFAULT 'user'` 保持一致；老库迁移后靠文本兜底
- * （`looksLikeAiContent`）识别历史 AI 内容，字段只覆盖系统写入路径。
- */
-function normalizeContentOrigin(value: unknown): ContentOrigin {
-  return value === 'ai' ? 'ai' : 'user';
-}
-
-/** 笔记标签清洗：trim、去 `#`、去控制字符、去重（忽略大小写）、数量/长度上限。 */
-function normalizeTags(value: unknown): string[] {
-  if (value == null) return [];
-  if (!Array.isArray(value)) throw new Error('标签必须是字符串数组');
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const raw of value) {
-    if (typeof raw !== 'string') continue;
-    const tag = raw
-      .trim()
-      .replace(/^#+/, '')
-      .replace(/[\u0000-\u001f\u007f]/g, '')
-      .trim();
-    if (!tag) continue;
-    const capped = tag.slice(0, 50);
-    const key = capped.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    result.push(capped);
-    if (result.length >= 50) break;
-  }
-  return result;
-}
-
-function parseNoteTags(raw: string | null | undefined): string[] {
-  if (!raw) return [];
-  try {
-    return normalizeTags(JSON.parse(raw));
-  } catch {
-    return [];
-  }
-}
-
-/** 笔记来源文件夹：'' 或 `/` 分隔层级；拒绝 `..`/控制字符/超长。 */
-function normalizeFolderPath(value: string | null | undefined): string {
-  const raw = (value ?? '').trim();
-  if (!raw) return '';
-  const segments = raw
-    .replace(/\\/g, '/')
-    .replace(/^\/+|\/+$/g, '')
-    .split('/')
-    .map((segment) => segment.trim())
-    .filter((segment) => segment !== '' && segment !== '.');
-  if (segments.some((segment) => segment === '..' || /[\u0000-\u001f\u007f]/.test(segment))) {
-    throw new Error('文件夹路径无效');
-  }
-  const joined = segments.join('/');
-  if (joined.length > 240) throw new Error('文件夹路径过长（最多 240 个字符）');
-  return joined;
-}
-
-/** 独立笔记（不属于任何文献）用 document_id='' 表示；旧数据可能是 NULL，统一成 ''。 */
-function toNote(row: NoteRow): NoteRecord {
-  return {
-    id: row.id,
-    documentId: row.document_id ?? '',
-    page: Number(row.page ?? 0),
-    quote: row.quote ?? '',
-    content: row.content ?? '',
-    created: row.created ?? '',
-    origin: normalizeContentOrigin(row.origin),
-    folderPath: row.folder_path ?? '',
-    tags: parseNoteTags(row.tags)
-  };
-}
-
-interface AnnotationRow {
-  id: string;
-  document_id: string;
-  page: number;
-  quote: string;
-  content: string;
-  rects: string;
-  color: string;
-  style: string;
-  created: string;
-  deleted: number;
-  origin?: string | null;
-}
-
-function toAnnotation(row: AnnotationRow): AnnotationRecord {
-  return {
-    id: row.id,
-    documentId: row.document_id,
-    page: row.page,
-    quote: row.quote ?? '',
-    content: row.content ?? '',
-    rects: row.rects ?? '',
-    color: row.color ?? 'yellow',
-    style: row.style ?? 'highlight',
-    created: row.created ?? '',
-    origin: normalizeContentOrigin(row.origin)
-  };
-}
+// 笔记行的映射/规范化辅助已随笔记域搬到 ./store/notes.ts（toNote / normalizeTags /
+// parseNoteTags / normalizeFolderPath / normalizeContentOrigin），写路径也已在那边。
+// 批注行映射 toAnnotation 与批注写路径同样随批注域搬到 ./store/annotations.ts；
+// origin 口径复用 notes.ts 导出的 normalizeContentOrigin，本文件不再持有该映射。
 
 interface ParsedChunk {
   page: number;
@@ -555,19 +321,8 @@ interface ParsedPdf {
   chunks: ParsedChunk[];
 }
 
-/** 只用于查重：去掉大小写、空白、标点和扩展名，不做展示。 */
-function normalizeKey(value: string): string {
-  return value
-    .normalize('NFKC')
-    .toLowerCase()
-    .replace(/\.pdf$/i, '')
-    .replace(/[^\p{L}\p{N}]+/gu, '')
-    .slice(0, 240);
-}
-
-function firstAuthorKey(value: string): string {
-  return normalizeKey(value.split(/[、,，;；]/)[0] ?? '');
-}
+// normalizeKey / firstAuthorKey 已随文献域搬到 ./store/documents.ts：题录/查重归一只有一份，
+// 导入管线与迁移回填从该模块 import，不在这里复制。
 
 function normalizeDoi(value: string): string {
   return value
@@ -822,53 +577,7 @@ function publicationFromMetadata(metadata: unknown): string {
   ]);
 }
 
-/** 去掉 CJK 字符之间由 PDF 排版产生的空格，保留英文词间空格。 */
-function tidyCjkSpacing(text: string): string {
-  return text
-    .replace(/(?<=[\u3400-\u9fff])\s+(?=[\u3400-\u9fff])/g, '')
-    .replace(/(?<=[\u3400-\u9fff])\s+(?=[，。；：！？、）》”’])/g, '')
-    .replace(/(?<=[（《“‘])\s+(?=[\u3400-\u9fff])/g, '')
-    .replace(/[ \t]{2,}/g, ' ');
-}
-
-/**
- * PDF 文本层按行返回，直接拼给模型会得到一排“行首/行尾碎片”。
- * 在读取时按句子边界复原段落；英文仍保留词间空格。
- */
-function reflowPageLines(lines: string[]): string {
-  const paragraphs: string[] = [];
-  let current = '';
-  const flush = (): void => {
-    const value = tidyCjkSpacing(current).trim();
-    if (value) paragraphs.push(value);
-    current = '';
-  };
-  for (const raw of lines) {
-    const line = tidyCjkSpacing(String(raw)).trim();
-    if (!line) {
-      flush();
-      continue;
-    }
-    if (!current) {
-      current = line;
-      continue;
-    }
-    const startsHeading =
-      /^(?:第[一二三四五六七八九十百]+[章节部分]|[一二三四五六七八九十]+[、.．]|\([一二三四五六七八九十]+\)|\d+(?:\.\d+)*[、.．]?\s|[［\[]\d+[］\]])/.test(
-        line
-      );
-    const previousEndsSentence = /[。！？!?；;：:…”’】》)]$/.test(current);
-    if (startsHeading || previousEndsSentence) {
-      flush();
-      current = line;
-      continue;
-    }
-    const cjkBoundary = /[\u3400-\u9fff]$/.test(current) && /^[\u3400-\u9fff]/.test(line);
-    current += cjkBoundary ? line : ` ${line}`;
-  }
-  flush();
-  return paragraphs.join('\n\n');
-}
+// 页文本行重排（tidyCjkSpacing / reflowPageLines）已随页文本读路径搬到 ./store/documents.ts。
 
 const require = createRequire(import.meta.url);
 const pdfjsRoot = path.dirname(require.resolve('pdfjs-dist/package.json'));
@@ -910,16 +619,7 @@ class DiskBinaryDataFactory {
   }
 }
 
-export interface ImportDuplicateCandidate {
-  id: string;
-  name: string;
-  pages: number;
-  author: string;
-  publication: string;
-  doi: string;
-  match: 'file' | 'doi' | 'title' | 'zotero';
-  reasons: string[];
-}
+
 
 export class DuplicateImportError extends Error {
   readonly candidates: ImportDuplicateCandidate[];
@@ -933,18 +633,9 @@ export class DuplicateImportError extends Error {
   }
 }
 
-/**
- * Zotero 本机附件被外部替换/修改（大小或 mtime 变化）。
- *
- * 索引、批注、引用位置都来自旧文件，继续按新文件读会让页码/坐标对不上，
- * 因此访问路径时直接拒绝，要求重新连接。
- */
-export class AttachmentChangedError extends Error {
-  constructor() {
-    super('Zotero 附件已改变，索引可能已过期；请重新连接这份文献后再试。');
-    this.name = 'AttachmentChangedError';
-  }
-}
+// Zotero 附件变更错误类型随文献域搬到 ./store/documents.ts；这里只做 re-export，
+// server.ts / 测试仍从 './store.js' 取同一个类（instanceof 语义不变）。
+export { AttachmentChangedError } from './store/documents.js';
 
 /** 索引分块口径：span/行级，1000 步长、1200 窗口。 */
 
@@ -1327,59 +1018,19 @@ export class Store {
     return values.length === 0 ? 'ok' : values.join('; ');
   }
 
+  /** 未删除文献中附件文件缺失的篇数；实现见 store/documents.ts。 */
   missingDocumentFiles(): number {
-    const rows = this.db
-      .prepare('SELECT id FROM documents WHERE deleted = 0')
-      .all() as unknown as Array<{ id?: string }>;
-    let missing = 0;
-    for (const row of rows) {
-      const id = String(row.id ?? '');
-      const filePath = id ? this.getDocumentPath(id) : null;
-      // getDocumentPath 对应用副本只做路径解析；这里必须再确认文件真的存在。
-      if (!id || !filePath || !existsSync(filePath)) missing += 1;
-    }
-    return missing;
+    return documentDomain.missingDocumentFiles(this.db, this.documentDomainDeps);
   }
 
-  /**
-   * 逐文档检查附件是否还在（只 stat 是否存在，不读 PDF 内容）。
-   *
-   * 应用副本看 dataDir 下的相对路径（或 `<id>.pdf` 兜底）；Zotero 文献看登记的外部路径。
-   * 不会因为附件缺失而删记录：索引、批注、笔记仍在，用户可重新连接。
-   */
+  /** 逐文档附件健康检查（缺失/不可读/大小变化）；实现见 store/documents.ts。 */
   documentHealth(): Array<{
     documentId: string;
     name: string;
     missing: boolean;
     path: string;
   }> {
-    const rows = this.db
-      .prepare(
-        'SELECT id, name, path, storage_kind, external_path FROM documents WHERE deleted = 0 ORDER BY created'
-      )
-      .all() as unknown as Array<{
-      id?: string;
-      name?: string;
-      path?: string;
-      storage_kind?: string;
-      external_path?: string;
-    }>;
-    return rows.map((row) => {
-      const id = String(row.id ?? '');
-      const kind = row.storage_kind || 'copy';
-      const filePath =
-        kind === 'zotero' && row.external_path
-          ? String(row.external_path)
-          : row.path
-            ? path.resolve(this.dataDir, String(row.path))
-            : path.join(this.dataDir, `${id}.pdf`);
-      return {
-        documentId: id,
-        name: String(row.name ?? ''),
-        missing: !existsSync(filePath),
-        path: filePath
-      };
-    });
+    return documentDomain.documentHealth(this.db, this.documentDomainDeps);
   }
 
   getTranslationPage(documentId: string, page: number): TranslationPageRecord | null {
@@ -2958,71 +2609,43 @@ export class Store {
   }
 
   /**
-   * 回填默认排序：仅在"有文献但所有 manual_order 都是 0"时执行（刚加列或半迁移）。
+   * 文献域的显式依赖：数据目录、引用图缓存失效、页校订后的索引重建与版面读取。
    *
-   * 顺序取当前列表展示顺序 `created DESC, rowid DESC`，赋 1..N，
-   * 保证升级瞬间用户看到的默认顺序不变；已迁移的库不会重复回填。
+   * 域模块不接收 Store 实例、也不 import 索引/解析链路；页校订同步 chunks/FTS 与版面
+   * 解析都通过这两个回调注入（见 store/documents.ts 的拆分约定与事务不变量）。
    */
-  private backfillManualOrder(): void {
-    const total = Number(
-      (this.db.prepare('SELECT COUNT(*) AS n FROM documents').get() as { n?: number } | undefined)
-        ?.n ?? 0
-    );
-    if (total === 0) return;
-    const nonZero = Number(
-      (
-        this.db
-          .prepare('SELECT COUNT(*) AS n FROM documents WHERE manual_order <> 0')
-          .get() as { n?: number } | undefined
-      )?.n ?? 0
-    );
-    if (nonZero > 0) return;
-    const rows = this.db
-      .prepare('SELECT id FROM documents ORDER BY created DESC, rowid DESC')
-      .all() as unknown as Array<{ id: string }>;
-    const update = this.db.prepare('UPDATE documents SET manual_order = ? WHERE id = ?');
-    rows.forEach((row, index) => update.run(index + 1, row.id));
-  }
-
-  /** 新文献的默认排序位置：追加到末尾（空库从 1 开始）；回收站里的也计入，避免恢复后撞位。 */
-  private nextManualOrder(): number {
-    const row = this.db
-      .prepare('SELECT COALESCE(MAX(manual_order), 0) + 1 AS value FROM documents')
-      .get() as { value?: number } | undefined;
-    return Number(row?.value ?? 1);
+  private get documentDomainDeps(): documentDomain.DocumentDomainDeps {
+    return {
+      dataDir: this.dataDir,
+      invalidateReferenceGraphCache: () => this.invalidateReferenceGraphCache(),
+      readLayoutPage: async (documentId, page) => {
+        const layout = await this.readLayout(documentId).catch(() => null);
+        return layout?.pages.find((item) => item.page === page) ?? null;
+      },
+      rebuildPageChunks: (documentId, page, text, boxesJson, layoutPage) =>
+        this.rebuildPageChunks(documentId, page, text, boxesJson, layoutPage ?? undefined)
+    };
   }
 
   /**
-   * 回填笔记默认排序（schema_version 19）：仅在"有笔记但所有 manual_order 都是 0"时执行
-   * （刚加列或半迁移）。按 rowid 递增赋 1..N，顺序即升级前的默认顺序；已迁移的库不会重复回填。
+   * 薄委托：回填文献默认排序（schema_version 9）。
+   * 实现与「必须运行在 migrate() 事务里」的不变量见 store/documents.ts 的 backfillManualOrder。
    */
-  private backfillNoteManualOrder(): void {
-    const total = Number(
-      (this.db.prepare('SELECT COUNT(*) AS n FROM notes').get() as { n?: number } | undefined)?.n ??
-        0
-    );
-    if (total === 0) return;
-    const nonZero = Number(
-      (
-        this.db
-          .prepare('SELECT COUNT(*) AS n FROM notes WHERE manual_order <> 0')
-          .get() as { n?: number } | undefined
-      )?.n ?? 0
-    );
-    if (nonZero > 0) return;
-    const rows = this.db
-      .prepare('SELECT id FROM notes ORDER BY rowid ASC')
-      .all() as unknown as Array<{ id: string }>;
-    const update = this.db.prepare('UPDATE notes SET manual_order = ? WHERE id = ?');
-    rows.forEach((row, index) => update.run(index + 1, row.id));
+  private backfillManualOrder(): void {
+    documentDomain.backfillManualOrder(this.db);
   }
 
-  /** 新笔记的默认排序位置：当前文件夹内追加到末尾（同名文件夹下 MAX+1）。 */
-  private nextNoteManualOrder(folderPath: string): number {
-    const row = this.db
-      .prepare('SELECT COALESCE(MAX(manual_order), 0) + 1 AS value FROM notes WHERE folder_path = ?')
-      .get(folderPath) as { value?: number } | undefined;
-    return Number(row?.value ?? 1);
+  /** 薄委托：新文献默认排序位置；实现见 store/documents.ts 的 nextManualOrder。 */
+  private nextManualOrder(): number {
+    return documentDomain.nextManualOrder(this.db);
+  }
+
+  /**
+   * 薄委托：回填笔记默认排序（schema_version 19）。实现与「必须运行在 migrate() 事务里」
+   * 的不变量见 store/notes.ts 的 backfillNoteManualOrder。
+   */
+  private backfillNoteManualOrder(): void {
+    noteDomain.backfillNoteManualOrder(this.db);
   }
 
   /**
@@ -3038,6 +2661,46 @@ export class Store {
       updateSettings: (patch, manageTransaction) => {
         this.updateSettings(patch, manageTransaction);
       }
+    };
+  }
+
+  /**
+   * 笔记域的显式依赖：时间、文献页码校验、资源引用同步、写后失效引用图缓存、
+   * 彻底删除后的资源回收。
+   *
+   * 域模块不接收 Store 实例，也不 import note-assets；交界全部通过这些回调注入
+   * （见 store/notes.ts 的拆分约定与事务不变量）。`syncNoteAssetRefs` 直接转给
+   * note-assets 的 syncSource：它必须在笔记域已打开的同一事务里执行，绝不自己 BEGIN。
+   */
+  private get noteDomainDeps(): noteDomain.NoteDomainDeps {
+    return {
+      now: () => new Date().toISOString(),
+      getDocument: (id) => this.getDocument(id),
+      syncNoteAssetRefs: (sourceKind, sourceId, content) =>
+        this.syncNoteAssetRefs(sourceKind, sourceId, content),
+      refreshAssetCounts: (assetIds) => noteAssets.refreshCounts(this.db, assetIds),
+      purgeAssetRecords: (assetIds) =>
+        noteAssets.purgeRecords(this.db, this.noteAssetDeps, assetIds),
+      invalidateReferenceGraphCache: () => this.invalidateReferenceGraphCache()
+    };
+  }
+
+  /**
+   * 批注域的显式依赖：时间、资源引用同步、彻底删除后的资源回收、写后失效引用图缓存。
+   *
+   * 与笔记域同一套交界：域模块不接收 Store 实例，也不 import note-assets；全部通过
+   * 这些回调注入（见 store/annotations.ts 的拆分约定与事务不变量）。`syncNoteAssetRefs`
+   * 必须在批注域已打开的同一事务里执行，绝不自己 BEGIN。
+   */
+  private get annotationDomainDeps(): annotationDomain.AnnotationDomainDeps {
+    return {
+      now: () => new Date().toISOString(),
+      syncNoteAssetRefs: (sourceKind, sourceId, content) =>
+        this.syncNoteAssetRefs(sourceKind, sourceId, content),
+      refreshAssetCounts: (assetIds) => noteAssets.refreshCounts(this.db, assetIds),
+      purgeAssetRecords: (assetIds) =>
+        noteAssets.purgeRecords(this.db, this.noteAssetDeps, assetIds),
+      invalidateReferenceGraphCache: () => this.invalidateReferenceGraphCache()
     };
   }
 
@@ -3067,155 +2730,27 @@ export class Store {
     noteAssets.syncSource(this.db, sourceKind, sourceId, content, this.noteAssetDeps);
   }
 
-  /**
-   * 按 (folder_id, doc_type) 聚合未删除文献，得到每个文件夹/未分类的分栏计数。
-   *
-   * 垃圾箱里的文献不参与侧栏计数（deleted = 0），否则文件夹上会显示已删除文献；
-   * 分类口径统一走 shared 的 `documentCategoryOf`。
-   */
-  private folderCounts(): Map<string, DocumentCategoryCounts> {
-    const rows = this.db
-      .prepare(
-        `SELECT folder_id AS folder_id, doc_type AS doc_type, COUNT(*) AS total
-         FROM documents WHERE deleted = 0 GROUP BY folder_id, doc_type`
-      )
-      .all() as unknown as Array<{ folder_id?: string; doc_type?: string; total?: number }>;
-    const counts = new Map<string, DocumentCategoryCounts>();
-    const emptyCounts = (): DocumentCategoryCounts => ({
-      total: 0,
-      book: 0,
-      paper: 0,
-      other: 0,
-      unknown: 0
-    });
-    for (const row of rows) {
-      const folderId = String(row.folder_id ?? '');
-      const amount = Number(row.total ?? 0);
-      const entry = counts.get(folderId) ?? emptyCounts();
-      entry.total += amount;
-      entry[documentCategoryOf(String(row.doc_type ?? ''))] += amount;
-      counts.set(folderId, entry);
-    }
-    return counts;
-  }
-
-  private folderRow(id: string): { id: string; name: string; created: string } | null {
-    const row = this.db
-      .prepare('SELECT id, name, created FROM folders WHERE id = ?')
-      .get(id) as { id?: string; name?: string; created?: string } | undefined;
-    if (!row) return null;
-    return {
-      id: String(row.id ?? ''),
-      name: String(row.name ?? ''),
-      created: String(row.created ?? '')
-    };
-  }
-
-  private folderSummary(
-    id: string,
-    counts: Map<string, DocumentCategoryCounts>
-  ): FolderSummary | null {
-    const row = this.folderRow(id);
-    if (!row) return null;
-    return {
-      id: row.id,
-      name: row.name,
-      created: row.created,
-      counts: counts.get(row.id) ?? { total: 0, book: 0, paper: 0, other: 0, unknown: 0 }
-    };
-  }
-
-  private folderNameOf(input: string): string {
-    const name = input.trim();
-    if (!name) throw new Error('请输入文件夹名称');
-    if (name.length > 60) throw new Error('文件夹名称过长（最多 60 个字符）');
-    if (/[\u0000-\u001f\u007f]/.test(name)) throw new Error('文件夹名称包含控制字符');
-    return name;
-  }
-
-  private folderNameTaken(name: string, exceptId?: string): boolean {
-    const row = this.db
-      .prepare('SELECT id FROM folders WHERE name = ? COLLATE NOCASE AND id <> ? LIMIT 1')
-      .get(name, exceptId ?? '') as { id?: string } | undefined;
-    return Boolean(row?.id);
-  }
-
-  /** 文献类型只做长度/控制字符校验：Zotero itemType 与用户手填值都允许。 */
+  /** 薄委托：文献类型长度/控制字符校验；实现见 store/documents.ts 的 documentTypeOf。 */
   private documentTypeOf(input: string): string {
-    const value = input.trim();
-    if (value.length > 60) throw new Error('文献类型过长（最多 60 个字符）');
-    if (/[\u0000-\u001f\u007f]/.test(value)) throw new Error('文献类型包含控制字符');
-    return value;
+    return documentDomain.documentTypeOf(input);
   }
 
+  /** 分类文件夹总览（含未分类与分栏计数）；实现见 store/documents.ts。 */
   listFolders(): FolderOverview {
-    const counts = this.folderCounts();
-    const rows = this.db
-      .prepare('SELECT id, name, created FROM folders ORDER BY created ASC, name ASC')
-      .all() as unknown as Array<{ id?: string; name?: string; created?: string }>;
-    const folders = rows.map((row) => {
-      const id = String(row.id ?? '');
-      return {
-        id,
-        name: String(row.name ?? ''),
-        created: String(row.created ?? ''),
-        counts: counts.get(id) ?? { total: 0, book: 0, paper: 0, other: 0, unknown: 0 }
-      };
-    });
-    const unfiledCounts = counts.get('') ?? { total: 0, book: 0, paper: 0, other: 0, unknown: 0 };
-    return {
-      folders,
-      unfiled: { id: '', name: '未分类', created: '', counts: unfiledCounts }
-    };
+    return documentDomain.listFolders(this.db);
   }
 
   createFolder(name: string): FolderSummary {
-    const value = this.folderNameOf(name);
-    if (this.folderNameTaken(value)) throw new Error(`已存在同名文件夹：${value}`);
-    const id = randomUUID();
-    this.db.prepare('INSERT INTO folders(id, name) VALUES (?, ?)').run(id, value);
-    const row = this.folderRow(id);
-    if (!row) throw new Error('创建文件夹后无法读取');
-    return {
-      id,
-      name: row.name,
-      created: row.created,
-      counts: { total: 0, book: 0, paper: 0, other: 0, unknown: 0 }
-    };
+    return documentDomain.createFolder(this.db, name);
   }
 
   renameFolder(id: string, name: string): FolderSummary {
-    if (!this.folderRow(id)) throw new Error('文件夹不存在');
-    const value = this.folderNameOf(name);
-    if (this.folderNameTaken(value, id)) throw new Error(`已存在同名文件夹：${value}`);
-    this.db.prepare('UPDATE folders SET name = ? WHERE id = ?').run(value, id);
-    const summary = this.folderSummary(id, this.folderCounts());
-    if (!summary) throw new Error('文件夹不存在');
-    return summary;
+    return documentDomain.renameFolder(this.db, id, name);
   }
 
-  /**
-   * 删除文件夹：文献本身保留，只把归属移回「未分类」。
-   *
-   * 连回收站里的文献也一起改（它们恢复后不应指向一个已不存在的文件夹）。
-   * `movedDocuments` 只统计未删除的文献数，供界面提示“已移出 N 篇文献”。
-   */
+  /** 删文件夹只把文献归属移回未分类，不删文献；实现见 store/documents.ts。 */
   deleteFolder(id: string): { movedDocuments: number } {
-    if (!this.folderRow(id)) throw new Error('文件夹不存在');
-    const movedRow = this.db
-      .prepare('SELECT COUNT(*) AS n FROM documents WHERE folder_id = ? AND deleted = 0')
-      .get(id) as { n?: number } | undefined;
-    const movedDocuments = Number(movedRow?.n ?? 0);
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      this.db.prepare("UPDATE documents SET folder_id = '' WHERE folder_id = ?").run(id);
-      this.db.prepare('DELETE FROM folders WHERE id = ?').run(id);
-      this.db.exec('COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
-    return { movedDocuments };
+    return documentDomain.deleteFolder(this.db, id);
   }
 
   // ---------------------------------------------------------------------------
@@ -3274,199 +2809,81 @@ export class Store {
     return projectDomain.listProjectDocuments(this.db, this.projectDeps, projectId);
   }
 
+  // -------------------------------------------------------------------------
+  // 文献读路径：实现已抽到 ./store/documents.ts，Store 只留薄委托，签名/返回结构不变。
+  // -------------------------------------------------------------------------
+
   listDocuments(trash = false): DocumentSummary[] {
-    const rows = this.db
-      .prepare(
-        `SELECT id, name, pages, current_page, created, author, publication, size_bytes, sha256, path,
-                deleted, tags, storage_kind, file_stamp, external_path, external_key,
-                doc_type, folder_id, manual_order, metadata_source,
-                zotero_item_key, zotero_collection_key, zotero_missing
-         FROM documents WHERE deleted = ? ORDER BY created DESC, rowid DESC`
-      )
-      .all(trash ? 1 : 0) as unknown as DocumentRow[];
-    return rows.map((row) => toSummary(row, this.dataDir));
+    return documentDomain.listDocuments(this.db, this.documentDomainDeps, trash);
   }
 
   getDocument(id: string): DocumentDetail | null {
-    const row = this.db
-      .prepare(
-        `SELECT id, name, pages, current_page, created, author, publication, size_bytes, sha256, path,
-                deleted, tags, storage_kind, file_stamp, external_path, external_key,
-                doc_type, folder_id, manual_order, metadata_source,
-                zotero_item_key, zotero_collection_key, zotero_missing
-         FROM documents WHERE id = ? AND deleted = 0`
-      )
-      .get(id) as unknown as DocumentRow | undefined;
-    return row ? toDetail(row, this.dataDir) : null;
+    return documentDomain.getDocument(this.db, this.documentDomainDeps, id);
   }
 
+  /** 文献在 Zotero 侧的外部身份 key（未删除才有）；语义见 store/documents.ts。 */
   getDocumentExternalKey(id: string): string {
-    const row = this.db
-      .prepare('SELECT external_key FROM documents WHERE id = ? AND deleted = 0')
-      .get(id) as { external_key?: string } | undefined;
-    return String(row?.external_key ?? '');
+    return documentDomain.getDocumentExternalKey(this.db, id);
   }
 
-  /**
-   * 查找已存在的 Zotero 本地文献（collection 增量同步用）。
-   *
-   * 命中顺序：外部身份（含升级前旧身份）→ Zotero 顶层条目 key。返回文献 id；
-   * 找不到返回 null。只查未删除文献（回收站里的文献由导入路径自己报错，避免误恢复）。
-   */
+  /** 按外部身份（含升级前旧身份）/Zotero 顶层条目 key 查已存在文献；语义见 store/documents.ts。 */
   findZoteroDocumentId(input: {
     identity?: string;
     legacyIdentity?: string;
     zoteroItemKey?: string;
   }): string | null {
-    const identity = String(input.identity ?? '').trim();
-    const legacy = String(input.legacyIdentity ?? '').trim();
-    const zoteroKey = String(input.zoteroItemKey ?? '').trim();
-    if (identity || legacy) {
-      const row = this.db
-        .prepare(
-          `SELECT id FROM documents WHERE deleted = 0
-             AND external_key IN (?, ?) AND external_key <> '' LIMIT 1`
-        )
-        .get(identity, legacy) as { id?: string } | undefined;
-      if (row?.id) return String(row.id);
-    }
-    if (zoteroKey) {
-      const row = this.db
-        .prepare(
-          `SELECT id FROM documents WHERE deleted = 0 AND zotero_item_key = ?
-           ORDER BY rowid ASC LIMIT 1`
-        )
-        .get(zoteroKey) as { id?: string } | undefined;
-      if (row?.id) return String(row.id);
-    }
-    return null;
+    return documentDomain.findZoteroDocumentId(this.db, input);
   }
 
-  /**
-   * 最近一次同步记录为「属于该 Zotero collection」的本地文献。
-   *
-   * 只用于判断 Zotero 侧删除/移出：不是全局 Zotero 文献清单。
-   */
+  /** 最近一次同步记录为属于该 Zotero collection 的本地文献；语义见 store/documents.ts。 */
   listZoteroCollectionDocuments(collectionKey: string): Array<{
     documentId: string;
     zoteroItemKey: string;
     zoteroMissing: boolean;
   }> {
-    const key = String(collectionKey ?? '').trim();
-    if (!key) return [];
-    const rows = this.db
-      .prepare(
-        `SELECT id, zotero_item_key, zotero_missing FROM documents
-         WHERE deleted = 0 AND zotero_collection_key = ?
-         ORDER BY rowid ASC`
-      )
-      .all(key) as unknown as Array<{
-      id?: string;
-      zotero_item_key?: string;
-      zotero_missing?: number;
-    }>;
-    return rows.map((row) => ({
-      documentId: String(row.id ?? ''),
-      zoteroItemKey: String(row.zotero_item_key ?? ''),
-      zoteroMissing: Number(row.zotero_missing ?? 0) === 1
-    }));
+    return documentDomain.listZoteroCollectionDocuments(this.db, collectionKey);
   }
 
-  /**
-   * 标记/取消「Zotero 侧已删除」。只改标记，不删除文献、标签、笔记、批注。
-   * 返回标记是否发生变化（重复同步幂等）。
-   */
+  /** 标记/取消「Zotero 侧已删除」，返回标记是否变化；语义见 store/documents.ts。 */
   setZoteroMissing(documentId: string, missing: boolean): boolean {
-    const result = this.db
-      .prepare(
-        `UPDATE documents SET zotero_missing = ?
-         WHERE id = ? AND deleted = 0 AND zotero_missing <> ?`
-      )
-      .run(missing ? 1 : 0, documentId, missing ? 1 : 0);
-    return Number(result.changes ?? 0) > 0;
+    return documentDomain.setZoteroMissing(this.db, documentId, missing);
   }
 
-  /**
-   * 清理 collection 归属：条目仍在 Zotero、只是被移出了这个 collection。
-   * 文献本身、`zotero_item_key` 与缺失标记都不动（不删除用户数据）。
-   */
+  /** 清理 Zotero collection 归属（文献与条目 key 不动）；语义见 store/documents.ts。 */
   clearZoteroCollectionKey(documentId: string): void {
-    this.db
-      .prepare(
-        "UPDATE documents SET zotero_collection_key = '' WHERE id = ? AND deleted = 0"
-      )
-      .run(documentId);
+    documentDomain.clearZoteroCollectionKey(this.db, documentId);
   }
 
+  // -------------------------------------------------------------------------
+  // 批注域：实现已抽到 ./store/annotations.ts，Store 只留薄委托，签名/返回结构不变。
+  // 拆分模式与 projects / note-assets / notes 相同（db + 显式 deps，不传 Store 实例）；
+  // 事务边界、内容与 refs 同成同败、COMMIT 后回收资源与失效缓存等不变量见域模块文件头。
+  // -------------------------------------------------------------------------
+
+  /** 这篇文献里已写入过外部标识的批注 key（含软删除行）；语义见 store/annotations.ts。 */
   annotationExternalKeys(documentId: string): Set<string> {
-    const rows = this.db
-      .prepare(
-        "SELECT external_key FROM annotations WHERE document_id = ? AND external_key <> ''"
-      )
-      .all(documentId) as unknown as Array<{ external_key?: string }>;
-    return new Set(rows.map((row) => String(row.external_key ?? '')));
+    return annotationDomain.annotationExternalKeys(this.db, documentId);
   }
 
-  /**
-   * 按 external_key 索引这篇文献的批注（含已软删除的，保持"删除后不会重复导入"的既有语义），
-   * 用于 Zotero 坐标升级：判断已导入的批注是否只有页级位置，并拿到它的 id 更新几何。
-   * 不把 external_key 暴露进 AnnotationRecord（保持既有 API 形状）。
-   */
-  annotationExternalIndex(documentId: string): Map<
-    string,
-    { id: string; rects: string; style: string; deleted: boolean }
-  > {
-    const rows = this.db
-      .prepare(
-        `SELECT id, external_key, rects, style, deleted FROM annotations
-         WHERE document_id = ? AND external_key <> ''`
-      )
-      .all(documentId) as unknown as Array<{
-      id: string;
-      external_key: string;
-      rects: string | null;
-      style: string | null;
-      deleted: number | null;
-    }>;
-    const index = new Map<
-      string,
-      { id: string; rects: string; style: string; deleted: boolean }
-    >();
-    for (const row of rows) {
-      const key = String(row.external_key ?? '');
-      if (!key || index.has(key)) continue;
-      index.set(key, {
-        id: row.id,
-        rects: row.rects ?? '',
-        style: row.style ?? 'highlight',
-        deleted: Number(row.deleted ?? 0) === 1
-      });
-    }
-    return index;
+  /** 按 external_key 索引这篇文献的批注（含软删除行）；语义见 store/annotations.ts。 */
+  annotationExternalIndex(
+    documentId: string
+  ): Map<string, { id: string; rects: string; style: string; deleted: boolean }> {
+    return annotationDomain.annotationExternalIndex(this.db, documentId);
   }
 
-  /**
-   * 只更新批注的页面几何（rects / style），保留用户改过的 content / color。
-   * 用于把旧版 Zotero 页级批注升级为按坐标的高亮/下划线。
-   */
+  /** 只更新批注的页面几何（rects / style）；实现见 store/annotations.ts。 */
   setAnnotationGeometry(id: string, input: { rects: string; style: string }): void {
-    const result = this.db
-      .prepare('UPDATE annotations SET rects = ?, style = ? WHERE id = ? AND deleted = 0')
-      .run(input.rects, input.style, id);
-    if (result.changes === 0) throw new Error('批注不存在');
+    annotationDomain.setAnnotationGeometry(this.db, id, input);
   }
 
-  /**
-   * 这篇文献里已写入过外部标识的笔记 key（例如 Zotero note item key）。
-   *
-   * 与 annotationExternalKeys 一致，**包含已被软删除的行**：用户删掉导入的笔记后
-   * 再次迁移不会把它当新笔记重新塞回来；要恢复用笔记自身的恢复/撤销。
-   */
+  // -------------------------------------------------------------------------
+  // 笔记读路径（外部稳定键）：实现已抽到 ./store/notes.ts，Store 只留薄委托。
+  // -------------------------------------------------------------------------
+
+  /** 这篇文献里已写入过外部标识的笔记 key（含软删除行）；语义见 store/notes.ts。 */
   noteExternalKeys(documentId: string): Set<string> {
-    const rows = this.db
-      .prepare("SELECT external_key FROM notes WHERE document_id = ? AND external_key <> ''")
-      .all(documentId) as unknown as Array<{ external_key?: string }>;
-    return new Set(rows.map((row) => String(row.external_key ?? '')));
+    return noteDomain.noteExternalKeys(this.db, documentId);
   }
 
   /** 按外部稳定键查笔记（含回收站里的，用于导入去重/恢复）；不存在返回 null。 */
@@ -3474,107 +2891,28 @@ export class Store {
     documentId: string,
     externalKey: string
   ): { id: string; deleted: boolean } | null {
-    const key = (externalKey ?? '').trim();
-    if (!key) return null;
-    const row = this.db
-      .prepare(
-        `SELECT id, deleted FROM notes
-         WHERE document_id = ? AND external_key = ? ORDER BY rowid DESC LIMIT 1`
-      )
-      .get(documentId, key) as { id?: string; deleted?: number } | undefined;
-    return row?.id ? { id: String(row.id), deleted: Number(row.deleted ?? 0) === 1 } : null;
+    return noteDomain.findNoteByExternalKey(this.db, documentId, externalKey);
   }
 
-  /**
-   * 这篇文献在本机**已索引到的全部文字**，用于跨文献发现排序。
-   *
-   * 两个来源缺一不可：`chunks`（解析到的原文片段）与 `page_edits`（整页 OCR/用户校订，
-   * 不在 chunks 里）。任一来源取不到时如实少给，不编造。
-   */
+  // -------------------------------------------------------------------------
+  // 文献派生文本/路径/查重：实现已抽到 ./store/documents.ts，Store 只留薄委托。
+  // -------------------------------------------------------------------------
+
+  /** 这篇文献在本机已索引到的全部文字（chunks + page_edits）；语义见 store/documents.ts。 */
   documentTextState(documentId: string): string {
-    const parts: string[] = [];
-    try {
-      const rows = this.db
-        .prepare('SELECT text FROM chunks WHERE document_id = ? ORDER BY page, rowid')
-        .all(documentId) as unknown as Array<{ text?: string }>;
-      parts.push(...rows.map((row) => String(row.text ?? '')).filter(Boolean));
-    } catch {
-      // 索引表不可用时按空处理，不影响调用方继续阅读。
-    }
-    try {
-      const rows = this.db
-        .prepare(
-          'SELECT text FROM page_edits WHERE document_id = ? AND LENGTH(TRIM(text)) > 0 ORDER BY page'
-        )
-        .all(documentId) as unknown as Array<{ text?: string }>;
-      parts.push(...rows.map((row) => String(row.text ?? '')).filter(Boolean));
-    } catch {
-      // 同上。
-    }
-    return parts.join('\n');
+    return documentDomain.documentTextState(this.db, documentId);
   }
 
   chunkTextStats(documentId: string): { characters: number; cjk: number } {
-    const rows = this.db
-      .prepare('SELECT text FROM chunks WHERE document_id = ?')
-      .all(documentId) as unknown as Array<{ text?: string }>;
-    let characters = 0;
-    let cjk = 0;
-    for (const row of rows) {
-      const text = String(row.text ?? '');
-      characters += text.length;
-      for (const char of text) {
-        const code = char.codePointAt(0) ?? 0;
-        if (
-          (code >= 0x3040 && code <= 0x30ff) ||
-          (code >= 0x3400 && code <= 0x9fff) ||
-          (code >= 0xf900 && code <= 0xfaff) ||
-          (code >= 0xac00 && code <= 0xd7af)
-        ) {
-          cjk += 1;
-        }
-      }
-    }
-    return { characters, cjk };
+    return documentDomain.chunkTextStats(this.db, documentId);
   }
 
+  /** 文献附件路径（应用副本/Zotero 热链接，含 file_stamp 校验）；语义见 store/documents.ts。 */
   getDocumentPath(id: string): string | null {
-    const row = this.db
-      .prepare(
-        'SELECT path, storage_kind, external_path, file_stamp FROM documents WHERE id = ? AND deleted = 0'
-      )
-      .get(id) as
-      | {
-          path?: string;
-          storage_kind?: string;
-          external_path?: string;
-          file_stamp?: string;
-        }
-      | undefined;
-    if (!row) return null;
-    if (row.storage_kind === 'zotero' && row.external_path) {
-      if (!existsSync(row.external_path)) return null;
-      // 导入时记录的是 `size:mtimeMs`。外部替换/覆盖后索引仍指向旧内容，必须拒绝，
-      // 不能把新文件的热链接当成"还能用"。
-      const expected = String(row.file_stamp ?? '');
-      if (expected) {
-        let current = '';
-        try {
-          const stats = statSync(row.external_path);
-          current = `${stats.size}:${Math.trunc(stats.mtimeMs)}`;
-        } catch {
-          return null;
-        }
-        if (current !== expected) throw new AttachmentChangedError();
-      }
-      return row.external_path;
-    }
-    if (!row.path) return null;
-    const resolved = path.resolve(this.dataDir, row.path);
-    if (!resolved.startsWith(path.resolve(this.dataDir))) return null;
-    return resolved;
+    return documentDomain.getDocumentPath(this.db, this.documentDomainDeps, id);
   }
 
+  /** 导入查重候选（文件/DOI/标题/Zotero）；语义见 store/documents.ts。 */
   findImportDuplicates(input: {
     sha256?: string;
     doi?: string;
@@ -3584,76 +2922,7 @@ export class Store {
     publication?: string;
     pages?: number;
   }): ImportDuplicateCandidate[] {
-    const found = new Map<string, ImportDuplicateCandidate>();
-    const add = (
-      row: {
-        id: string;
-        name: string;
-        pages: number;
-        author: string;
-        publication: string;
-        doi: string;
-      },
-      match: ImportDuplicateCandidate['match'],
-      reason: string
-    ): void => {
-      const existing = found.get(row.id);
-      if (existing) {
-        if (!existing.reasons.includes(reason)) existing.reasons.push(reason);
-        const rank = { title: 1, zotero: 2, doi: 3, file: 4 } as const;
-        if (rank[match] > rank[existing.match]) existing.match = match;
-        return;
-      }
-      found.set(row.id, {
-        id: row.id,
-        name: row.name,
-        pages: row.pages,
-        author: row.author ?? '',
-        publication: row.publication ?? '',
-        doi: row.doi ?? '',
-        match,
-        reasons: [reason]
-      });
-    };
-    const select = `SELECT id, name, pages, author, publication, doi
-      FROM documents WHERE deleted = 0`;
-    if (input.sha256) {
-      const rows = this.db
-        .prepare(`${select} AND sha256 = ? LIMIT 3`)
-        .all(input.sha256) as unknown as Array<Parameters<typeof add>[0]>;
-      for (const row of rows) add(row, 'file', '文件内容完全相同');
-    }
-    if (input.externalKey) {
-      const rows = this.db
-        .prepare(`${select} AND external_key = ? LIMIT 3`)
-        .all(input.externalKey) as unknown as Array<Parameters<typeof add>[0]>;
-      for (const row of rows) add(row, 'zotero', 'Zotero 条目相同');
-    }
-    if (input.doi) {
-      const rows = this.db
-        .prepare(`${select} AND doi = ? LIMIT 5`)
-        .all(input.doi) as unknown as Array<Parameters<typeof add>[0]>;
-      for (const row of rows) add(row, 'doi', 'DOI 相同');
-    }
-    const titleKey = normalizeKey(input.title ?? '');
-    if (titleKey) {
-      const rows = this.db
-        .prepare(`${select} AND title_key = ? LIMIT 8`)
-        .all(titleKey) as unknown as Array<Parameters<typeof add>[0]>;
-      const authorKey = firstAuthorKey(input.author ?? '');
-      const publicationKey = normalizeKey(input.publication ?? '');
-      for (const row of rows) {
-        const reasons: string[] = [];
-        if (authorKey && firstAuthorKey(row.author) === authorKey) reasons.push('作者一致');
-        if (publicationKey && normalizeKey(row.publication) === publicationKey) {
-          reasons.push('期刊/出版社一致');
-        }
-        if (input.pages && row.pages === input.pages) reasons.push('页数一致');
-        if (reasons.length === 0) reasons.push('标题相同');
-        add(row, 'title', reasons.join('、'));
-      }
-    }
-    return [...found.values()].slice(0, 5);
+    return documentDomain.findImportDuplicates(this.db, input);
   }
 
   /**
@@ -4257,6 +3526,12 @@ export class Store {
     };
   }
 
+  // -------------------------------------------------------------------------
+  // 文献写路径（字段更新/默认排序拖拽/标签/回收站）：实现已抽到 ./store/documents.ts。
+  // 彻底删除 purgeDocument（跨批注/笔记/会话/分块级联）仍在下方，不属于本域。
+  // -------------------------------------------------------------------------
+
+  /** 更新文献字段（阅读进度/标题/作者/类型/文件夹）；字段级合并语义见 store/documents.ts。 */
   updateDocument(
     id: string,
     input: {
@@ -4269,204 +3544,29 @@ export class Store {
       folderId?: string;
     }
   ): DocumentDetail | null {
-    if (input.currentPage != null) {
-      this.db
-        .prepare('UPDATE documents SET current_page = ? WHERE id = ? AND deleted = 0')
-        .run(Math.max(1, Math.trunc(input.currentPage)), id);
-    }
-    if (input.name != null) {
-      const name = input.name.trim();
-      if (!name) throw new Error('请输入文献名称');
-      // 用户手动改名 = 题录来源变 manual：之后的 Zotero 同步不得覆盖。
-      this.db
-        .prepare(
-          "UPDATE documents SET name = ?, metadata_source = 'manual' WHERE id = ? AND deleted = 0"
-        )
-        .run(name, id);
-    }
-    if (input.author != null) {
-      this.db
-        .prepare(
-          "UPDATE documents SET author = ?, metadata_source = 'manual' WHERE id = ? AND deleted = 0"
-        )
-        .run(input.author.trim(), id);
-    }
-    if (input.docType != null) {
-      const docType = this.documentTypeOf(input.docType);
-      this.db
-        .prepare('UPDATE documents SET doc_type = ? WHERE id = ? AND deleted = 0')
-        .run(docType, id);
-    }
-    if (input.folderId != null) {
-      const folderId = input.folderId.trim();
-      // 只允许 ''（未分类）或真实存在的文件夹；避免出现指向不存在文件夹的孤儿归属。
-      if (folderId && !this.folderRow(folderId)) throw new Error('文件夹不存在');
-      this.db
-        .prepare('UPDATE documents SET folder_id = ? WHERE id = ? AND deleted = 0')
-        .run(folderId, id);
-    }
-    this.invalidateReferenceGraphCache();
-    return this.getDocument(id);
+    return documentDomain.updateDocument(this.db, this.documentDomainDeps, id, input);
   }
 
-  /**
-   * 默认排序拖拽：把文献移动到 beforeId 与 afterId 之间（两者是当前显示顺序里的邻居）。
-   *
-   * - beforeId 为 null 表示移到当前显示顺序最前（afterId 必须是第一位）；afterId 为 null 同理。
-   * - 位置计算：两端 neighbor ± 1，中间取中点；浮点间隙 < 1e-9 时先按
-   *   (manual_order, rowid) 全局重排成 1..N 再算，避免反复插中间把 double 耗尽。
-   * - 已处于该相对位置时是幂等 no-op（仍返回成功与当前文档）。
-   */
+  /** 默认排序拖拽：移动到 beforeId 与 afterId 之间；语义见 store/documents.ts。 */
   moveDocument(
     id: string,
     input: { beforeId?: string | null; afterId?: string | null }
   ): DocumentDetail {
-    const target = this.manualDocumentOrder(id);
-    if (target === null) throw new Error('文献不存在');
-    const beforeId = (input.beforeId ?? '').trim();
-    const afterId = (input.afterId ?? '').trim();
-    if (!beforeId && !afterId) throw new Error('需要提供 beforeId 或 afterId');
-    if (beforeId === id || afterId === id) throw new Error('相邻文献不能是目标文献本身');
-    const beforeOrder = beforeId ? this.manualDocumentOrder(beforeId) : null;
-    if (beforeId && beforeOrder === null) throw new Error('相邻文献不存在');
-    const afterOrder = afterId ? this.manualDocumentOrder(afterId) : null;
-    if (afterId && afterOrder === null) throw new Error('相邻文献不存在');
-    if (beforeOrder !== null && afterOrder !== null && beforeOrder >= afterOrder) {
-      throw new Error('相邻文献顺序无效');
-    }
-
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      // 已在该相对位置：不改位置，保证重复调用幂等。
-      const alreadyPlaced =
-        (beforeOrder === null || target > beforeOrder) &&
-        (afterOrder === null || target < afterOrder);
-      if (!alreadyPlaced) {
-        const position = this.manualPositionFor(id, beforeId, afterId);
-        this.db.prepare('UPDATE documents SET manual_order = ? WHERE id = ?').run(position, id);
-      }
-      this.db.exec('COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
-    const document = this.getDocument(id);
-    if (!document) throw new Error('文献不存在');
-    return document;
-  }
-
-  /** 读取未删除文献的默认排序位置；不存在返回 null。 */
-  private manualDocumentOrder(id: string): number | null {
-    const row = this.db
-      .prepare('SELECT manual_order FROM documents WHERE id = ? AND deleted = 0')
-      .get(id) as { manual_order?: number } | undefined;
-    return row ? Number(row.manual_order ?? 0) : null;
-  }
-
-  /** 全库按 (manual_order, rowid) 重排成 1..N（含回收站，保证位置唯一且保序）。 */
-  private rebalanceManualOrder(): void {
-    const rows = this.db
-      .prepare('SELECT id FROM documents ORDER BY manual_order ASC, rowid ASC')
-      .all() as unknown as Array<{ id: string }>;
-    const update = this.db.prepare('UPDATE documents SET manual_order = ? WHERE id = ?');
-    rows.forEach((row, index) => update.run(index + 1, row.id));
-  }
-
-  /** 小于/大于给定位置的最近 manual_order（排除目标文献本身）；没有返回 null。 */
-  private manualOrderBound(
-    order: number,
-    direction: 'lower' | 'upper',
-    excludeId: string
-  ): number | null {
-    const row = this.db
-      .prepare(
-        direction === 'lower'
-          ? 'SELECT MAX(manual_order) AS value FROM documents WHERE manual_order < ? AND id <> ?'
-          : 'SELECT MIN(manual_order) AS value FROM documents WHERE manual_order > ? AND id <> ?'
-      )
-      .get(order, excludeId) as { value?: number | null } | undefined;
-    const value = row?.value;
-    return value === null || value === undefined ? null : Number(value);
-  }
-
-  private manualOrderTaken(order: number, excludeId: string): boolean {
-    const row = this.db
-      .prepare('SELECT 1 AS found FROM documents WHERE manual_order = ? AND id <> ? LIMIT 1')
-      .get(order, excludeId) as { found?: number } | undefined;
-    return Boolean(row?.found);
-  }
-
-  /** 计算 moveDocument 的新位置；必要时先全局重排。 */
-  private manualPositionFor(id: string, beforeId: string, afterId: string): number {
-    const GAP = 1e-9;
-    let before = beforeId ? this.manualDocumentOrder(beforeId) : null;
-    let after = afterId ? this.manualDocumentOrder(afterId) : null;
-    if (before !== null && after !== null) {
-      if (after - before < GAP) {
-        this.rebalanceManualOrder();
-        before = this.manualDocumentOrder(beforeId);
-        after = this.manualDocumentOrder(afterId);
-      }
-      // 过滤视图里两个邻居之间可能还夹着其它文件夹的文献：中点撞位时也先重排。
-      let position = ((before as number) + (after as number)) / 2;
-      if (this.manualOrderTaken(position, id)) {
-        this.rebalanceManualOrder();
-        before = this.manualDocumentOrder(beforeId);
-        after = this.manualDocumentOrder(afterId);
-        position = ((before as number) + (after as number)) / 2;
-        // 整数重排后若中点被占（邻居间隔为偶数），退到紧贴 after 的半格位置。
-        if (this.manualOrderTaken(position, id)) position = (after as number) - 0.5;
-      }
-      return position;
-    }
-    if (before === null && after !== null) {
-      // 移到 after 之前（显示顺序最前）：优先 after - 1，否则取 (lower + after) 中点。
-      const lower = this.manualOrderBound(after, 'lower', id);
-      if (lower !== null && after - lower < GAP) {
-        this.rebalanceManualOrder();
-        return this.manualPositionFor(id, beforeId, afterId);
-      }
-      const candidate = after - 1;
-      if (lower === null || candidate > lower) return candidate;
-      return (lower + after) / 2;
-    }
-    // 移到 before 之后（显示顺序最后）：优先 before + 1，否则取 (before + upper) 中点。
-    const beforeValue = before as number;
-    const upper = this.manualOrderBound(beforeValue, 'upper', id);
-    if (upper !== null && upper - beforeValue < GAP) {
-      this.rebalanceManualOrder();
-      return this.manualPositionFor(id, beforeId, afterId);
-    }
-    const candidate = beforeValue + 1;
-    if (upper === null || candidate < upper) return candidate;
-    return (beforeValue + upper) / 2;
+    return documentDomain.moveDocument(this.db, this.documentDomainDeps, id, input);
   }
 
   setDocumentTags(id: string, tags: string[]): string[] {
-    if (!this.getDocument(id)) throw new Error('文档不存在');
-    const normalized = [...new Set(tags.map((tag) => tag.trim()).filter(Boolean))];
-    if (normalized.some((tag) => tag.length > 50 || /[\u0000-\u001f]/.test(tag))) {
-      throw new Error('标签过长或包含控制字符');
-    }
-    this.db
-      .prepare('UPDATE documents SET tags = ? WHERE id = ? AND deleted = 0')
-      .run(JSON.stringify(normalized), id);
-    return normalized;
+    return documentDomain.setDocumentTags(this.db, this.documentDomainDeps, id, tags);
   }
 
+  /** 软删除（移入应用回收站）；语义见 store/documents.ts。 */
   deleteDocument(id: string): void {
-    if (!this.getDocument(id)) throw new Error('文档不存在');
-    this.db.prepare('UPDATE documents SET deleted = 1 WHERE id = ?').run(id);
-    this.invalidateReferenceGraphCache();
+    documentDomain.deleteDocument(this.db, this.documentDomainDeps, id);
   }
 
+  /** 从应用回收站恢复；语义见 store/documents.ts。 */
   restoreDocument(id: string): void {
-    const row = this.db
-      .prepare('SELECT id FROM documents WHERE id = ?')
-      .get(id) as { id: string } | undefined;
-    if (!row) throw new Error('文档不存在');
-    this.db.prepare('UPDATE documents SET deleted = 0 WHERE id = ?').run(id);
-    this.invalidateReferenceGraphCache();
+    documentDomain.restoreDocument(this.db, this.documentDomainDeps, id);
   }
 
   purgeDocument(id: string, confirmName: string): void {
@@ -4875,592 +3975,109 @@ export class Store {
     return { ok: true, removed: { ...removed, backups: backupsRemoved }, failed };
   }
 
+  /** 按文献列批注（默认不含回收站）；实现与排序见 store/annotations.ts。 */
   listAnnotations(documentId: string, trash = false): AnnotationRecord[] {
-    const rows = this.db
-      .prepare(
-        `SELECT id, document_id, page, quote, content, rects, color, style, created, deleted, origin
-         FROM annotations WHERE document_id = ? AND deleted = ? ORDER BY page, created`
-      )
-      .all(documentId, trash ? 1 : 0) as unknown as AnnotationRow[];
-    return rows.map(toAnnotation);
+    return annotationDomain.listAnnotations(this.db, documentId, trash);
   }
 
+  // -------------------------------------------------------------------------
+  // 笔记：实现已全部抽到 ./store/notes.ts（list / write / trash / folder /
+  // manualOrder），Store 上只剩薄委托，签名/返回结构不变。
+  // 拆分模式：纯函数 + 显式依赖注入（db + deps）；事务边界、内容与 refs 同成同败、
+  // 引用图缓存提交后失效等不变量都在域模块文件头逐条写明。
+  // -------------------------------------------------------------------------
+
   listNotes(documentId: string, trash = false): NoteRecord[] {
-    const rows = this.db
-      .prepare(
-        `SELECT id, document_id, page, quote, content, created, folder_path, tags, origin
-         FROM notes WHERE document_id = ? AND deleted = ? ORDER BY page, created`
-      )
-      .all(documentId, trash ? 1 : 0) as unknown as NoteRow[];
-    return rows.map(toNote);
+    return noteDomain.listNotes(this.db, documentId, trash);
   }
 
   /** 独立笔记（document_id=''，不依附任何文献）；trash=true 返回回收站里的。 */
   listStandaloneNotes(trash = false): NoteRecord[] {
-    const rows = this.db
-      .prepare(
-        `SELECT id, document_id, page, quote, content, created, folder_path, tags, origin, rowid
-         FROM notes WHERE (document_id = '' OR document_id IS NULL) AND deleted = ?
-         ORDER BY folder_path ASC, manual_order ASC, created ASC`
-      )
-      .all(trash ? 1 : 0) as unknown as NoteRow[];
-    return rows.map(toNote);
+    return noteDomain.listStandaloneNotes(this.db, trash);
   }
 
-  /** 全库笔记（含文献笔记与独立笔记；不含回收站及已删除文献下的笔记）。资料库索引用，只取元数据。 */
+  /** 全库笔记（含文献笔记与独立笔记；不含回收站及已删除文献下的笔记）。资料库索引用。 */
   listAllNotes(): NoteRecord[] {
-    const rows = this.db
-      .prepare(
-        `SELECT n.id, n.document_id, n.page, n.quote, substr(n.content, 1, 400) AS content,
-                n.created, n.folder_path, n.tags, n.origin
-         FROM notes n LEFT JOIN documents d ON d.id = n.document_id
-         WHERE n.deleted = 0 AND (n.document_id IS NULL OR n.document_id = '' OR d.deleted = 0)
-         ORDER BY n.created DESC LIMIT 2000`
-      )
-      .all() as unknown as NoteRow[];
-    return rows.map(toNote);
+    return noteDomain.listAllNotes(this.db);
   }
 
   /** 单条笔记（含独立笔记）；不存在或已删除返回 null。 */
   getNote(id: string): NoteRecord | null {
-    const row = this.db
-      .prepare(
-        'SELECT id, document_id, page, quote, content, created, folder_path, tags, origin FROM notes WHERE id = ? AND deleted = 0'
-      )
-      .get(id) as unknown as NoteRow | undefined;
-    return row ? toNote(row) : null;
+    return noteDomain.getNote(this.db, id);
   }
 
+  /** 创建笔记（含独立笔记）；实现与事务/缓存顺序见 store/notes.ts 的 createNote。 */
   createNote(input: CreateNoteInput & { tags?: string[] }): NoteRecord {
-    const documentId = typeof input.documentId === 'string' ? input.documentId.trim() : '';
-    // documentId 为空 = 独立笔记：不校验文献/页码，固定 page 0，不带原文摘录。
-    const standalone = !documentId;
-    let page = 0;
-    let quote = input.quote?.trim() ?? '';
-    if (standalone) {
-      quote = '';
-    } else {
-      const document = this.getDocument(documentId);
-      if (!document) throw new Error('文档不存在');
-      if (!Number.isInteger(input.page) || input.page < 0 || input.page > document.pages) {
-        throw new Error('页码超出范围');
-      }
-      page = input.page;
-    }
-    const externalKey = String(input.externalKey ?? '').trim();
-    // 外部稳定标识去重：同一文献内同一 externalKey 只保留一条（重复保存「回答存为笔记」等场景）。
-    // 独立笔记 documentId='' 也适用；已删除的笔记不参与去重，允许重新保存。
-    if (externalKey) {
-      const existing = this.db
-        .prepare(
-          'SELECT id FROM notes WHERE document_id = ? AND external_key = ? AND deleted = 0 LIMIT 1'
-        )
-        .get(documentId, externalKey) as { id: string } | undefined;
-      if (existing?.id) {
-        const existingNote = this.getNote(existing.id);
-        if (existingNote) return existingNote;
-      }
-    }
-    const id = randomUUID();
-    const folderPath = normalizeFolderPath(input.folderPath);
-    // 文件夹路径及其祖先必须登记，否则 Markdown 导入产生的文件夹无法重命名/删除。
-    this.ensureNoteFolderHierarchy(folderPath);
-    const manualOrder = this.nextNoteManualOrder(folderPath);
-    // 内容来源：只有显式声明 'ai'（系统代写 AI 内容）才落 'ai'，其余（含旧调用方）为 'user'。
-    const origin = normalizeContentOrigin(input.origin);
-    // 内容写入与资源引用同步必须同成同败：任何一步失败都回滚，避免内容有图但索引没登记。
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      this.db
-        .prepare(
-          `INSERT INTO notes(id, document_id, page, quote, content, external_key, folder_path, tags, manual_order, origin)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .run(
-          id,
-          documentId,
-          page,
-          quote,
-          input.content?.trim() ?? '',
-          externalKey,
-          folderPath,
-          JSON.stringify(normalizeTags(input.tags)),
-          manualOrder,
-          origin
-        );
-      this.syncNoteAssetRefs('note', id, input.content?.trim() ?? '');
-      this.db.exec('COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
-    this.invalidateReferenceGraphCache();
-    return this.getNote(id)!;
+    return noteDomain.createNote(this.db, this.noteDomainDeps, input);
   }
 
   /** 彻底删除笔记（含回收站里的）+ 回收其独占图片资源；不存在的笔记返回 404 语义。 */
   purgeNote(id: string): NotePurgeResult {
-    const row = this.db
-      .prepare('SELECT id FROM notes WHERE id = ?')
-      .get(id) as { id?: string } | undefined;
-    if (!row?.id) throw new Error('笔记不存在');
-    const affected = (
-      this.db
-        .prepare('SELECT asset_id FROM note_asset_refs WHERE source_kind = ? AND source_id = ?')
-        .all('note', id) as unknown as Array<{ asset_id: string }>
-    ).map((ref) => ref.asset_id);
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      this.db.prepare('DELETE FROM note_asset_refs WHERE source_kind = ? AND source_id = ?').run(
-        'note',
-        id
-      );
-      this.db.prepare('DELETE FROM notes WHERE id = ?').run(id);
-      this.db.exec('COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
-    noteAssets.refreshCounts(this.db, affected);
-    const purged = noteAssets.purgeRecords(this.db, this.noteAssetDeps, affected);
-    this.invalidateReferenceGraphCache();
-    return purged;
+    return noteDomain.purgeNote(this.db, this.noteDomainDeps, id);
   }
 
+  /** 更新笔记；实现与事务/缓存顺序见 store/notes.ts 的 updateNote。 */
   updateNote(id: string, input: UpdateNoteInput): NoteRecord {
-    const row = this.db
-      .prepare(
-        'SELECT id, document_id, page, quote, content, created, folder_path, tags, origin FROM notes WHERE id = ? AND deleted = 0'
-      )
-      .get(id) as unknown as NoteRow | undefined;
-    if (!row) throw new Error('笔记不存在');
-    const standalone = !row.document_id;
-    let page = Number(row.page ?? 0);
-    if (standalone) {
-      // 独立笔记没有页码：忽略传入的 page，始终保存为 0。
-      page = 0;
-    } else {
-      const document = this.getDocument(row.document_id as string);
-      if (!document) throw new Error('文档不存在');
-      page = input.page ?? page;
-      if (!Number.isInteger(page) || page < 0 || page > document.pages) {
-        throw new Error('页码超出范围');
-      }
-    }
-    const folderPath =
-      input.folderPath !== undefined
-        ? normalizeFolderPath(input.folderPath)
-        : (row.folder_path ?? '');
-    // 显式改文件夹时同样登记层级（Markdown 导入/移动后文件夹必须能重命名/删除）。
-    if (input.folderPath !== undefined) this.ensureNoteFolderHierarchy(folderPath);
-    const tags =
-      input.tags !== undefined ? normalizeTags(input.tags) : parseNoteTags(row.tags);
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      this.db
-        .prepare(
-          'UPDATE notes SET page = ?, quote = ?, content = ?, folder_path = ?, tags = ? WHERE id = ?'
-        )
-        .run(
-          page,
-          input.quote?.trim() ?? row.quote,
-          input.content?.trim() ?? row.content,
-          folderPath,
-          JSON.stringify(tags),
-          id
-        );
-      this.syncNoteAssetRefs('note', id, input.content?.trim() ?? row.content ?? '');
-      this.db.exec('COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
-    this.invalidateReferenceGraphCache();
-    return this.getNote(id)!;
+    return noteDomain.updateNote(this.db, this.noteDomainDeps, id, input);
   }
 
+  /** 软删除（移入回收站）；引用图缓存由域实现经注入的 deps 失效。 */
   deleteNote(id: string): void {
-    const result = this.db
-      .prepare('UPDATE notes SET deleted = 1 WHERE id = ? AND deleted = 0')
-      .run(id);
-    if (result.changes === 0) throw new Error('笔记不存在');
-    this.invalidateReferenceGraphCache();
+    noteDomain.deleteNote(this.db, this.noteDomainDeps, id);
   }
 
+  /** 从回收站恢复；引用图缓存由域实现经注入的 deps 失效。 */
   restoreNote(id: string): void {
-    const result = this.db.prepare('UPDATE notes SET deleted = 0 WHERE id = ?').run(id);
-    if (result.changes === 0) throw new Error('笔记不存在');
-    this.invalidateReferenceGraphCache();
+    noteDomain.restoreNote(this.db, this.noteDomainDeps, id);
   }
 
   // -------------------------------------------------------------------------
   // 笔记标签
   // -------------------------------------------------------------------------
 
-  /** 全库笔记标签（未删除笔记；已删除文献下的文献笔记不计入）。 */
+  /** 全库笔记标签（未删除笔记；已删除文献下的文献笔记不计入）。实现见 store/notes.ts。 */
   listNoteTags(): string[] {
-    const rows = this.db
-      .prepare(
-        `SELECT n.tags FROM notes n LEFT JOIN documents d ON d.id = n.document_id
-         WHERE n.deleted = 0 AND n.tags IS NOT NULL
-           AND (n.document_id IS NULL OR n.document_id = '' OR d.deleted = 0)`
-      )
-      .all() as unknown as Array<{ tags?: string | null }>;
-    const all = new Set<string>();
-    for (const row of rows) {
-      for (const tag of parseNoteTags(row.tags)) all.add(tag);
-    }
-    return [...all].sort((left, right) => left.localeCompare(right, 'zh-Hans-CN'));
+    return noteDomain.listNoteTags(this.db);
   }
 
-  /** 设置某条笔记的标签（规范化/去重后返回）。 */
+  /** 设置某条笔记的标签（规范化/去重后返回）。实现见 store/notes.ts。 */
   setNoteTags(id: string, tags: string[]): { ok: boolean; tags: string[] } {
-    const row = this.db
-      .prepare('SELECT id FROM notes WHERE id = ? AND deleted = 0')
-      .get(id) as { id?: string } | undefined;
-    if (!row?.id) throw new Error('笔记不存在');
-    const normalized = normalizeTags(tags);
-    this.db.prepare('UPDATE notes SET tags = ? WHERE id = ?').run(JSON.stringify(normalized), id);
-    return { ok: true, tags: normalized };
+    return noteDomain.setNoteTags(this.db, id, tags);
   }
 
   // -------------------------------------------------------------------------
-  // 笔记虚拟文件夹（note_folders + notes.folder_path）
+  // 笔记虚拟文件夹（note_folders + notes.folder_path）：实现已抽到 ./store/notes.ts。
+  // 层级/路径/移动/删除时的归属处理与事务边界都在域模块里；Store 只留薄委托。
   // -------------------------------------------------------------------------
 
-  /** 从 notes.folder_path 回填 note_folders（含祖先目录）；幂等，迁移/启动时调用。 */
+  /** 从 notes.folder_path 回填 note_folders（含祖先目录）；幂等，迁移时调用。 */
   private backfillNoteFolders(): void {
-    const rows = this.db
-      .prepare(
-        "SELECT DISTINCT folder_path FROM notes WHERE folder_path IS NOT NULL AND folder_path <> ''"
-      )
-      .all() as unknown as Array<{ folder_path?: string | null }>;
-    if (rows.length === 0) return;
-    const insert = this.db.prepare(
-      'INSERT OR IGNORE INTO note_folders(path, created_at) VALUES (?, ?)'
-    );
-    const now = new Date().toISOString();
-    const paths = new Set<string>();
-    for (const row of rows) {
-      const folder = String(row.folder_path ?? '');
-      if (!folder) continue;
-      const segments = folder.split('/').filter(Boolean);
-      for (let index = 1; index <= segments.length; index += 1) {
-        paths.add(segments.slice(0, index).join('/'));
-      }
-    }
-    for (const folderPath of paths) insert.run(folderPath, now);
+    noteDomain.backfillNoteFolders(this.db, this.noteDomainDeps);
   }
 
-  /** notes.folder_path（含回收站笔记）里出现的路径及其所有祖先（隐式文件夹）。 */
-  private implicitNoteFolderPaths(): Set<string> {
-    const rows = this.db
-      .prepare(
-        "SELECT DISTINCT folder_path FROM notes WHERE folder_path IS NOT NULL AND folder_path <> ''"
-      )
-      .all() as unknown as Array<{ folder_path?: string | null }>;
-    const paths = new Set<string>();
-    for (const row of rows) {
-      const folder = String(row.folder_path ?? '');
-      if (!folder) continue;
-      const segments = folder.split('/').filter(Boolean);
-      for (let index = 1; index <= segments.length; index += 1) {
-        paths.add(segments.slice(0, index).join('/'));
-      }
-    }
-    return paths;
-  }
-
-  /**
-   * 列出笔记虚拟文件夹（不含根 ''；空文件夹也返回；noteCount 只统计未删除笔记）。
-   *
-   * 除 note_folders 里显式登记的行，还包含「隐式文件夹」：notes.folder_path（含回收站笔记）
-   * 中出现的路径及其所有祖先。这样 Markdown 导入直接写入 folder_path 的目录也能被
-   * 重命名/删除，而不是报「文件夹不存在」。
-   */
+  /** 列出笔记虚拟文件夹（不含根 ''；空文件夹也返回；noteCount 只统计未删除笔记）。 */
   listNoteFolders(): NoteFolderRecord[] {
-    const explicit = this.db
-      .prepare('SELECT path, created_at FROM note_folders')
-      .all() as unknown as Array<{ path: string; created_at: string }>;
-    const counts = this.db
-      .prepare(
-        `SELECT folder_path AS path, COUNT(*) AS n FROM notes
-         WHERE deleted = 0 AND folder_path IS NOT NULL AND folder_path <> ''
-         GROUP BY folder_path`
-      )
-      .all() as unknown as Array<{ path: string; n: number }>;
-    const countByPath = new Map(counts.map((row) => [String(row.path ?? ''), Number(row.n ?? 0)]));
-    const merged = new Map<string, NoteFolderRecord>();
-    for (const row of explicit) {
-      const folderPath = String(row.path ?? '');
-      if (!folderPath) continue;
-      merged.set(folderPath, {
-        path: folderPath,
-        noteCount: countByPath.get(folderPath) ?? 0,
-        createdAt: String(row.created_at ?? '')
-      });
-    }
-    for (const folderPath of this.implicitNoteFolderPaths()) {
-      if (merged.has(folderPath)) continue;
-      merged.set(folderPath, {
-        path: folderPath,
-        noteCount: countByPath.get(folderPath) ?? 0,
-        createdAt: ''
-      });
-    }
-    return [...merged.values()].sort((left, right) =>
-      left.path < right.path ? -1 : left.path > right.path ? 1 : 0
-    );
+    return noteDomain.listNoteFolders(this.db);
   }
 
-  /** 文件夹是否存在：显式登记、隐式笔记路径或作为更短路径的祖先。 */
-  private folderPathExists(folderPath: string): boolean {
-    if (!folderPath) return true;
-    const row = this.db
-      .prepare('SELECT path FROM note_folders WHERE path = ?')
-      .get(folderPath) as { path?: string } | undefined;
-    if (row?.path) return true;
-    const note = this.db
-      .prepare(
-        `SELECT 1 AS found FROM notes
-         WHERE folder_path = ? OR folder_path LIKE ? ESCAPE '\\' LIMIT 1`
-      )
-      .get(folderPath, `${this.escapeLike(folderPath)}/%`) as { found?: number } | undefined;
-    return Boolean(note?.found);
-  }
-
-  /**
-   * 确保文件夹路径及其所有祖先都已登记到 note_folders（INSERT OR IGNORE）。
-   * Markdown 导入每条笔记写入前、createNote/updateNote 指定 folderPath 时调用。
-   */
+  /** 薄委托：确保文件夹路径及其所有祖先都已登记（INSERT OR IGNORE，不开事务）。 */
   ensureNoteFolderHierarchy(folderPath: string): void {
-    const normalized = normalizeFolderPath(folderPath);
-    if (!normalized) return;
-    const now = new Date().toISOString();
-    const insert = this.db.prepare(
-      'INSERT OR IGNORE INTO note_folders(path, created_at) VALUES (?, ?)'
-    );
-    this.insertFolderWithAncestors(
-      normalized,
-      (pathValue, createdAt) => {
-        insert.run(pathValue, createdAt);
-      },
-      now
-    );
-  }
-
-  private insertFolderWithAncestors(
-    folderPath: string,
-    insert: (path: string, createdAt: string) => void,
-    createdAt: string
-  ): void {
-    const segments = folderPath.split('/').filter(Boolean);
-    for (let index = 1; index <= segments.length; index += 1) {
-      insert(segments.slice(0, index).join('/'), createdAt);
-    }
+    noteDomain.ensureNoteFolderHierarchy(this.db, this.noteDomainDeps, folderPath);
   }
 
   /** 创建笔记文件夹（自动创建祖先）；已存在时幂等返回现有记录。 */
   createNoteFolder(folderPath: string): NoteFolderRecord {
-    const normalized = normalizeFolderPath(folderPath);
-    if (!normalized) throw new Error('需要文件夹路径');
-    const now = new Date().toISOString();
-    const insert = this.db.prepare(
-      'INSERT OR IGNORE INTO note_folders(path, created_at) VALUES (?, ?)'
-    );
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      this.insertFolderWithAncestors(normalized, (pathValue, createdAt) => {
-        insert.run(pathValue, createdAt);
-      }, now);
-      this.db.exec('COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
-    const row = this.db
-      .prepare('SELECT created_at FROM note_folders WHERE path = ?')
-      .get(normalized) as { created_at?: string } | undefined;
-    const count = this.db
-      .prepare('SELECT COUNT(*) AS n FROM notes WHERE deleted = 0 AND folder_path = ?')
-      .get(normalized) as { n?: number } | undefined;
-    return {
-      path: normalized,
-      noteCount: Number(count?.n ?? 0),
-      createdAt: String(row?.created_at ?? now)
-    };
+    return noteDomain.createNoteFolder(this.db, this.noteDomainDeps, folderPath);
   }
 
-  /**
-   * 重命名/合并文件夹子树：同步更新 note_folders 与 notes.folder_path。
-   *
-   * 目标不存在时等价重命名；目标已存在时**合并**：源子树前缀替换为目标前缀后并入目标
-   * 子树（同路径笔记允许共存），删除源子树行，保留目标原有空目录；返回移动的笔记数。
-   * 目标位于源子树内仍拒绝（避免自我包含）。
-   */
+  /** 重命名/合并文件夹子树：同步更新 note_folders 与 notes.folder_path。 */
   renameNoteFolder(from: string, to: string): NoteFolderOperationResult {
-    const source = normalizeFolderPath(from);
-    const target = normalizeFolderPath(to);
-    if (!source) throw new Error('需要文件夹路径');
-    if (!target) throw new Error('目标文件夹路径无效');
-    if (!this.folderPathExists(source)) throw new Error('文件夹不存在');
-    if (source === target) return { ok: true, movedNotes: 0 };
-    if (target.startsWith(`${source}/`)) throw new Error('不能重命名到自己的子文件夹');
-    const merging = this.folderPathExists(target);
-    const prefixPattern = `${this.escapeLike(source)}/%`;
-    const now = new Date().toISOString();
-    const insert = this.db.prepare(
-      'INSERT OR IGNORE INTO note_folders(path, created_at) VALUES (?, ?)'
-    );
-    let movedNotes = 0;
-    let movedDeletedNotes = 0;
-    const affectedNotes: Array<{ id: string; folderPath: string }> = [];
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      this.insertFolderWithAncestors(target, (pathValue, createdAt) => {
-        insert.run(pathValue, createdAt);
-      }, now);
-      const folders = this.db
-        .prepare(
-          `SELECT path, created_at FROM note_folders
-           WHERE path = ? OR path LIKE ? ESCAPE '\\' ORDER BY length(path)`
-        )
-        .all(source, prefixPattern) as unknown as Array<{ path: string; created_at: string }>;
-      if (merging) {
-        // 合并：先并入目标子树（INSERT OR IGNORE，已存在路径保留原 created_at），再删源行。
-        for (const folder of folders) {
-          const current = String(folder.path ?? '');
-          insert.run(`${target}${current.slice(source.length)}`, String(folder.created_at ?? now));
-        }
-        for (const folder of folders) {
-          this.db.prepare('DELETE FROM note_folders WHERE path = ?').run(String(folder.path ?? ''));
-        }
-      } else {
-        // 重命名：先删源行再插新行，避免目标祖先已存在时 UPDATE 触发 path 唯一约束冲突。
-        for (const folder of folders) {
-          this.db.prepare('DELETE FROM note_folders WHERE path = ?').run(String(folder.path ?? ''));
-        }
-        for (const folder of folders) {
-          const current = String(folder.path ?? '');
-          insert.run(`${target}${current.slice(source.length)}`, String(folder.created_at ?? now));
-        }
-      }
-      const notes = this.db
-        .prepare(
-          `SELECT id, folder_path, deleted FROM notes
-           WHERE folder_path = ? OR folder_path LIKE ? ESCAPE '\\'`
-        )
-        .all(source, prefixPattern) as unknown as Array<{
-        id: string;
-        folder_path: string;
-        deleted: number;
-      }>;
-      const updateNoteFolder = this.db.prepare('UPDATE notes SET folder_path = ? WHERE id = ?');
-      for (const note of notes) {
-        const current = String(note.folder_path ?? '');
-        const nextFolderPath = `${target}${current.slice(source.length)}`;
-        updateNoteFolder.run(nextFolderPath, note.id);
-        affectedNotes.push({ id: note.id, folderPath: nextFolderPath });
-        if (Number(note.deleted ?? 0) === 1) movedDeletedNotes += 1;
-        else movedNotes += 1;
-      }
-      this.db.exec('COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
-    return {
-      ok: true,
-      movedNotes,
-      movedDeletedNotes,
-      folders: this.listNoteFolders(),
-      notes: affectedNotes
-    };
+    return noteDomain.renameNoteFolder(this.db, this.noteDomainDeps, from, to);
   }
 
-  /**
-   * 删除笔记文件夹（含隐式文件夹）：删除整棵子树，但笔记不丢。
-   *
-   * - path 直接下属笔记移动到其父文件夹（path 无父则根 ''）；
-   * - 子文件夹整体上移一级（保持层级与笔记），空子文件夹目录也保留；
-   * - 删除 path 及子树的 note_folders 行，并把上移后的子文件夹重新登记；
-   * - 回收站里的笔记同样移动（计入 movedDeletedNotes）。
-   *
-   * 仅当 path 既无笔记也无 note_folders 行时抛「文件夹不存在」。
-   */
+  /** 删除笔记文件夹（含隐式文件夹）：删除整棵子树，但笔记不丢。 */
   deleteNoteFolder(folderPath: string): NoteFolderOperationResult {
-    const target = normalizeFolderPath(folderPath);
-    if (!target) throw new Error('需要文件夹路径');
-    if (!this.folderPathExists(target)) throw new Error('文件夹不存在');
-    const parent = target.includes('/') ? target.slice(0, target.lastIndexOf('/')) : '';
-    const prefixPattern = `${this.escapeLike(target)}/%`;
-    let movedNotes = 0;
-    let movedDeletedNotes = 0;
-    const affectedNotes: Array<{ id: string; folderPath: string }> = [];
-    const now = new Date().toISOString();
-    const insert = this.db.prepare(
-      'INSERT OR IGNORE INTO note_folders(path, created_at) VALUES (?, ?)'
-    );
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      const folders = this.db
-        .prepare(
-          `SELECT path, created_at FROM note_folders
-           WHERE path = ? OR path LIKE ? ESCAPE '\\' ORDER BY length(path)`
-        )
-        .all(target, prefixPattern) as unknown as Array<{ path: string; created_at: string }>;
-      const notes = this.db
-        .prepare(
-          `SELECT id, folder_path, deleted FROM notes
-           WHERE folder_path = ? OR folder_path LIKE ? ESCAPE '\\'`
-        )
-        .all(target, prefixPattern) as unknown as Array<{
-        id: string;
-        folder_path: string;
-        deleted: number;
-      }>;
-      // 删除文件夹：直接笔记上移到父级，子文件夹整体上移一级（路径前缀替换）。
-      const updateNoteFolder = this.db.prepare('UPDATE notes SET folder_path = ? WHERE id = ?');
-      for (const note of notes) {
-        const current = String(note.folder_path ?? '');
-        const nextFolderPath = normalizeFolderPath(`${parent}${current.slice(target.length)}`);
-        updateNoteFolder.run(nextFolderPath, note.id);
-        affectedNotes.push({ id: note.id, folderPath: nextFolderPath });
-        if (Number(note.deleted ?? 0) === 1) movedDeletedNotes += 1;
-        else movedNotes += 1;
-      }
-      // 删除原子树行，再登记父级与上移后的子文件夹（保留空目录层级）。
-      for (const folder of folders) {
-        this.db.prepare('DELETE FROM note_folders WHERE path = ?').run(String(folder.path ?? ''));
-      }
-      if (parent) {
-        this.insertFolderWithAncestors(
-          parent,
-          (pathValue, createdAt) => {
-            insert.run(pathValue, createdAt);
-          },
-          now
-        );
-      }
-      for (const folder of folders) {
-        const current = String(folder.path ?? '');
-        if (current === target) continue;
-        const nextFolderPath = normalizeFolderPath(`${parent}${current.slice(target.length)}`);
-        if (!nextFolderPath) continue;
-        insert.run(nextFolderPath, String(folder.created_at ?? now));
-      }
-      this.db.exec('COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
-    return {
-      ok: true,
-      movedNotes,
-      movedDeletedNotes,
-      folders: this.listNoteFolders(),
-      notes: affectedNotes
-    };
+    return noteDomain.deleteNoteFolder(this.db, this.noteDomainDeps, folderPath);
   }
 
   /** 把笔记移动到指定文件夹（'' = 根目录；目标文件夹必须存在）。 */
@@ -5468,87 +4085,27 @@ export class Store {
     id: string,
     folderPath: string
   ): { ok: boolean; folders: NoteFolderRecord[]; notes: Array<{ id: string; folderPath: string }> } {
-    const row = this.db
-      .prepare('SELECT id FROM notes WHERE id = ?')
-      .get(id) as { id?: string } | undefined;
-    if (!row?.id) throw new Error('笔记不存在');
-    const normalized = normalizeFolderPath(folderPath);
-    if (normalized && !this.folderPathExists(normalized)) throw new Error('目标文件夹不存在');
-    this.db.prepare('UPDATE notes SET folder_path = ? WHERE id = ?').run(normalized, id);
-    return {
-      ok: true,
-      folders: this.listNoteFolders(),
-      notes: [{ id, folderPath: normalized }]
-    };
+    return noteDomain.moveNoteToFolder(this.db, id, folderPath);
   }
 
-  /**
-   * 重排某文件夹内独立笔记：ids 为该文件夹内的目标顺序，只处理属于该 folderPath 的 id，
-   * 按数组下标（从 1 开始）写 manual_order（事务）。
-   */
+  // -------------------------------------------------------------------------
+  // 独立笔记批量操作与手动排序（notes.manual_order）：实现已抽到 ./store/notes.ts。
+  // -------------------------------------------------------------------------
+
+  /** 重排某文件夹内独立笔记（ids 为目标顺序，按数组下标写 manual_order）。 */
   reorderStandaloneNotes(
     folderPath: string,
     ids: string[]
   ): { ok: boolean; folders: NoteFolderRecord[]; notes: Array<{ id: string; folderPath: string }> } {
-    if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) {
-      throw new Error('需要笔记 id 字符串数组');
-    }
-    const folder = normalizeFolderPath(folderPath);
-    const ordered = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
-    const lookup = this.db.prepare(
-      `SELECT id FROM notes
-       WHERE id = ? AND deleted = 0 AND (document_id = '' OR document_id IS NULL) AND folder_path = ?`
-    );
-    const update = this.db.prepare('UPDATE notes SET manual_order = ? WHERE id = ?');
-    const notes: Array<{ id: string; folderPath: string }> = [];
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      let position = 0;
-      for (const id of ordered) {
-        const row = lookup.get(id, folder) as { id?: string } | undefined;
-        if (!row?.id) continue;
-        position += 1;
-        update.run(position, id);
-        notes.push({ id, folderPath: folder });
-      }
-      this.db.exec('COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
-    return { ok: true, folders: this.listNoteFolders(), notes };
+    return noteDomain.reorderStandaloneNotes(this.db, folderPath, ids);
   }
 
-  /** 批量软删除独立笔记（回收站）；幂等，返回实际删除条数（已是删除态不计）。 */
+  /** 批量软删除独立笔记（回收站）；幂等，返回实际删除条数。 */
   batchDeleteStandaloneNotes(ids: string[]): { ok: boolean; deleted: number } {
-    if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) {
-      throw new Error('需要笔记 id 字符串数组');
-    }
-    const ordered = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
-    const remove = this.db.prepare(
-      `UPDATE notes SET deleted = 1
-       WHERE id = ? AND deleted = 0 AND (document_id = '' OR document_id IS NULL)`
-    );
-    let deleted = 0;
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      for (const id of ordered) {
-        const result = remove.run(id);
-        if (Number(result.changes ?? 0) > 0) deleted += 1;
-      }
-      this.db.exec('COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
-    if (deleted > 0) this.invalidateReferenceGraphCache();
-    return { ok: true, deleted };
+    return noteDomain.batchDeleteStandaloneNotes(this.db, this.noteDomainDeps, ids);
   }
 
-  /**
-   * 批量移动独立笔记到指定文件夹（'' = 根目录；目标可以是已有或隐式文件夹）。
-   * 返回实际移动条数（只统计未删除的独立笔记）。
-   */
+  /** 批量移动独立笔记到指定文件夹（'' = 根目录）；返回实际移动条数。 */
   batchMoveStandaloneNotes(
     ids: string[],
     folderPath: string
@@ -5558,37 +4115,7 @@ export class Store {
     folders: NoteFolderRecord[];
     notes: Array<{ id: string; folderPath: string }>;
   } {
-    if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) {
-      throw new Error('需要笔记 id 字符串数组');
-    }
-    const folder = normalizeFolderPath(folderPath);
-    if (folder && !this.folderPathExists(folder)) throw new Error('目标文件夹不存在');
-    const ordered = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
-    const move = this.db.prepare(
-      `UPDATE notes SET folder_path = ?
-       WHERE id = ? AND deleted = 0 AND (document_id = '' OR document_id IS NULL)`
-    );
-    let moved = 0;
-    const notes: Array<{ id: string; folderPath: string }> = [];
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      for (const id of ordered) {
-        const result = move.run(folder, id);
-        if (Number(result.changes ?? 0) > 0) {
-          moved += 1;
-          notes.push({ id, folderPath: folder });
-        }
-      }
-      this.db.exec('COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
-    return { ok: true, moved, folders: this.listNoteFolders(), notes };
-  }
-
-  private escapeLike(value: string): string {
-    return value.replace(/[\\%_]/g, (character) => `\\${character}`);
+    return noteDomain.batchMoveStandaloneNotes(this.db, ids, folderPath);
   }
 
   async exportAnnotatedPdf(documentId: string): Promise<AnnotatedPdfResult> {
@@ -5943,25 +4470,7 @@ export class Store {
     folderPath: string;
     content: string;
   }> {
-    const value = `${(prefix ?? '').trim()}%`;
-    if (!value) return [];
-    const rows = this.db
-      .prepare(
-        `SELECT id, external_key, folder_path, content FROM notes
-         WHERE document_id = '' AND external_key LIKE ? ESCAPE '\\'`
-      )
-      .all(value) as unknown as Array<{
-      id: string;
-      external_key: string | null;
-      folder_path: string | null;
-      content: string | null;
-    }>;
-    return rows.map((row) => ({
-      id: row.id,
-      externalKey: String(row.external_key ?? ''),
-      folderPath: String(row.folder_path ?? ''),
-      content: String(row.content ?? '')
-    }));
+    return noteDomain.listNotesByExternalKeyPrefix(this.db, prefix);
   }
 
   /**
@@ -6266,161 +4775,35 @@ export class Store {
     return `${start > 0 ? '…' : ''}${plain}${end < content.length ? '…' : ''}`;
   }
 
+  // -------------------------------------------------------------------------
+  // 批注写路径：实现已抽到 ./store/annotations.ts（创建/更新/回收站/彻底删除），
+  // Store 上只剩薄委托，签名/返回结构不变。事务边界、内容与 refs 同成同败、
+  // COMMIT 后回收资源与失效缓存等不变量见域模块文件头。
+  // -------------------------------------------------------------------------
+
+  /** 创建批注（含 rects 校验、origin 归一与资源引用同步）；实现与事务顺序见 store/annotations.ts。 */
   createAnnotation(input: CreateAnnotationInput): AnnotationRecord {
-    if (input.rects) {
-      let rects: unknown;
-      try {
-        rects = JSON.parse(input.rects);
-      } catch {
-        throw new Error('批注位置无效');
-      }
-      if (
-        !Array.isArray(rects) ||
-        !rects.every((rect) => {
-          if (!Array.isArray(rect) || rect.length !== 4) return false;
-          const values = rect as number[];
-          return (
-            values.every((value) => typeof value === 'number' && value >= 0 && value <= 1) &&
-            values[0]! < values[2]! &&
-            values[1]! < values[3]!
-          );
-        })
-      ) {
-        throw new Error('批注位置无效');
-      }
-    }
-    const id = randomUUID();
-    // 内容来源：AI 译文/识别结果由系统写入批注时显式传 'ai'；用户手工新建为 'user'。
-    const origin = normalizeContentOrigin(input.origin);
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      this.db
-        .prepare(
-          `INSERT INTO annotations
-           (id, document_id, page, quote, content, rects, color, style, deleted, external_key, created, origin)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`
-        )
-        .run(
-          id,
-          input.documentId,
-          Math.max(1, Math.trunc(input.page)),
-          input.quote ?? '',
-          input.content ?? '',
-          input.rects ?? '',
-          input.color ?? 'yellow',
-          input.style ?? 'highlight',
-          input.externalKey ?? '',
-          new Date().toISOString(),
-          origin
-        );
-      this.syncNoteAssetRefs('annotation', id, input.content ?? '');
-      this.db.exec('COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
-    const row = this.db
-      .prepare(
-        `SELECT id, document_id, page, quote, content, rects, color, style, created, deleted, origin
-         FROM annotations WHERE id = ?`
-      )
-      .get(id) as unknown as AnnotationRow;
-    const annotation = toAnnotation(row);
-    this.invalidateReferenceGraphCache();
-    return annotation;
+    return annotationDomain.createAnnotation(this.db, this.annotationDomainDeps, input);
   }
 
+  /** 更新批注（正文/颜色/样式）；实现与事务顺序见 store/annotations.ts。 */
   updateAnnotation(id: string, input: UpdateAnnotationInput): AnnotationRecord | null {
-    const fields: string[] = [];
-    const values: Array<string | number> = [];
-    if (input.content != null) {
-      fields.push('content = ?');
-      values.push(input.content);
-    }
-    if (input.color != null) {
-      fields.push('color = ?');
-      values.push(input.color);
-    }
-    if (input.style != null) {
-      fields.push('style = ?');
-      values.push(input.style);
-    }
-    if (fields.length === 0) return this.getAnnotation(id);
-    values.push(id);
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      this.db
-        .prepare(`UPDATE annotations SET ${fields.join(', ')} WHERE id = ? AND deleted = 0`)
-        .run(...values);
-      const current = this.db
-        .prepare('SELECT content FROM annotations WHERE id = ? AND deleted = 0')
-        .get(id) as { content?: string | null } | undefined;
-      if (current) this.syncNoteAssetRefs('annotation', id, current.content ?? '');
-      this.db.exec('COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
-    const annotation = this.getAnnotation(id);
-    this.invalidateReferenceGraphCache();
-    return annotation;
+    return annotationDomain.updateAnnotation(this.db, this.annotationDomainDeps, id, input);
   }
 
-  /**
-   * 彻底删除批注（含软删除）+ 回收其独占图片资源；不存在的批注返回 404 语义。
-   * annotations 只有软删除，这里才是真正的硬删除。
-   */
+  /** 彻底删除批注（含回收站里的）+ 回收其独占图片资源；实现见 store/annotations.ts。 */
   purgeAnnotation(id: string): NotePurgeResult {
-    const row = this.db
-      .prepare('SELECT id FROM annotations WHERE id = ?')
-      .get(id) as { id?: string } | undefined;
-    if (!row?.id) throw new Error('批注不存在');
-    const affected = (
-      this.db
-        .prepare('SELECT asset_id FROM note_asset_refs WHERE source_kind = ? AND source_id = ?')
-        .all('annotation', id) as unknown as Array<{ asset_id: string }>
-    ).map((ref) => ref.asset_id);
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      this.db
-        .prepare('DELETE FROM note_asset_refs WHERE source_kind = ? AND source_id = ?')
-        .run('annotation', id);
-      this.db.prepare('DELETE FROM annotations WHERE id = ?').run(id);
-      this.db.exec('COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
-    noteAssets.refreshCounts(this.db, affected);
-    const purged = noteAssets.purgeRecords(this.db, this.noteAssetDeps, affected);
-    this.invalidateReferenceGraphCache();
-    return purged;
+    return annotationDomain.purgeAnnotation(this.db, this.annotationDomainDeps, id);
   }
 
+  /** 软删除（移入回收站）；引用图缓存由域实现经注入的 deps 失效。 */
   deleteAnnotation(id: string): void {
-    this.db.prepare('UPDATE annotations SET deleted = 1 WHERE id = ?').run(id);
-    this.invalidateReferenceGraphCache();
+    annotationDomain.deleteAnnotation(this.db, this.annotationDomainDeps, id);
   }
 
   /** 从回收站恢复软删除的批注；refs 在软删除期间保留，恢复后无需重建。 */
   restoreAnnotation(id: string): void {
-    const row = this.db
-      .prepare('SELECT id, deleted FROM annotations WHERE id = ?')
-      .get(id) as { id?: string; deleted?: number } | undefined;
-    if (!row?.id) throw new Error('批注不存在');
-    if (Number(row.deleted ?? 0) !== 1) throw new Error('批注不在回收站');
-    this.db.prepare('UPDATE annotations SET deleted = 0 WHERE id = ?').run(id);
-    this.invalidateReferenceGraphCache();
-  }
-
-  private getAnnotation(id: string): AnnotationRecord | null {
-    const row = this.db
-      .prepare(
-        `SELECT id, document_id, page, quote, content, rects, color, style, created, deleted, origin
-         FROM annotations WHERE id = ? AND deleted = 0`
-      )
-      .get(id) as unknown as AnnotationRow | undefined;
-    return row ? toAnnotation(row) : null;
+    annotationDomain.restoreAnnotation(this.db, this.annotationDomainDeps, id);
   }
 
   search(query: string, documentId?: string, limit = 20): SearchHit[] {
@@ -6630,51 +5013,9 @@ export class Store {
     };
   }
 
+  /** 某文献的页遮罩规则（只读；遮罩写入/重建链路仍在本文件）；语义见 store/documents.ts。 */
   listPageMasks(documentId: string): PageMask[] {
-    return this.db
-      .prepare(
-        `SELECT id, document_id, page, scope, range_start, range_end, exclude_pages,
-                x0, y0, x1, y1 FROM page_masks
-         WHERE document_id = ? ORDER BY page, created, rowid`
-      )
-      .all(documentId)
-      .map((row) => {
-        const value = row as unknown as {
-          id: string;
-          document_id: string;
-          page: number;
-          scope: string;
-          range_start: number;
-          range_end: number;
-          exclude_pages: string;
-          x0: number;
-          y0: number;
-          x1: number;
-          y1: number;
-        };
-        let excludePages: number[] = [];
-        try {
-          const parsed = JSON.parse(value.exclude_pages || '[]') as unknown;
-          if (Array.isArray(parsed)) {
-            excludePages = parsed.filter((item): item is number => Number.isInteger(item));
-          }
-        } catch {
-          excludePages = [];
-        }
-        return {
-          id: value.id,
-          documentId: value.document_id,
-          page: value.page,
-          scope: (value.scope || (value.page === 0 ? 'all' : 'page')) as PageMask['scope'],
-          rangeStart: value.range_start || undefined,
-          rangeEnd: value.range_end || undefined,
-          excludePages,
-          x0: value.x0,
-          y0: value.y0,
-          x1: value.x1,
-          y1: value.y1
-        };
-      });
+    return documentDomain.listPageMasks(this.db, documentId);
   }
 
   async addPageMask(
@@ -7037,16 +5378,9 @@ export class Store {
     };
   }
 
+  /** 页遮罩内容指纹（空遮罩为 ''）；语义见 store/documents.ts。 */
   pageMaskRevision(documentId: string): string {
-    const masks = this.listPageMasks(documentId);
-    if (masks.length === 0) return '';
-    const digest = createHash('sha256');
-    for (const mask of masks) {
-      digest.update(
-        `${mask.id}|${mask.page}|${mask.x0}|${mask.y0}|${mask.x1}|${mask.y1}\n`
-      );
-    }
-    return digest.digest('hex').slice(0, 16);
+    return documentDomain.pageMaskRevision(this.db, documentId);
   }
 
   private navigationStamp(documentId: string): { stamp: string; sourceHash: string } {
@@ -8066,32 +6400,12 @@ export class Store {
     }
   }
 
+  /**
+   * 读取一页文本（精读热路径：单页已索引查询 + 行重排，不缓存、不额外扫描）。
+   * 实现与 page_edits / page_masks 合并语义见 store/documents.ts 的 getPageText。
+   */
   getPageText(documentId: string, page: number): string {
-    // 用户校订/OCR 结果优先于 PDF 原生文本层（page_edits 语义）。
-    const target = Math.max(1, Math.trunc(page));
-    const edit = this.getPageEdit(documentId, target);
-    const edited = edit?.text?.trim();
-    if (edited) {
-      // OCR 页保存的是「整页文本 + 全量行框」：读取时按**当前**无关区域规则过滤行框再拼接，
-      // 删除规则后同一份行框又能恢复（可逆）。
-      // 用户校订（origin='user'）直接返回正文，不再按几何裁剪。
-      if (edit?.origin === 'ocr' && edit.boxes) {
-        const lines = this.parsePageEditBoxes(edit.boxes);
-        if (lines.length > 0) {
-          const masks = this.listPageMasks(documentId);
-          const visible =
-            masks.length > 0
-              ? visibleLines({ page: target, width: 1, height: 1, lines }, masks)
-              : lines;
-          return visible.map((line) => line.text).join('\n');
-        }
-      }
-      return edited;
-    }
-    const rows = this.db
-      .prepare('SELECT text FROM chunks WHERE document_id = ? AND page = ? ORDER BY rowid')
-      .all(documentId, target) as unknown as Array<{ text: string }>;
-    return reflowPageLines(rows.map((row) => row.text));
+    return documentDomain.getPageText(this.db, this.documentDomainDeps, documentId, page);
   }
 
   /**
@@ -8220,81 +6534,31 @@ export class Store {
     };
   }
 
-  /** 解析 page_edits.boxes（归一化 0..1 的 OCR 行框）；坏数据按空处理。 */
-  private parsePageEditBoxes(raw: string): LayoutLine[] {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return [];
-    }
-    if (!Array.isArray(parsed)) return [];
-    const lines: LayoutLine[] = [];
-    for (const row of parsed) {
-      if (!row || typeof row !== 'object') continue;
-      const value = row as { text?: unknown; bbox?: unknown };
-      if (typeof value.text !== 'string' || !Array.isArray(value.bbox)) continue;
-      if (value.bbox.length !== 4) continue;
-      const numbers = value.bbox as unknown[];
-      if (!numbers.every((item) => typeof item === 'number' && Number.isFinite(item))) continue;
-      const [x0, y0, x1, y1] = numbers as [number, number, number, number];
-      lines.push({ text: value.text, bbox: [x0, y0, x1, y1] });
-    }
-    return lines;
-  }
 
+  /** 读取某页的 page_edits（校订/OCR 结果，含 sha256 版本校验）；语义见 store/documents.ts。 */
   getPageEdit(
     documentId: string,
     page: number
   ): { text: string; origin: string; boxes: string; version: string } | null {
-    const document = this.getDocument(documentId);
-    const row = this.db
-      .prepare(
-        'SELECT text, origin, boxes, version FROM page_edits WHERE document_id = ? AND page = ?'
-      )
-      .get(documentId, Math.max(1, Math.trunc(page))) as
-      | { text?: string; origin?: string; boxes?: string; version?: string }
-      | undefined;
-    if (!row) return null;
-    if (document && row.version && row.version !== document.sha256) return null;
-    return {
-      text: String(row.text ?? ''),
-      origin: String(row.origin ?? ''),
-      boxes: String(row.boxes ?? ''),
-      version: String(row.version ?? '')
-    };
+    return documentDomain.getPageEdit(this.db, this.documentDomainDeps, documentId, page);
   }
 
+  /**
+   * 保存用户校订的页文本（page_edits）并同步该页检索索引。
+   * 事务/顺序与 db.isOpen 检查见 store/documents.ts 的 savePageTextEdit。
+   */
   async savePageTextEdit(
     documentId: string,
     page: number,
     text: string
   ): Promise<{ text: string; origin: string; boxes: string }> {
-    const document = this.getDocument(documentId);
-    if (!document) throw new Error('文档不存在');
-    const target = Math.max(1, Math.trunc(page));
-    const existing = this.getPageEdit(documentId, target);
-    // 保留 OCR 行框：它是版面上那一行的位置，与文字是否被改写无关。
-    const boxes = existing?.boxes ?? '';
-    this.db
-      .prepare(
-        `INSERT OR REPLACE INTO page_edits(document_id, page, version, text, origin, boxes)
-         VALUES (?, ?, ?, ?, 'user', ?)`
-      )
-      .run(documentId, target, document.sha256, text, boxes);
-    // 校订必须同步进检索索引：否则问答/证据仍读到旧 chunks。
-    // 页面尺寸用于把归一化行框换算成 chunks 的页面点坐标；读不到就退回无行框的平铺块。
-    const layout = await this.readLayout(documentId).catch(() => null);
-    // 等待 PDF 解析期间库可能已被关闭（关闭应用 / 测试清理）：此时不再写索引。
-    if (!this.db.isOpen) return { text, origin: 'user', boxes };
-    this.rebuildPageChunks(
+    return documentDomain.savePageTextEdit(
+      this.db,
+      this.documentDomainDeps,
       documentId,
-      target,
-      text,
-      boxes,
-      layout?.pages.find((item) => item.page === target)
+      page,
+      text
     );
-    return { text, origin: 'user', boxes };
   }
 
   /** 用页文本重建该页 chunks（含 FTS 行号），按删除+重写的口径。 */
@@ -8346,7 +6610,7 @@ export class Store {
     boxesJson: string,
     layoutPage?: LayoutPage
   ): Array<{ text: string; bbox: string }> {
-    const boxes = this.parsePageEditBoxes(boxesJson);
+    const boxes = parsePageEditBoxes(boxesJson);
     if (boxes.length > 0) {
       const chunks: Array<{ text: string; bbox: string }> = [];
       const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
@@ -8376,26 +6640,14 @@ export class Store {
     return flat;
   }
 
+  /** 缓存整页 OCR 结果（page_edits，origin='ocr'）；语义见 store/documents.ts。 */
   cacheOcrPage(
     documentId: string,
     page: number,
     text: string,
     boxes: unknown[]
   ): void {
-    const document = this.getDocument(documentId);
-    if (!document) throw new Error('文档不存在');
-    this.db
-      .prepare(
-        `INSERT OR REPLACE INTO page_edits(document_id, page, version, text, origin, boxes)
-         VALUES (?, ?, ?, ?, 'ocr', ?)`
-      )
-      .run(
-        documentId,
-        Math.max(1, Math.trunc(page)),
-        document.sha256,
-        text,
-        JSON.stringify(boxes)
-      );
+    documentDomain.cacheOcrPage(this.db, this.documentDomainDeps, documentId, page, text, boxes);
   }
 
   /**
@@ -8570,38 +6822,19 @@ export class Store {
     return result;
   }
 
-  /** 检索索引版本号：chunks/派生结构/译文/文献改名变化时由触发器递增。 */
+  /** 检索索引版本号（chunks/派生结构/译文/改名变化时由触发器递增）；语义见 store/documents.ts。 */
   getRetrievalRevision(): number {
-    const row = this.db
-      .prepare('SELECT value FROM retrieval_revision WHERE id = 1')
-      .get() as { value?: number | bigint } | undefined;
-    return Number(row?.value ?? 0);
+    return documentDomain.getRetrievalRevision(this.db);
   }
 
-  /** 单篇文献的检索版本号：该文献 chunks/结构/译文/改名变化时递增。 */
+  /** 单篇文献的检索版本号；语义见 store/documents.ts。 */
   getDocumentRetrievalRevision(documentId: string): number {
-    const row = this.db
-      .prepare('SELECT value FROM retrieval_document_revision WHERE document_id = ?')
-      .get(documentId) as { value?: number | bigint } | undefined;
-    return Number(row?.value ?? 0);
+    return documentDomain.getDocumentRetrievalRevision(this.db, documentId);
   }
 
-  /** 批量读取多篇文献的检索版本（scope 检索的缓存键用）；缺失的文献按 0 处理。 */
+  /** 批量读取多篇文献的检索版本（scope 检索缓存键）；语义见 store/documents.ts。 */
   getDocumentRetrievalRevisions(documentIds: readonly string[]): Record<string, number> {
-    const unique = [...new Set(documentIds.filter(Boolean))];
-    const result: Record<string, number> = {};
-    for (const id of unique) result[id] = 0;
-    if (unique.length === 0) return result;
-    const marks = unique.map(() => '?').join(',');
-    const rows = this.db
-      .prepare(
-        `SELECT document_id, value FROM retrieval_document_revision WHERE document_id IN (${marks})`
-      )
-      .all(...unique) as unknown as Array<{ document_id: string; value: number | bigint | null }>;
-    for (const row of rows) {
-      result[row.document_id] = Number(row.value ?? 0);
-    }
-    return result;
+    return documentDomain.getDocumentRetrievalRevisions(this.db, documentIds);
   }
 
   listChunks(documentId?: string): Array<{
