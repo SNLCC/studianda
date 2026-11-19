@@ -17,9 +17,9 @@ import { Store } from '../src/store.js';
 /**
  * `chat_session_id` / `reading_chapter_index` 的 **HTTP 接线测试**（先红后绿）。
  *
- * 背景（`dev-notes/roadmap/SESSION-ID-AUDIT-2026-11-20.md`）：
- * 两个 ask 路由用显式字段白名单组装 `answerQuestion` 入参，客户端一直在发这两个字段，
+ * 背景：两个 ask 路由用显式字段白名单组装 `answerQuestion` 入参，客户端一直在发这两个字段，
  * 但路由把它们丢了——"完整会话/摘要压缩/审计继承"与"用户选的章"在 HTTP 上不可达。
+ * 本文件即该缺口的回归测试（先红后绿）。
  *
  * 本文件只从 HTTP 入口验证行为，不直接调 `answerQuestion` 或 `prepareReadingSessionContext`：
  * 1. 带 `chat_session_id`（stream + 非 stream）：服务端完整会话进入模型提示词（>3 轮），
