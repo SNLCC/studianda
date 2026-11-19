@@ -4,14 +4,20 @@ import { API_PREFIX, type OcrJobRecord } from '@studianda/shared';
 import { recognizePage, recognizeRegion } from '../ocr.js';
 import type { SecretStore } from '../secrets.js';
 import type { Store } from '../store.js';
+import type { DocumentRequestRegistry } from './document-request-registry.js';
 import { badRequest, notFound } from './http.js';
 
 /** OCR 路由（整页/区域/区域任务），从 server.ts 抽出。 */
 export function registerOcrRoutes(
   app: FastifyInstance,
-  deps: { store: Store; secrets: SecretStore }
+  deps: {
+    store: Store;
+    secrets: SecretStore;
+    /** 文档级在途请求登记表：区域 OCR 后台任务按文献登记，purge/清空数据时中止。 */
+    documentRequests: DocumentRequestRegistry;
+  }
 ): void {
-  const { store, secrets } = deps;
+  const { store, secrets, documentRequests } = deps;
   const ocrJobs = new Map<string, OcrJobRecord>();
   // 每个后台任务一个取消信号：取消时真的中断正在识别的页（destroy 取图 worker / tesseract 实例）。
   const ocrJobAborts = new Map<string, AbortController>();
@@ -96,7 +102,37 @@ export function registerOcrRoutes(
     };
     ocrJobs.set(jobId, record);
     ocrJobAborts.set(jobId, controller);
+    // 区域 OCR 是**文档级在途任务**：登记到 documentRequests，彻底删除该文献（purge）或
+    // 清空用户数据时，`abort(id)` 会同步中止本次识别（信号沿 recognizeRegion 传到取图与
+    // tesseract 实例，不留后台线程）；与用户点「取消」共用同一个 controller/abort 通道，
+    // 但两者收尾时的**语义不同**（见 abortByServer 的注释）。untrack 放在 finally，
+    // 成功/失败/中止三条路径都会归零。
+    const untrackDocument = documentRequests.track([id], controller);
     const wasCancelled = (): boolean => record.state === 'cancelling';
+    /**
+     * 服务端中止（purge 删文 / 清空数据 / app.close）的收尾。
+     *
+     * 语义选择：**明确报失败，不静默结束**。
+     * - 不用 `state='cancelled'`：那是用户点「取消区域识别」的专属状态，前端固定显示
+     *   「区域识别已取消。」；把服务端删文也塞进去，用户会以为自己取消了、或不知道为何没结果。
+     * - 不照抄跨篇追问的 409/conflict：那边是「一个 HTTP 请求正在等回答」，409 是请求级状态码；
+     *   这里是任务式接口，start 早已返回 200 + jobId，状态查询 GET jobs 是**读资源**，
+     *   把它改成 409 会增加轮询分支且丢掉任务记录本身。原因编码进任务记录：
+     *   `state='failed'` + `error.code='document_deleted'` + 中文文案，前端失败通道会显示
+     *   「区域识别失败：文献已删除，区域识别已中止」，与「我取消的」可区分。
+     * - 不用 503/499：删掉的文献不会因重试恢复，499 在本仓库专指客户端断开。
+     */
+    const abortByServer = (): void => {
+      record.state = 'failed';
+      record.progress = 0;
+      record.stage = 'failed';
+      record.error = store.getDocument(id)
+        ? {
+            code: 'server_aborted',
+            message: '服务端已中止区域识别（应用关闭或数据正在被清空）'
+          }
+        : { code: 'document_deleted', message: '文献已删除，区域识别已中止' };
+    };
     void (async () => {
       record.state = 'running';
       record.stage = 'recognizing';
@@ -119,6 +155,9 @@ export function registerOcrRoutes(
           record.state = 'cancelled';
           record.progress = 0;
           record.stage = 'cancelled';
+        } else if (controller.signal.aborted) {
+          // 识别晚于中止完成（视觉路径不吃 signal）：结果属于已删除的文献，丢弃不返回。
+          abortByServer();
         } else {
           record.state = 'done';
           record.progress = 100;
@@ -130,6 +169,8 @@ export function registerOcrRoutes(
           record.state = 'cancelled';
           record.progress = 0;
           record.stage = 'cancelled';
+        } else if (controller.signal.aborted) {
+          abortByServer();
         } else {
           const message = error instanceof Error ? error.message : '区域识别失败';
           record.state = 'failed';
@@ -140,6 +181,7 @@ export function registerOcrRoutes(
           };
         }
       } finally {
+        untrackDocument();
         record.finishedAt = new Date().toISOString();
         ocrJobAborts.delete(jobId);
       }

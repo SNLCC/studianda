@@ -172,8 +172,8 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   // 已导入的本地 tokenizer：启动即生效；文件缺失/损坏时停在保守估算，不影响启动。
   loadActiveTokenizer(options.store);
   // 进行中的请求按文献登记：彻底删除文献之前先取消这些请求，避免后台任务继续
-  // 读写已删除的数据。每实例一张表：chat / 翻译单页 / 全书摘要三处登记，
-  // purge 与清空数据两处消费，因此不能做成模块级单例（会跨 server 实例泄漏）。
+  // 读写已删除的数据。每实例一张表：chat / 翻译单页 / 全书摘要 / 区域 OCR 后台任务
+  // 四处登记，purge 与清空数据两处消费，因此不能做成模块级单例（会跨 server 实例泄漏）。
   const documentRequests = new DocumentRequestRegistry();
   // 同一文献同一时刻只处理一轮问答：两个窗口同时提问会让 user/assistant 交错落库。
   // 每实例一份（进程内集合足够，单机 Core）；与 documentRequests 分工不同，不要合并。
@@ -191,7 +191,8 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   // 关停清理：全仓此前没有任何 `onClose` 接线（grep 确认），这是唯一一处，不新开第二个
   // 清理 hook。顺序按"共享中止通道 → 准入锁 → 任务状态"分层：
   // 1) 先 abort 在途请求：abort 只是发停止信号，让在途请求/后台 run 的 finally 收尾
-  //    （释放锁、落库）仍可正常执行；它是 chat / 翻译单页 / 全书摘要三处共用的唯一中止通道；
+  //    （释放锁、落库）仍可正常执行；它是 chat / 翻译单页 / 全书摘要 / 区域 OCR 后台任务
+  //    四处共用的唯一中止通道；
   // 2) 再 close 轮次锁：拒绝后续 begin，是"不再接新轮次"的最后一道门；
   // 3) 最后 close 全书摘要运行器：中止它自己的 controller 并清空 job 表，让恢复中的 run
   //    因身份比较/closed 而放弃回写。三者都同步、不 await、各自容错：单个失败只记日志，
@@ -225,9 +226,19 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     }
   });
   registerBackupRoutes(app, options.store);
-  registerOcrRoutes(app, { store: options.store, secrets: options.secrets });
+  registerOcrRoutes(app, {
+    store: options.store,
+    secrets: options.secrets,
+    // 区域 OCR 后台任务也是「文档级在途任务」：必须按文献登记，purge 时才能中止。
+    documentRequests
+  });
   // 跨文献（语料）会话（schema 23）：范围快照 + 可追问的跨篇精读会话。
-  registerCorpusSessionRoutes(app, { store: options.store, secrets: options.secrets });
+  // 追问按本轮在读文献登记进 documentRequests：任一篇被 purge 时中止整轮（见路由内注释）。
+  registerCorpusSessionRoutes(app, {
+    store: options.store,
+    secrets: options.secrets,
+    documentRequests
+  });
 
   app.addHook('onRequest', async (request, reply) => {
     // 安全边界：

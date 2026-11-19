@@ -21,11 +21,20 @@ import {
 import { resolveProjectScope } from '../project-scope.js';
 import type { SecretStore } from '../secrets.js';
 import type { Store } from '../store.js';
+import type { DocumentRequestRegistry } from './document-request-registry.js';
 import { badRequest, notFound } from './http.js';
 
 export interface CorpusSessionRouteOptions {
   store: Store;
   secrets: SecretStore;
+  /**
+   * 文档级在途请求登记表（与 chat / 翻译 / 全书摘要共用，每 server 实例一份）。
+   *
+   * 跨文献追问会同时读多篇文献，所以按**本轮实际会读**的会话范围把同一个 controller
+   * 登记到多个文档 id：其中任意一篇被彻底删除时，purge 的 `abort(id)` 会同步中止本轮，
+   * 避免后台继续用已删文献的原文/证据拼回答。
+   */
+  documentRequests: DocumentRequestRegistry;
 }
 
 /**
@@ -45,7 +54,7 @@ export function registerCorpusSessionRoutes(
   app: FastifyInstance,
   options: CorpusSessionRouteOptions
 ): void {
-  const { store, secrets } = options;
+  const { store, secrets, documentRequests } = options;
   // 同一会话同时只允许一轮在飞：并发两轮会让 user/assistant 消息交错落库。
   const activeAsks = new Set<string>();
 
@@ -383,6 +392,26 @@ export function registerCorpusSessionRoutes(
       });
     }
     activeAsks.add(id);
+    // 本轮的中止通道（两个分支共用）：
+    // - 客户端断连/取消 → 499 + cancelled（与 /chat/ask 同口径，语义是「调用方自己取消」）；
+    // - 服务端主动中止（purge / 清空数据通过 documentRequests.abort）→ 409 + conflict，
+    //   语义是「本轮依赖的证据集已被用户删掉」，文案必须与「已取消阅读」区分开。
+    // 判定方式：客户端断连会把 clientGone 置 true，登记表的 abort 不会。
+    const controller = new AbortController();
+    let clientGone = false;
+    const abortFromClient = (): void => {
+      clientGone = true;
+      controller.abort();
+    };
+    // 按**本轮实际会读**的会话范围登记（快照里建轮前已删除的文献会被跳过、不读，也不登记）：
+    // 任一在读文献被彻底删除时，purge 的 abort(id) 会同步中止本轮；track 返回幂等 untrack。
+    const untrackDocuments = documentRequests.track(
+      documents.map((document) => document.id),
+      controller
+    );
+    // 用响应流的 close/aborted 判断真正的客户端取消。
+    reply.raw.once('close', abortFromClient);
+    request.raw.once('aborted', abortFromClient);
     try {
       // 3) 历史来自该会话已落库的消息（复用 prepareHistory 的裁剪口径），不要求客户端重传。
       const history = store.listCorpusSessionMessages(id).map((message) => ({
@@ -399,6 +428,48 @@ export function registerCorpusSessionRoutes(
         }
       });
       const plan = planQuestion(question, selection);
+
+      /**
+       * 被登记表中止（删文 purge / 清空用户数据）时的收尾数据。
+       *
+       * 错误标识的选择（不复用客户端的 499/cancelled）：
+       * - 409 + `conflict`：本请求依赖的证据集已不存在，属于「请求与当前资源状态冲突」；
+       *   本文件在「整轮开始前范围已全被删」时也返回 409 conflict，同一族语义；
+       * - 不用 503：503 表示「服务暂时不可用、稍后可重试」，而删掉的文献不会因重试恢复，
+       *   用它会把「证据没了」误报成「服务抖动」；
+       * - 不用 499：499 在本仓库专指客户端断开/主动取消，用户需要能区分两种中止原因。
+       * 同时返回已删文献 id，便于调用方展示「是哪几篇没了」。
+       */
+      const serverAbortInfo = (): { message: string; deletedDocumentIds: string[] } => {
+        const deletedDocumentIds = documents
+          .filter((document) => !store.getDocument(document.id))
+          .map((document) => document.id);
+        return {
+          message:
+            deletedDocumentIds.length > 0
+              ? '所选文献已被删除，本轮回答已中止'
+              : '本轮回答已被服务端中止（文献范围已变化或数据正在被清空）',
+          deletedDocumentIds
+        };
+      };
+
+      /** JSON 分支的中止返回：客户端取消 499/cancelled；服务端删文 409/conflict。 */
+      const abortJsonResponse = () => {
+        if (clientGone) {
+          return reply.code(499).send({
+            error: API_ERROR_CODES.cancelled,
+            message: '请求已取消'
+          });
+        }
+        const { message, deletedDocumentIds } = serverAbortInfo();
+        recordFailure(id, message);
+        return reply.code(409).send({
+          error: API_ERROR_CODES.conflict,
+          message,
+          user_message_id: userMessage.id,
+          details: { deleted_document_ids: deletedDocumentIds }
+        });
+      };
 
       // 兼容分支：不带 Accept 的调用方仍拿一次性 JSON（旧客户端/旧脚本不变）。
       if (!String(request.headers.accept ?? '').includes('text/event-stream')) {
@@ -424,7 +495,7 @@ export function registerCorpusSessionRoutes(
             selection,
             documents.map((document) => document.id),
             readingBatchBudget(store),
-            undefined,
+            controller.signal,
             undefined,
             allowKnowledge,
             history,
@@ -434,10 +505,13 @@ export function registerCorpusSessionRoutes(
             plan
           );
         } catch (error) {
-          // 取消要冒泡（由 server 的 AbortError 处理），其它失败如实落成一条失败消息。
-          if (isAbortError(error)) throw error;
+          // 中止分两类：客户端断连 499/cancelled；服务端因删文中止 409/conflict。
+          if (isAbortError(error)) return abortJsonResponse();
           failure = error instanceof Error ? error.message : '跨文献阅读失败';
         }
+        // 审计阶段可能吞掉中止错误（auditGeneratedAnswer 内部 catch 返回「未完成」），
+        // 所以拿到回答后再核对一次 signal：被删文中止就丢弃本轮结果，不落库、不返回。
+        if (controller.signal.aborted) return abortJsonResponse();
         if (failure || !answer || !answer.answer || !answer.answer.trim()) {
           const reason = failure || '跨文献阅读没有返回可用回答';
           recordFailure(id, reason);
@@ -464,11 +538,22 @@ export function registerCorpusSessionRoutes(
       const send = (event: string, data: unknown): void => {
         raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
       };
-      const controller = new AbortController();
-      const abort = (): void => controller.abort();
-      // 用响应流的 close/aborted 判断真正的取消（客户端中途断开）。
-      raw.once('close', abort);
-      request.raw.once('aborted', abort);
+      /** SSE 分支的中止收尾：客户端取消 499/cancelled；服务端删文 409/conflict。 */
+      const sendAborted = (): void => {
+        if (clientGone) {
+          // 客户端已断开，写不出去也应如实记为取消口径（不落失败消息）。
+          send('error', { message: '已取消阅读', status: 499 });
+          return;
+        }
+        const { message, deletedDocumentIds } = serverAbortInfo();
+        recordFailure(id, message);
+        send('error', {
+          message,
+          status: 409,
+          error: API_ERROR_CODES.conflict,
+          deleted_document_ids: deletedDocumentIds
+        });
+      };
       try {
         // 「全读完/任务已过期」：不调用模型，照样只走 result 事件（事件类型不变），
         // 复用上一轮已保存的完整回答（审计摘要一并复制回去）。
@@ -510,9 +595,18 @@ export function registerCorpusSessionRoutes(
             (text) => send('stage', { text })
           );
         } catch (error) {
-          // 客户端断开：冒泡到外层按「连接已没了」安静收尾，不写事件、不记失败消息。
-          if (isAbortError(error)) throw error;
+          // 中止分两类：客户端断连 499/cancelled；服务端因删文中止 409/conflict。
+          if (isAbortError(error)) {
+            sendAborted();
+            return;
+          }
           failure = error instanceof Error ? error.message : '跨文献阅读失败';
+        }
+        // 与 JSON 分支同因：审计阶段可能吞掉中止错误，拿到回答后再核对一次 signal，
+        // 被删文中止就丢弃本轮结果（不发 result、不落库）。
+        if (controller.signal.aborted) {
+          sendAborted();
+          return;
         }
         if (failure || !answer || !answer.answer || !answer.answer.trim()) {
           const reason = failure || '跨文献阅读没有返回可用回答';
@@ -524,15 +618,21 @@ export function registerCorpusSessionRoutes(
         // 到这里正文已通过审计/逐字核验/页码裁剪：一次性下发完整响应，绝不提前流正文。
         send('result', persistAnswer(id, userMessage.id, answer, allowKnowledge, skippedDocumentIds));
       } catch (error) {
-        // 取消（客户端断开）：写不出去也不需要写；其它失败只发 error。
-        if (isAbortError(error)) return;
+        // 兜底：仍落在中止分支时按原因收尾（客户端断开写不出去也无害）；其它失败只发 error。
+        if (isAbortError(error)) {
+          sendAborted();
+          return;
+        }
         send('error', { message: error instanceof Error ? error.message : '跨文献阅读失败' });
       } finally {
-        request.raw.off('aborted', abort);
-        raw.off('close', abort);
         raw.end();
       }
     } finally {
+      // 结束/失败/中止路径都要摘登记与监听：否则后续 purge 会 abort 一个已结束的 controller，
+      // 且 activeAsks 残留会让同一会话永远 409。
+      request.raw.off('aborted', abortFromClient);
+      reply.raw.off('close', abortFromClient);
+      untrackDocuments();
       activeAsks.delete(id);
     }
   });

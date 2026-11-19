@@ -1566,6 +1566,9 @@ export async function recognizeRegion(
   if (config.mode === 'local') {
     const textLayer = await regionTextFromLayer(store, documentId, page, normalized);
     if (textLayer.trim()) {
+      // 中止（purge 删文 / 清空数据 / 用户取消）后绝不落库：写检索索引是区域识别唯一的
+      // 数据副作用；识别晚于中止完成时结果必须丢弃，不能为已删除的文献补一条 chunk。
+      if (options?.signal?.aborted) throw new OcrCancelledError('区域识别已取消');
       const bbox: [number, number, number, number] = [
         normalized.x0,
         normalized.y0,
@@ -1680,6 +1683,9 @@ export async function recognizeRegion(
     normalized.y1
   ];
   // 区域结果只并入检索索引；不写 page_edits、不覆盖整页识别缓存。
+  // 视觉/自定义路径的 fetch 不吃本函数的 signal，所以落库前再检查一次：
+  // 被 purge/清空数据中止的识别即使晚到返回，也不能写入已删除的文献。
+  if (options?.signal?.aborted) throw new OcrCancelledError('区域识别已取消');
   store.addVisualChunk(documentId, page, text, bbox);
   return {
     text,

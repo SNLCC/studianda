@@ -5,7 +5,8 @@
  * 请求/任务，避免后台任务在删除后继续写回已删除的数据。同一个 controller 可以登记到
  * 多个文献（跨文献 chat 会把 `documentId` 与 `scope_documents` 一起登记）。
  *
- * 归属：登记者横跨三个模块（chat / 翻译单页 / 全书摘要），消费者是另外两个模块
+ * 归属：登记者横跨四个模块（chat / 翻译单页 / 全书摘要 / 区域 OCR 后台任务），消费者是
+ * 另外两个模块
  * （purge / clear-user-data），因此必须共享一张表，且**不能**做成模块级单例——否则
  * `app.close()` 后的实例间互相污染。Store 不持有它（Store 不该知道 AbortController）。
  *
