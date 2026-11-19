@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -15,10 +14,8 @@ import { tokens } from '../src/retrieval.js';
  * 2. 索引片段真的带上了章节标题（标题参与检索词，否则"命中在哪节"只是装饰）；
  * 3. 索引片段不跨节，页码落在该节范围内。
  */
-const DEMO = path.resolve(
-  import.meta.dirname,
-  '../../../dev-notes/readme-capture/demo-pdf/out/demo-paper-01.pdf'
-);
+// 合成样张已提交进仓库（见 test/fixtures/README.md），干净 clone / CI 里也存在。
+const DEMO = path.resolve(import.meta.dirname, 'fixtures/demo-paper/demo-paper-01.pdf');
 const dataDir = mkdtempSync(path.join(tmpdir(), 'studianda-section-index-'));
 const store = new Store(dataDir);
 
@@ -29,7 +26,6 @@ afterAll(() => {
 
 describe('原文块 与 章节索引片段 的契约', () => {
   it('索引片段不跨节、页码在节范围内、且带章节标题', async () => {
-    if (!existsSync(DEMO)) return;
     const doc = await store.importDocument(DEMO, 'index-contract', true);
     const blocks = await store.getDocumentBlocks(doc.id);
     // 用大 maxChars，让"一个片段 ≈ 一节"，便于检查边界。
@@ -56,20 +52,20 @@ describe('原文块 与 章节索引片段 的契约', () => {
   });
 
   it('索引片段与原文块共用同一个切词器（不会各算一套）', async () => {
-    if (!existsSync(DEMO)) return;
     const doc = await store.importDocument(DEMO, 'index-tokenizer', true);
     const index = await store.getSectionIndex(doc.id, { maxChars: 800 });
     const chunk = index.chunks.find((row) => row.sectionTitle.trim().length >= 2);
-    if (!chunk) return;
+    // 样张里有带标题的节；找不到就说明索引契约已经坏了，不能静默跳过。
+    expect(chunk, '样张索引里应存在带标题的片段').toBeDefined();
     // 标题的第一个二元词组必须出现在片段自身的检索词里——这就是"标题参与检索"的定义。
-    const titleTokens = tokens(chunk.sectionTitle).filter((token) => token.length >= 2);
-    const chunkTokens = new Set(tokens(chunk.text));
+    const titled = chunk!;
+    const titleTokens = tokens(titled.sectionTitle).filter((token) => token.length >= 2);
+    const chunkTokens = new Set(tokens(titled.text));
     expect(titleTokens.length).toBeGreaterThan(0);
     expect(chunkTokens.has(titleTokens[0]!)).toBe(true);
   });
 
   it('同一参数重复取用直接命中缓存；参数不同则各算一次', async () => {
-    if (!existsSync(DEMO)) return;
     const doc = await store.importDocument(DEMO, 'index-cache', true);
     const first = await store.getSectionIndex(doc.id, { maxChars: 600 });
     const again = await store.getSectionIndex(doc.id, { maxChars: 600 });

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type {
@@ -429,10 +429,8 @@ describe('结构完整性失败时的降级', () => {
 });
 
 describe('真实 PDF：结构与单元', () => {
-  const DEMO = path.resolve(
-    import.meta.dirname,
-    '../../../dev-notes/readme-capture/demo-pdf/out/demo-paper-01.pdf'
-  );
+  // 合成样张已提交进仓库（见 test/fixtures/README.md），干净 clone / CI 里也存在。
+  const DEMO = path.resolve(import.meta.dirname, 'fixtures/demo-paper/demo-paper-01.pdf');
   const dataDir = mkdtempSync(path.join(tmpdir(), 'studianda-reading-units-'));
   const store = new Store(dataDir);
 
@@ -442,7 +440,6 @@ describe('真实 PDF：结构与单元', () => {
   });
 
   it('integrity 通过；大预算下整篇装成一条带', async () => {
-    if (!existsSync(DEMO)) return;
     const doc = await store.importDocument(DEMO, 'units-demo', true);
     const blocks = await store.getDocumentBlocks(doc.id);
     expect(checkIntegrity(blocks.blocks, blocks.sections)).toEqual({ ok: true, issues: [] });
@@ -455,7 +452,6 @@ describe('真实 PDF：结构与单元', () => {
   });
 
   it('小预算下单元不跨节：切点要么在节边界，要么是同一节内的硬切', async () => {
-    if (!existsSync(DEMO)) return;
     const doc = await store.importDocument(DEMO, 'units-demo-small', true);
     const blocks = await store.getDocumentBlocks(doc.id);
     const units = decompose(blocks, { budget: 400 });
@@ -471,7 +467,6 @@ describe('真实 PDF：结构与单元', () => {
   });
 
   it('整篇阅读走结构装带：页不重不漏，装得下就是一条带', async () => {
-    if (!existsSync(DEMO)) return;
     const doc = await store.importDocument(DEMO, 'units-plan', true);
     const plan = {
       breadth: 'document' as const,
@@ -500,7 +495,6 @@ describe('真实 PDF：结构与单元', () => {
   });
 
   it('装不下时先裁决：被排除的单元不进阅读页，三态账带块级依据', async () => {
-    if (!existsSync(DEMO)) return;
     const doc = await store.importDocument(DEMO, 'units-plan-prune', true);
     const plan = {
       breadth: 'document' as const,
@@ -510,7 +504,7 @@ describe('真实 PDF：结构与单元', () => {
       queries: [],
       dimensions: []
     };
-    const planned = await planReadingWithStructure(store, doc.id, plan, 1, 2000, 1, '史料范围 与 分析框架');
+    const planned = await planReadingWithStructure(store, doc.id, plan, 1, 2000, 1, '背景 与 方法');
     expect(planned.fromUnits).toBe(true);
     const excluded = planned.excluded ?? [];
     expect(excluded.length).toBeGreaterThan(0);
@@ -528,7 +522,6 @@ describe('真实 PDF：结构与单元', () => {
   });
 
   it('配置了 embedding 时语义通道真的参与裁决', async () => {
-    if (!existsSync(DEMO)) return;
     const doc = await store.importDocument(DEMO, 'units-plan-embed', true);
     const plan = {
       breadth: 'document' as const,
@@ -546,7 +539,7 @@ describe('真实 PDF：结构与单元', () => {
       1,
       2000,
       1,
-      '史料范围 与 分析框架',
+      '背景 与 方法',
       // 假向量：只用来证明"传了回调就会算、算过就不再标不可用"。
       async (texts) => {
         embedded = texts.length;
@@ -559,7 +552,6 @@ describe('真实 PDF：结构与单元', () => {
   });
 
   it('没有配置 embedding 时如实标语义不可用（不假装算过）', async () => {
-    if (!existsSync(DEMO)) return;
     const doc = await store.importDocument(DEMO, 'units-plan-no-embed', true);
     const plan = {
       breadth: 'document' as const,
@@ -569,12 +561,11 @@ describe('真实 PDF：结构与单元', () => {
       queries: [],
       dimensions: []
     };
-    const planned = await planReadingWithStructure(store, doc.id, plan, 1, 2000, 1, '史料范围');
+    const planned = await planReadingWithStructure(store, doc.id, plan, 1, 2000, 1, '背景');
     expect(planned.pruneDegraded ?? []).toContain('semantic_unavailable');
   });
 
   it('局部阅读不走结构装带（选择哪些页的语义还没被接管）', async () => {
-    if (!existsSync(DEMO)) return;
     const doc = await store.importDocument(DEMO, 'units-plan-local', true);
     const plan = {
       breadth: 'local' as const,

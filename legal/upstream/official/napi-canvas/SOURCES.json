@@ -172,8 +172,8 @@
     {
       "file": "COMPONENT-COMPLIANCE.md",
       "url": "https://github.com/napi-rs/canvas (SBOM 派生)",
-      "sha256": "8aba265f8cf2b556bfcf4fef029918b34179d3697f6b880fadbd3acaa080a1f5",
-      "size": 12718
+      "sha256": "6c2570bb2c615fdee4b80bce9eb57c17cd168623d6d82625746f69eb59871eed",
+      "size": 14761
     },
     {
       "file": "vendored/expat-LICENSE.txt",

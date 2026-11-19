@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -12,16 +12,12 @@ import { Store } from '../src/store.js';
  * 背景：目录页上的行也会被识别成标题块。若拿它们当章节边界，一本 306 页的书会在目录页上
  * 凭空长出十几节，`decompose` 于是把目录条目当正文单元去读——既浪费又让真节的层级错位。
  *
- * 样本：`dev-notes/.../demo-paper-01.pdf`（6 页，第 2 页是印刷目录）。文缺失时跳过，
- * 不让这个测试因为资源不在而红。
+ * 样本：`test/fixtures/demo-paper/demo-paper-01.pdf`（6 页，第 2 页是印刷目录，合成内容）。
+ * 样张已提交进仓库（见 test/fixtures/README.md），干净 clone / CI 里也存在，测试不会静默跳过。
  */
 
-const DEMO = path.resolve(
-  import.meta.dirname,
-  '../../../dev-notes/readme-capture/demo-pdf/out/demo-paper-01.pdf'
-);
+const DEMO = path.resolve(import.meta.dirname, 'fixtures/demo-paper/demo-paper-01.pdf');
 const PAPER = path.resolve(import.meta.dirname, 'fixtures/sample-paper.pdf');
-const hasDemo = existsSync(DEMO);
 
 const dataDir = mkdtempSync(path.join(tmpdir(), 'studianda-toc-suppress-'));
 const store = new Store(dataDir);
@@ -37,7 +33,6 @@ function bodySections(sections: readonly DocumentSection[]): DocumentSection[] {
 
 describe('detectTocPages', () => {
   it('把前部带"标题+页码"的页认成目录页，正文页不误判', async () => {
-    if (!hasDemo) return;
     const doc = await store.importDocument(DEMO, 'demo', true);
     const layout = await (
       store as unknown as { readLayout: (id: string) => Promise<{ pages: unknown[] }> }
@@ -69,7 +64,6 @@ describe('detectTocPages', () => {
 
 describe('目录页不产生正文章节', () => {
   it('demo 的正文节从第 3 页开始，且目录页上没有节', async () => {
-    if (!hasDemo) return;
     const doc = await store.importDocument(DEMO, 'demo-suppress', true);
     const blocks = await store.getDocumentBlocks(doc.id);
     const body = bodySections(blocks.sections);

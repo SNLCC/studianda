@@ -1,6 +1,6 @@
 # 许可证来源与哈希
 
-生成时间：2026-11-17T16:56:36.794Z
+生成时间：2026-11-19T18:23:36.785Z
 
 “官方仓库”列取自各包 `package.json` 的 repository/homepage；许可证文件哈希取自安装包内实际文件。
 
@@ -116,11 +116,116 @@
 - NSIS 3.0.4.1（zlib/libpng license）：`upstream/official/nsis-COPYING.txt`
 - nsis7z.dll（基于 7-Zip 19.00，7-Zip License / LGPL-2.1+，含 unRAR 限制）：许可、来源、随包源码与实际 DLL 的 SHA-256 见 `upstream/official/nsis7z/`
 - StdUtils.dll（LoRd_MuldeR，GNU LGPL-2.1+，版本 1.1.4.0，DLL SHA-256 B72E9013A6204E9F01076DC38DABBF30870D44DFC66962ADBF73619D4331601E）：许可、澄清与源码见 `upstream/official/nsis-plugins/stdutils/`
-- UAC.dll（Anders，ZLIB/LIBPNG）：许可与源码见 `upstream/official/nsis-plugins/uac/`
+- UAC.dll（Anders，0.2.4c，ZLIB/LIBPNG）：许可与源码见 `upstream/official/nsis-plugins/uac/`；本安装器使用 `nsis-resources-3.4.1` 的 x86-unicode DLL（14,848 B，SHA-256 `2F7F8FC05DC4FD0D5CDA501B47E4433357E887BBFED7292C028D99C73B52DC08`）
 - elevate.exe（MIT）：`upstream/official/elevate-MIT.txt`
 - FFmpeg（Electron 内置 ffmpeg.dll，LGPL-2.1-or-later）：`upstream/official/ffmpeg-LGPL-2.1.txt`；**LGPL 2.1 §6(c) 书面源码要约**见 `upstream/official/ffmpeg-SOURCE-OFFER.md`（三年有效，接收方无需预先回应）
 - electron-builder / app-builder-lib 26.18.0（MIT，构建期 NSIS 模板）：`upstream/official/electron-builder-NOTICE.md`、`upstream/official/repos/electron-userland_electron-builder-LICENSE.txt`
 - WinShell.dll：**已由脚本实现替代**，不再随包分发 DLL（AUMID 行为保留）；依据与证据见 `upstream/official/nsis-plugins/winshell/README.md`
+
+## 非 npm 随包组件（inventory.json）
+
+下表与 `legal/inventory.json` 的 `runtime[]`/`bundled[]` 由同一次生成产出，组件名、版本、来源哈希与核对状态一一对应；`source.verified=false` 的原因见下方说明与清单条目。
+
+| 组件 | 版本 | 类别 | 官方来源 | 来源 SHA-256 | 核对 | 实物数 |
+|---|---|---|---|---|---|---|
+| Electron 运行时二进制（第三方 DLL / ICU / Pak / V8 快照） | 44.5.1 | Electron 运行时 | https://github.com/electron/electron/releases/tag/v44.5.1 | — | 未核对 | 12 |
+| FFmpeg（Electron 内置 ffmpeg.dll） | Electron 44.5.1 内置构建 | 运行时（FFmpeg） | https://github.com/electron/electron | — | 未核对 | 1 |
+| NSIS 安装器 stub | 3.0.4.1 | 安装器 stub | https://nsis.sourceforge.io/ | — | 未核对 | 1 |
+| nsis7z.dll | 19.00（Nsis7z 19.00，基于 7-Zip 19.00） | 安装器插件 | https://nsis.sourceforge.io/Nsis7z_plug-in | — | 未核对 | 2 |
+| StdUtils.dll | 1.1.4.0 | 安装器插件 | https://github.com/lordmulder/stdutils | — | 未核对 | 2 |
+| UAC.dll | 0.2.4c | 安装器插件 | https://nsis.sourceforge.io/UAC_plug-in | — | 未核对 | 2 |
+| elevate.exe | 未标注（随 NSIS 3.0.4.1 / electron-builder nsis-resources 提供） | 安装器辅助程序 | https://nsis.sourceforge.io/ | — | 未核对 | 2 |
+| @napi-rs/canvas 预编译原生二进制（Skia / ICU / SBOM 142 个组件） | 1.0.13 | 预编译原生二进制 | https://www.npmjs.com/package/@napi-rs/canvas-win32-x64-msvc/v/1.0.13 | 61c3c58b03c786877a4a493c48151b2dcadb1f3043b8f8be1d350b045207f501 | 已核对 | 4 |
+| MPL-2.0 组件源码归档（cssparser / cssparser-macros / dtoa-short / selectors） | cssparser 0.38.0、cssparser-macros 0.7.0、dtoa-short 0.3.5、selectors 0.41.0 | 随包源码归档 | https://crates.io/api/v1/crates/cssparser/0.38.0/download | — | 已核对 | 5 |
+| tesseract.js-core WASM（内嵌 Tesseract / Leptonica / libjpeg-turbo / libpng / libtiff / libwebp / giflib / openlibm / zlib） | tesseract.js-core 7.0.0 | 内嵌 WASM | https://github.com/naptha/tesseract.js-core/tree/v7.0.0 | — | 已核对 | 6 |
+| PDF.js WASM 解码器（JBIG2 / OpenJPEG / QCMS） | 6.4.299（pdfjs-dist） | 内嵌 WASM | https://www.npmjs.com/package/pdfjs-dist/v/6.4.299 | — | 已核对 | 3 |
+
+**来源哈希核对说明**
+
+- Electron 运行时二进制（第三方 DLL / ICU / Pak / V8 快照）：**未核对** —— Electron 官方每个版本发布 SHASUMS256.txt，但本仓库未保存该发行物清单，生成器也不联网；下列哈希取自 electron@44.5.1 官方 npm 发行包内的文件（安装器逐字节复制）。要升级为来源已核对，需把对应版本的 SHASUMS256.txt 固化到 legal/upstream/official/ 后再对照。
+- FFmpeg（Electron 内置 ffmpeg.dll）：**未核对** —— ffmpeg.dll 由 Electron 官方构建并随 Electron 发行物原样提供，Electron 不为单个 DLL 发布官方哈希；仓库内保存了 LGPL 许可原文与 LGPL §6(c) 源码书面要约（upstream/official/ffmpeg-*），但无法把 DLL 与官方发布物逐字节交叉核对。
+- NSIS 安装器 stub：**未核对** —— stub 由 electron-builder 从官方 NSIS 3.0.4.1 发行包（工具缓存，不在仓库工作区内）编译进 Studianda-Setup-*.exe；NSIS 官方未发布发行包 SHA-256，仓库内没有 stub 二进制副本，只能核对版本、许可原文与安装器容器。
+- nsis7z.dll：**未核对** —— 7-Zip 官方不发布源码归档或二进制的 SHA-256，也没有可对照的官方签名清单；本项目使用 electron-builder nsis-resources-3.4.1 的预编译 DLL，DLL 只存在于安装器/工具缓存中，仓库内保留的是 7-Zip 19.00 官方源码归档、nsis7z 源码与许可原文。source.observed 记录随包发布时实际 DLL 的哈希（与 nsis-resources-3.4.1 缓存核对一致），重新打包后若变化说明上游资源包被替换，需重新核对。；随包二进制观测哈希：`plugins/x86-unicode/nsis7z.dll`（434176 B，`B393F05E8FF919EF071181050E1873C9A776E1A0AE8329AEFFF7007D0CADF592`）
+- StdUtils.dll：**未核对** —— 上游发布 tag 1.14 的源码，但不发布 DLL 的官方 SHA-256；仓库内保存了对应源码、LGPL 原文与作者澄清说明，DLL 本体只存在于安装器/工具缓存中。source.observed 为随包发布时实际 DLL 的哈希（与 nsis-resources-3.4.1 缓存核对一致）。；随包二进制观测哈希：`plugins/x86-unicode/StdUtils.dll`（102400 B，`B72E9013A6204E9F01076DC38DABBF30870D44DFC66962ADBF73619D4331601E`）
+- UAC.dll：**未核对** —— 上游只发布 UAC 源码包，未发布 SHA-256；安装器实际嵌入 electron-builder nsis-resources-3.4.1 的 x86-unicode DLL，仓库内 upstream 源码树中的 x86-unicode/UAC.dll 与它同哈希（可机器对账），因此本条目 artifacts 直接提供可核对的 DLL，只是缺少官方哈希可交叉核对，source.verified 仍为 false。；随包二进制观测哈希：`plugins/x86-unicode/UAC.dll`（14848 B，`2F7F8FC05DC4FD0D5CDA501B47E4433357E887BBFED7292C028D99C73B52DC08`）
+- elevate.exe：**未核对** —— elevate.exe 是 NSIS 发行包附带的提权辅助程序（上游版权 2007 Johannes Passing，MIT）；上游未发布 SHA-256。随包 resources/elevate.exe 的哈希由生成器现算，并已与 electron-builder NSIS 3.0.4.1 缓存中的同名文件人工核对一致，但无法与官方发布物交叉核对。
+- @napi-rs/canvas 预编译原生二进制（Skia / ICU / SBOM 142 个组件）：**已核对** —— 包内 sbom.cdx.json 与仓库 legal/upstream/official/napi-canvas/sbom.cdx.json 及安装包内副本逐字节一致（source.sha256 即该 SBOM 的哈希）；SBOM 的 142 个组件、逐组件许可证类型与来源见同目录 COMPONENTS.json / COMPONENT-LICENSES.md。
+- MPL-2.0 组件源码归档（cssparser / cssparser-macros / dtoa-short / selectors）：**已核对** —— 四个 .crate 为 crates.io 官方发布包（未修改的 Source Code Form），下载 URL 与 SHA-256 记录于 mpl-sources/README.md，随安装包 resources/legal/ 一并分发；artifacts 中的哈希由生成器现算，可与该 README 对照。
+- tesseract.js-core WASM（内嵌 Tesseract / Leptonica / libjpeg-turbo / libpng / libtiff / libwebp / giflib / openlibm / zlib）：**已核对** —— 随包（app.asar.unpacked）的六个 WASM 与 pnpm 安装的 tesseract.js-core@7.0.0 官方 npm 发行物逐字节一致；九个内嵌组件的许可证原文 URL 与 SHA-256 记录于 upstream/official/tesseract-core/SOURCES.json，artifacts 哈希可与仓库文件对照。Tesseract 为上游为 WebAssembly 适配而修改的分支，本项目未修改该 WASM。
+- PDF.js WASM 解码器（JBIG2 / OpenJPEG / QCMS）：**已核对** —— 三个 WASM 是 pdfjs-dist@6.4.299 官方 npm 包内的资源，随包位于 app.asar 的 /node_modules/pdfjs-dist/wasm/ 与 /out/core/node_modules/pdfjs-dist/wasm/，生成器从实际 app.asar 解出后算哈希；九份许可证/版权文本的 URL 与 SHA-256 记录于 upstream/official/pdfjs-wasm/SOURCES.json。
+
+### 随包实物逐文件哈希
+
+以下哈希由生成器从仓库工作区内的实际文件现算（asar 内资源从真实 `app.asar` 解出后计算）：
+
+安装器容器：`apps/desktop/release/Studianda-Setup-0.1.3.exe`（247913306 B，SHA-256 `3156766e92db7a377535abcdc5991ea6fdded05b0c35d2d073b1a03e56d9174d`）；随其分发的组件：NSIS 安装器 stub、nsis7z.dll、StdUtils.dll、UAC.dll、elevate.exe。
+
+- **Electron 运行时二进制（第三方 DLL / ICU / Pak / V8 快照）**（44.5.1）
+  - `apps/desktop/node_modules/electron/dist/d3dcompiler_47.dll` — 4741488 B — SHA-256 `a05f99734f7c4822fefc12b367af21fd0976ed6608752fb1e1e80b6ece7ecbbb`
+  - `apps/desktop/node_modules/electron/dist/dxcompiler.dll` — 25745408 B — SHA-256 `0c7a5fab6466c211fe39d90d845b7d6a64ac73e8c809d4fa0c09907bb45c1f3d`
+  - `apps/desktop/node_modules/electron/dist/dxil.dll` — 1509760 B — SHA-256 `77e039c905030a641e53658a008b74e90635a5ea9b6b79eabd0f2003bdfca59a`
+  - `apps/desktop/node_modules/electron/dist/vulkan-1.dll` — 939520 B — SHA-256 `5549afe706236d5c7ad5df4607c51639c790dfd118770eb27af8f2c5c076c3c7`
+  - `apps/desktop/node_modules/electron/dist/vk_swiftshader.dll` — 5520384 B — SHA-256 `3d8555de997bca1e58a72c6a8bc13a8267dca2c882ee0a783803470b289d1d23`
+  - `apps/desktop/node_modules/electron/dist/vk_swiftshader_icd.json` — 106 B — SHA-256 `32d83ff113fef532a9f97e0d2831f8656628ab1c99e9060f0332b1532839afd9`
+  - `apps/desktop/node_modules/electron/dist/icudtl.dat` — 10876560 B — SHA-256 `9f48c7f9c7c94d516a14870707e910ab94d75ae640ff6842c4af53276cd26ebe`
+  - `apps/desktop/node_modules/electron/dist/chrome_100_percent.pak` — 719654 B — SHA-256 `ab7c4b7b6cb8832a31d44b95ec50ce52294f49422a3bdde4e21968eca2930cbe`
+  - `apps/desktop/node_modules/electron/dist/chrome_200_percent.pak` — 1269017 B — SHA-256 `30fa4a6e27c9ff2fb0f939f01158477e621a67d86e9ecb84cf11b3947db8eb9d`
+  - `apps/desktop/node_modules/electron/dist/resources.pak` — 12435875 B — SHA-256 `ee5707e9409e76742e1dacdae0ebbb3c567b8772ce5bbcb9785aa215f5784c22`
+  - `apps/desktop/node_modules/electron/dist/snapshot_blob.bin` — 368768 B — SHA-256 `0b18f38d50c8f96c9fa2b8205c66c25b3ae45c985e8f2e7b6ecfab9f4d4d19d0`
+  - `apps/desktop/node_modules/electron/dist/v8_context_snapshot.bin` — 742200 B — SHA-256 `6d747f11d721655b780a47f6010eeef8428266e7521280e1e094d27c6f34311d`
+- **FFmpeg（Electron 内置 ffmpeg.dll）**（Electron 44.5.1 内置构建）
+  - `apps/desktop/node_modules/electron/dist/ffmpeg.dll` — 3113472 B — SHA-256 `7728490eb079c19b17baeff2b6590c976f6a928b3c17923aeb4fcf1f1f31d299`
+- **NSIS 安装器 stub**（3.0.4.1）
+  - `legal/upstream/official/nsis-COPYING.txt` — 15488 B — SHA-256 `3c8de989f6504d52f5f8dfafedb6668cd47201f5d01f1319570727c091425dd6`
+- **nsis7z.dll**（19.00（Nsis7z 19.00，基于 7-Zip 19.00））
+  - `legal/upstream/official/nsis7z/7z1900-src.7z` — 1071569 B — SHA-256 `9ba70a5e8485cf9061b30a2a84fe741de5aeb8dd271aab8889da0e9b3bf1868e`
+  - `legal/upstream/official/nsis7z/source/nsis7z/CPP/7zip/Bundles/Nsis7z/nsis7z.cpp` — 3554 B — SHA-256 `6e99ce3cef822ef32da6d3bf0827cd6c6c71af4e090759035094d12c17e631cd`
+- **StdUtils.dll**（1.1.4.0）
+  - `legal/upstream/official/nsis-plugins/stdutils/source/Contrib/StdUtils/StdUtils.vcxproj` — 17766 B — SHA-256 `dbbcdf093a92a2f607c1337eba1eba490fc4c555e1d9106a62fd79779804930c`
+  - `legal/upstream/official/nsis-plugins/stdutils/source/Contrib/StdUtils/src/StdUtils.cpp` — 35788 B — SHA-256 `51e50866c2e10d449a478fb13d4bbbf83228de002c914f4386f0a0f07666cae8`
+- **UAC.dll**（0.2.4c）
+  - `legal/upstream/official/nsis-plugins/uac/source/Plugins/x86-unicode/UAC.dll` — 14848 B — SHA-256 `2f7f8fc05dc4fd0d5cda501b47e4433357e887bbfed7292c028d99c73b52dc08`
+  - `legal/upstream/official/nsis-plugins/uac/source/uac.cpp` — 33518 B — SHA-256 `a54b801a377dd4a9be29fcf68672f4ff381f50853e8a815cb535405e97ec1905`
+- **elevate.exe**（未标注（随 NSIS 3.0.4.1 / electron-builder nsis-resources 提供））
+  - `apps/desktop/release/win-unpacked/resources/elevate.exe` — 107520 B — SHA-256 `9b1fbf0c11c520ae714af8aa9af12cfd48503eedecd7398d8992ee94d1b4dc37`
+  - `legal/upstream/official/elevate-MIT.txt` — 1059 B — SHA-256 `1fa4d7c156bf8f9fadff2980ba23a8dd89d5476fcd520e0aeb8f43fd2187271b`
+- **@napi-rs/canvas 预编译原生二进制（Skia / ICU / SBOM 142 个组件）**（1.0.13）
+  - `apps/desktop/release/win-unpacked/resources/app.asar.unpacked/node_modules/@napi-rs/canvas-win32-x64-msvc/skia.win32-x64-msvc.node` — 28806656 B — SHA-256 `5d00cf716176a32c2a289f48cad19637131fe7de394c4fed58ae48043325943a`
+  - `apps/desktop/release/win-unpacked/resources/app.asar.unpacked/node_modules/@napi-rs/canvas-win32-x64-msvc/icudtl.dat` — 10876560 B — SHA-256 `9f48c7f9c7c94d516a14870707e910ab94d75ae640ff6842c4af53276cd26ebe`
+  - `legal/upstream/official/napi-canvas/sbom.cdx.json` — 92909 B — SHA-256 `61c3c58b03c786877a4a493c48151b2dcadb1f3043b8f8be1d350b045207f501`
+  - `legal/upstream/official/napi-canvas/COMPONENTS.json` — 40771 B — SHA-256 `33daa4fbf7f03a7ad0342f819c2b9a774186480255eb13406523025b1fa0ca0b`
+- **MPL-2.0 组件源码归档（cssparser / cssparser-macros / dtoa-short / selectors）**（cssparser 0.38.0、cssparser-macros 0.7.0、dtoa-short 0.3.5、selectors 0.41.0）
+  - `legal/upstream/official/napi-canvas/mpl-sources/cssparser-0.38.0.crate` — 57272 B — SHA-256 `11119743ad110e8c1bdccd930d7f5c30c99e5fc76a7b63ec9807e84eef0c5f59`
+  - `legal/upstream/official/napi-canvas/mpl-sources/cssparser-macros-0.7.0.crate` — 8167 B — SHA-256 `10a2a99df6e410a8ff4245aa2006499ea662245f967cc7c0a38c83ef8eb44dbf`
+  - `legal/upstream/official/napi-canvas/mpl-sources/dtoa-short-0.3.5.crate` — 8287 B — SHA-256 `cd1511a7b6a56299bd043a9c167a6d2bfb37bf84a6dfceaba651168adfb43c87`
+  - `legal/upstream/official/napi-canvas/mpl-sources/selectors-0.41.0.crate` — 69626 B — SHA-256 `8322aebea94a6cc288ff884e8a49bdbceef60206c400c6c46d22e62fc4fd91a6`
+  - `legal/upstream/official/napi-canvas/mpl-sources/README.md` — 3378 B — SHA-256 `4c0077f40ee90a3a6345c80e0895fbcadf93a4ada50b2cf4600dfaae3593c40c`
+- **tesseract.js-core WASM（内嵌 Tesseract / Leptonica / libjpeg-turbo / libpng / libtiff / libwebp / giflib / openlibm / zlib）**（tesseract.js-core 7.0.0）
+  - `apps/desktop/release/win-unpacked/resources/app.asar.unpacked/out/core/node_modules/tesseract.js-core/tesseract-core.wasm` — 3449168 B — SHA-256 `c7f5ace62ac0ad065e71e9c6725f1d7cdf82e7eda8fba532cbb9563964da7098`
+  - `apps/desktop/release/win-unpacked/resources/app.asar.unpacked/out/core/node_modules/tesseract.js-core/tesseract-core-simd.wasm` — 3451410 B — SHA-256 `7d237a13edfeb0fa2f104744fccde0a00e0c076c3e23b7a8fc7af75ec9af2c3e`
+  - `apps/desktop/release/win-unpacked/resources/app.asar.unpacked/out/core/node_modules/tesseract.js-core/tesseract-core-lstm.wasm` — 2855361 B — SHA-256 `66b17df6e20c5329a17ffa9c202a47eaa3e32500b253d4c7f38e7f2bc01457c3`
+  - `apps/desktop/release/win-unpacked/resources/app.asar.unpacked/out/core/node_modules/tesseract.js-core/tesseract-core-simd-lstm.wasm` — 2857601 B — SHA-256 `34e8d50cac216427d86bf397d610fdd9f49492539bbcdfbfccc4eda20c810bea`
+  - `apps/desktop/release/win-unpacked/resources/app.asar.unpacked/out/core/node_modules/tesseract.js-core/tesseract-core-relaxedsimd.wasm` — 3456075 B — SHA-256 `45f8c9b516df326b6ae6b493ed3a6289df5cbd10490e7b6ff8bf5b12ea42d1da`
+  - `apps/desktop/release/win-unpacked/resources/app.asar.unpacked/out/core/node_modules/tesseract.js-core/tesseract-core-relaxedsimd-lstm.wasm` — 2862266 B — SHA-256 `7985c92d4c64e7267d24cadffe1b2a1da6bf8aa55fdcaf953fe94fe122a24545`
+- **PDF.js WASM 解码器（JBIG2 / OpenJPEG / QCMS）**（6.4.299（pdfjs-dist））
+  - `/node_modules/pdfjs-dist/wasm/jbig2.wasm`（容器 `apps/desktop/release/win-unpacked/resources/app.asar`） — 103671 B — SHA-256 `466f45c2a61a698152fb5400c27e56ff2ceb73dcb71fde3fc366a502308eaab0`
+  - `/node_modules/pdfjs-dist/wasm/openjpeg.wasm`（容器 `apps/desktop/release/win-unpacked/resources/app.asar`） — 251131 B — SHA-256 `95e5002597af0824004aa57b1900fe019715db389e37640b1e58395e42f00cc5`
+  - `/node_modules/pdfjs-dist/wasm/qcms_bg.wasm`（容器 `apps/desktop/release/win-unpacked/resources/app.asar`） — 96589 B — SHA-256 `663d86126d5f5fcb1c61490f94353e2a8375660b8c5498ab3ebab5a34b08800e`
+- **Noto Serif CJK SC**（2.003）
+  - `packages/ui/src/styles/assets/fonts/StudiandaSerifSC-Regular.woff2` — 11168936 B — SHA-256 `5329e86415b45a98eb4fb9c78e4c053f79e4728f985feabab8b26f92328635be`
+  - `packages/ui/src/styles/assets/fonts/StudiandaSerifSC-SemiBold.woff2` — 11266872 B — SHA-256 `8cfe445056c835196c448b30df24e65aedfb80e589791f12a77c23c5e71ee6a7`
+- **Noto Sans CJK SC**（2.004）
+  - `packages/ui/src/styles/assets/fonts/StudiandaSansSC-Regular.woff2` — 7559180 B — SHA-256 `ed52f2f9d44ccbf5f4a692dce42c53d925df09c94439702883e4dfe89c312f41`
+  - `packages/ui/src/styles/assets/fonts/StudiandaSansSC-Medium.woff2` — 7692236 B — SHA-256 `5bf09dbf64808c4e3485ba2629d2288d0dd6b1a19acf65ee20d97be2541ea044`
+  - `packages/core/assets/fonts/StudiandaWatermark.ttf` — 14696 B — SHA-256 `8a3ddb1c1f4a02ae1abffdaec373c8f23b83c6ca5387e89860f6e455f832fa74`
+- **LXGW WenKai GB（霞鹜文楷 GB）**（1.530）
+  - `packages/ui/src/styles/assets/fonts/StudiandaKaiSC-Regular.woff2` — 1683820 B — SHA-256 `d0ed8fc6c6c80de00bd644bf2d007269da2534d98250ebf94c179dfa28f6afd7`
+- **Noto Serif**（2.015）
+  - `packages/ui/src/styles/assets/fonts/StudiandaSerifLatin-Regular.woff2` — 101628 B — SHA-256 `cddf396d2823995d23348079697514376231f50e7a9ad772e2e3d04247b259d1`
+  - `packages/ui/src/styles/assets/fonts/StudiandaSerifLatin-SemiBold.woff2` — 111320 B — SHA-256 `4a6ca928de7ae551d42a304238f80bb763ff115ae7fcf7380b978551bbeffa16`
+- **Noto Sans**（2.015）
+  - `packages/ui/src/styles/assets/fonts/StudiandaSansLatin-Regular.woff2` — 97096 B — SHA-256 `4698aea4775c227b90cf896dedc69e19612357ddeed135667aee81b014647851`
+  - `packages/ui/src/styles/assets/fonts/StudiandaSansLatin-Medium.woff2` — 103000 B — SHA-256 `2cd0dfea0f509a0469aec4bac66152e9aa17550b3127ca8351fa603c8211ffca`
 
 ## 运行时下载 / 特殊组件
 

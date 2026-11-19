@@ -1,6 +1,6 @@
 # 第三方组件与许可证声明
 
-生成时间：2026-11-17T16:56:36.794Z
+生成时间：2026-11-19T18:23:36.785Z
 
 本清单从**实际安装包** `resources/app.asar` 的依赖树生成，覆盖渲染器、Core 和生产依赖；不是仅根据源码清单推测。
 
@@ -113,9 +113,29 @@
 | whatwg-url | 5.0.0 | MIT | [whatwg-url@5.0.0-LICENSE.txt](licenses/whatwg-url@5.0.0-LICENSE.txt) |
 | zlibjs | 0.3.1 | MIT | [zlibjs@0.3.1-LICENSE](licenses/zlibjs@0.3.1-LICENSE) |
 
+## 非 npm 随包组件（机器可读清单）
+
+以下组件不经过 npm 依赖树进入安装包，却实际随包分发：安装器 stub 与插件、Electron 运行时平台文件、FFmpeg、预编译原生二进制、内嵌 WASM、随包源码归档。逐条记录（含随包实物路径、字节数、SHA-256）在 `legal/inventory.json`：平台运行时条目在 `runtime[]`，其余在 `bundled[]`（本表来自同一批条目，组件名与版本即清单中的 `name`/`version`）。`source.verified` 为 `false` 的表示上游未发布可对照的官方哈希或二进制只在安装器/工具缓存中，原因写在该条目的 `source.reason`。
+
+| 组件 | 版本 | 类别 | 许可证 | 来源核对 |
+|---|---|---|---|---|
+| Electron 运行时二进制（第三方 DLL / ICU / Pak / V8 快照） | 44.5.1 | Electron 运行时 | BSD-3-Clause 等（逐组件声明见 Chromium 第三方声明） | 来源哈希未核对（原因见 inventory.json 的 source.reason） |
+| FFmpeg（Electron 内置 ffmpeg.dll） | Electron 44.5.1 内置构建 | 运行时（FFmpeg） | LGPL-2.1-or-later | 来源哈希未核对（原因见 inventory.json 的 source.reason） |
+| NSIS 安装器 stub | 3.0.4.1 | 安装器 stub | zlib/libpng License | 来源哈希未核对（原因见 inventory.json 的 source.reason） |
+| nsis7z.dll | 19.00（Nsis7z 19.00，基于 7-Zip 19.00） | 安装器插件 | 7-Zip License（GNU LGPL-2.1+ 及 BSD 条款，含 unRAR 限制） | 来源哈希未核对（原因见 inventory.json 的 source.reason） |
+| StdUtils.dll | 1.1.4.0 | 安装器插件 | GNU LGPL-2.1-or-later | 来源哈希未核对（原因见 inventory.json 的 source.reason） |
+| UAC.dll | 0.2.4c | 安装器插件 | ZLIB/LIBPNG License | 来源哈希未核对（原因见 inventory.json 的 source.reason） |
+| elevate.exe | 未标注（随 NSIS 3.0.4.1 / electron-builder nsis-resources 提供） | 安装器辅助程序 | MIT | 来源哈希未核对（原因见 inventory.json 的 source.reason） |
+| @napi-rs/canvas 预编译原生二进制（Skia / ICU / SBOM 142 个组件） | 1.0.13 | 预编译原生二进制 | MIT（@napi-rs/canvas）及 SBOM 内各组件自身许可证（BSD-3-Clause、MPL-2.0、Apache-2.0 等） | 来源哈希已核对 |
+| MPL-2.0 组件源码归档（cssparser / cssparser-macros / dtoa-short / selectors） | cssparser 0.38.0、cssparser-macros 0.7.0、dtoa-short 0.3.5、selectors 0.41.0 | 随包源码归档 | MPL-2.0 | 来源哈希已核对 |
+| tesseract.js-core WASM（内嵌 Tesseract / Leptonica / libjpeg-turbo / libpng / libtiff / libwebp / giflib / openlibm / zlib） | tesseract.js-core 7.0.0 | 内嵌 WASM | Apache-2.0（tesseract.js-core）及内嵌组件各自许可证 | 来源哈希已核对 |
+| PDF.js WASM 解码器（JBIG2 / OpenJPEG / QCMS） | 6.4.299（pdfjs-dist） | 内嵌 WASM | Apache-2.0 / BSD-3-Clause / MIT 等（逐组件见 PDFJS-WASM-THIRD-PARTY.md） | 来源哈希已核对 |
+
+安装器容器：`apps/desktop/release/Studianda-Setup-0.1.3.exe`（247913306 B，SHA-256 `3156766e92db7a377535abcdc5991ea6fdded05b0c35d2d073b1a03e56d9174d`）；随其分发的组件：NSIS 安装器 stub、nsis7z.dll、StdUtils.dll、UAC.dll、elevate.exe。
+
 ## 随包字体
 
-字体文件由 `scripts/build-fonts.py` 从官方发行物生成（冻结静态字重 + 子集化 + woff2），不属于 npm 依赖树，故单独列出。
+字体文件由 `scripts/build-fonts.py` 从官方发行物生成（冻结静态字重 + 子集化 + woff2），不属于 npm 依赖树，故单独列出。另有 1 个水印专用子集 TTF（`packages/core/assets/fonts/StudiandaWatermark.ttf`，源自 Noto Sans CJK SC，经 `extraResources` 放在 `resources/assets/fonts/`），其版权与许可见下表的 Noto Sans CJK SC 一行。逐文件的字节数与 SHA-256 见 `legal/inventory.json` 的 `fonts[].artifacts`，并与 `packages/ui/src/styles/assets/fonts/fonts.manifest.json` 交叉核对。
 
 | 字体 | 版本 | 部署别名 | 许可证 | 许可证文件 |
 |---|---|---|---|---|
@@ -133,20 +153,20 @@
 
 ## 内嵌原生二进制（native binary）/ WASM / 安装器组件
 
-以下组件内嵌在二进制、WASM 或安装器中，不单独出现在 node_modules 依赖树；本节的许可证原文均在 `legal/upstream/` 下随包分发。
+以下组件内嵌在二进制、WASM 或安装器中，不单独出现在 node_modules 依赖树；本节的许可证原文均在 `legal/upstream/` 下随包分发。这些组件已全部纳入机器可读清单：Electron 运行时平台文件（DLL/ICU/Pak/V8 快照）与 FFmpeg 在 `legal/inventory.json` 的 `runtime[]`，安装器组件、预编译原生二进制、内嵌 WASM 与随包源码归档在 `bundled[]`，随包字体在 `fonts[]`；每条都带随包实物路径、字节数与 SHA-256，来源哈希无法与官方发布物核对的条目标 `source.verified: false` 并写明原因。下表组件名与版本即 `inventory.json` 中的 `name`/`version`。
 
-- @napi-rs/canvas 原生二进制（Node-API native addon）：包含 Skia、ICU、libavif 0.14.0 / libavif-sys 0.17.0、libaom-sys 0.17.2（BSD-2-Clause）、libjpeg-turbo（IJG/BSD/Zlib）、libloading 0.9.0（ISC）、foldhash 0.2.0 / bytemuck 1.25.2（Zlib）、MPL-2.0 组件（cssparser、cssparser-macros、dtoa-short、selectors）等 142 个 SBOM 组件。清单与逐组件许可证类型见 `upstream/official/napi-canvas/NAPI-CANVAS-THIRD-PARTY.md` 、`COMPONENTS.md` 、`COMPONENT-LICENSES.md` 与 `sbom.cdx.json`，原文见同目录。四个 MPL-2.0 组件的**未修改上游源码归档**随包提供于 `upstream/official/napi-canvas/mpl-sources/`（含 SHA-256 清单），同时保留官方仓库地址。
-- Tesseract.js-core WASM：内嵌 Tesseract、Leptonica、giflib、libjpeg-turbo、libpng、libtiff、libwebp、openlibm、zlib；说明见 `upstream/Tesseract-core-THIRD-PARTY.md`，原文见 `upstream/official/tesseract-core/`。其 Tesseract 来自 `naptha/tesseract.js-core` 为 WebAssembly 适配而修改的上游分支（本项目未修改该 WASM），修改清单与源码地址见 `upstream/official/tesseract-core/README.md`。
-- PDF.js WASM / 资源：JBIG2、OpenJPEG、QCMS、CMaps、标准字体、ICC；说明见 `upstream/official/pdfjs-wasm/PDFJS-WASM-THIRD-PARTY.md`。
+- @napi-rs/canvas 原生二进制（Node-API native addon，`bundled[]` 中 name「@napi-rs/canvas 预编译原生二进制（Skia / ICU / SBOM 142 个组件）」、version 1.0.13）：包含 Skia、ICU、libavif 0.14.0 / libavif-sys 0.17.0、libaom-sys 0.17.2（BSD-2-Clause）、libjpeg-turbo（IJG/BSD/Zlib）、libloading 0.9.0（ISC）、foldhash 0.2.0 / bytemuck 1.25.2（Zlib）、MPL-2.0 组件（cssparser、cssparser-macros、dtoa-short、selectors）等 142 个 SBOM 组件。清单与逐组件许可证类型见 `upstream/official/napi-canvas/NAPI-CANVAS-THIRD-PARTY.md` 、`COMPONENTS.md` 、`COMPONENT-LICENSES.md` 与 `sbom.cdx.json`，原文见同目录。四个 MPL-2.0 组件的**未修改上游源码归档**随包提供于 `upstream/official/napi-canvas/mpl-sources/`（含 SHA-256 清单，`bundled[]` 中 name「MPL-2.0 组件源码归档（cssparser / cssparser-macros / dtoa-short / selectors）」），同时保留官方仓库地址。
+- Tesseract.js-core WASM（`bundled[]` 中 name「tesseract.js-core WASM（内嵌 Tesseract / Leptonica / libjpeg-turbo / libpng / libtiff / libwebp / giflib / openlibm / zlib）」、version「tesseract.js-core 7.0.0」）：内嵌 Tesseract、Leptonica、giflib、libjpeg-turbo、libpng、libtiff、libwebp、openlibm、zlib；说明见 `upstream/Tesseract-core-THIRD-PARTY.md`，原文见 `upstream/official/tesseract-core/`。其 Tesseract 来自 `naptha/tesseract.js-core` 为 WebAssembly 适配而修改的上游分支（本项目未修改该 WASM），修改清单与源码地址见 `upstream/official/tesseract-core/README.md`。
+- PDF.js WASM / 资源（`bundled[]` 中 name「PDF.js WASM 解码器（JBIG2 / OpenJPEG / QCMS）」、version 6.4.299（pdfjs-dist））：JBIG2、OpenJPEG、QCMS、CMaps、标准字体、ICC；说明见 `upstream/official/pdfjs-wasm/PDFJS-WASM-THIRD-PARTY.md`。
 - tesseract.js 预构建 dist：内嵌 buffer 6.0.3（MIT）、ieee754 1.2.1（BSD-3-Clause）、regenerator-runtime（MIT）、zlib.js（MIT）；buffer/ieee754 原文见 `upstream/official/tesseract-embedded/`。
-- NSIS 安装器：安装器 stub 使用 NSIS 3.0.4.1（zlib/libpng license），许可证原文见 `upstream/official/nsis-COPYING.txt`。
-- nsis7z.dll：NSIS 的 7z 解压插件（安装时解压 app-64.7z），基于 7-Zip 19.00 源码（Nik Medved / Igor Pavlov）；按 7-Zip License（GNU LGPL-2.1+，含 unRAR 限制）分发。许可原文、来源与完整对应源码见 `upstream/official/nsis7z/`；实际随包 DLL 的来源包与 SHA-256 见该目录 `README.md`。
-- StdUtils.dll：NSIS 插件（electron-builder 模板使用），作者 LoRd_MuldeR；版本 1.1.4.0，DLL SHA-256 `B72E9013A6204E9F01076DC38DABBF30870D44DFC66962ADBF73619D4331601E`；按 GNU LGPL-2.1-or-later 分发，许可、澄清说明与完整对应源码见 `upstream/official/nsis-plugins/stdutils/`。
+- NSIS 安装器 stub（`bundled[]` 中 name「NSIS 安装器 stub」、version 3.0.4.1）：安装器 stub 使用 NSIS 3.0.4.1（zlib/libpng license），许可证原文见 `upstream/official/nsis-COPYING.txt`。
+- nsis7z.dll（`bundled[]` 中 name「nsis7z.dll」、version「19.00（Nsis7z 19.00，基于 7-Zip 19.00）」）：NSIS 的 7z 解压插件（安装时解压 app-64.7z），基于 7-Zip 19.00 源码（Nik Medved / Igor Pavlov）；按 7-Zip License（GNU LGPL-2.1+，含 unRAR 限制）分发。许可原文、来源与完整对应源码见 `upstream/official/nsis7z/`；实际随包 DLL 的来源包与 SHA-256 见该目录 `README.md`。
+- StdUtils.dll（`bundled[]` 中 name「StdUtils.dll」、version 1.1.4.0）：NSIS 插件（electron-builder 模板使用），作者 LoRd_MuldeR；按 GNU LGPL-2.1-or-later 分发，许可、澄清说明与完整对应源码见 `upstream/official/nsis-plugins/stdutils/`。
 - electron-builder / app-builder-lib 26.18.0：构建期使用其 NSIS 模板生成安装器（MIT，Copyright (c) 2015 Loopline Systems）；不随包分发其源码或二进制，但安装器脚本由其模板生成，声明见 `upstream/official/electron-builder-NOTICE.md` 与 `upstream/official/repos/electron-userland_electron-builder-LICENSE.txt`。
-- UAC.dll：NSIS 提权插件，作者 Anders；按 ZLIB/LIBPNG License 分发，许可与源码见 `upstream/official/nsis-plugins/uac/`。
-- elevate.exe：NSIS 提权辅助程序（MIT，Copyright (c) 2007 Johannes Passing），原文见 `upstream/official/elevate-MIT.txt`。
-- FFmpeg：Electron 内置 `ffmpeg.dll`（LGPL-2.1-or-later，Electron 官方构建，未修改）；许可证见 `upstream/official/ffmpeg-LGPL-2.1.txt`，**LGPL 2.1 §6(c) 书面源码要约**见 `upstream/official/ffmpeg-SOURCE-OFFER.md`（三年有效，接收方无需预先回应），构建说明见 `legal/COMPATIBILITY.md`。
-- Electron 运行时二进制（`ffmpeg.dll`、`d3dcompiler_47.dll`、`dxcompiler.dll`、`dxil.dll`、`vulkan-1.dll`、`vk_swiftshader.dll`、`icudtl.dat` 等）：由 Electron/Chromium 发行物原样提供、本项目未修改；版权与许可声明随 `electron/LICENSE.txt` 与 `electron/LICENSES.chromium.html` 分发，补充说明见 `upstream/official/electron-runtime-dlls.md`。
+- UAC.dll（`bundled[]` 中 name「UAC.dll」、version 0.2.4c）：NSIS 提权插件，作者 Anders；按 ZLIB/LIBPNG License 分发，许可与源码见 `upstream/official/nsis-plugins/uac/`；本安装器使用 electron-builder `nsis-resources-3.4.1` 的 `x86-unicode/UAC.dll`（14,848 字节，SHA-256 `2F7F8FC05DC4FD0D5CDA501B47E4433357E887BBFED7292C028D99C73B52DC08`），未修改。
+- elevate.exe（`bundled[]` 中 name「elevate.exe」、version「未标注（随 NSIS 3.0.4.1 / electron-builder nsis-resources 提供）」）：NSIS 提权辅助程序（MIT，Copyright (c) 2007 Johannes Passing），原文见 `upstream/official/elevate-MIT.txt`。
+- FFmpeg（`runtime[]` 中 name「FFmpeg（Electron 内置 ffmpeg.dll）」）：Electron 内置 `ffmpeg.dll`（LGPL-2.1-or-later，Electron 官方构建，未修改）；许可证见 `upstream/official/ffmpeg-LGPL-2.1.txt`，**LGPL 2.1 §6(c) 书面源码要约**见 `upstream/official/ffmpeg-SOURCE-OFFER.md`（三年有效，接收方无需预先回应），构建说明见 `legal/COMPATIBILITY.md`。
+- Electron 运行时二进制（`runtime[]` 中 name「Electron 运行时二进制（第三方 DLL / ICU / Pak / V8 快照）」、version 44.5.1，`ffmpeg.dll`、`d3dcompiler_47.dll`、`dxcompiler.dll`、`dxil.dll`、`vulkan-1.dll`、`vk_swiftshader.dll`、`icudtl.dat` 等）：由 Electron/Chromium 发行物原样提供、本项目未修改；版权与许可声明随 `electron/LICENSE.txt` 与 `electron/LICENSES.chromium.html` 分发，补充说明见 `upstream/official/electron-runtime-dlls.md`。
 - pako 的 zlib 兼容层：zlib 许可通知见 `upstream/official/pako-zlib-README.txt`（`NOTICE.html` 也收录全文）。
 
 > 安装器**不随包分发 WinShell 插件**，但保留其行为：该插件上游只有 "Freeware" 标注、没有许可文本或源码，不构成再分发授权；构建期由 `scripts/patch-nsis-templates.mjs` 把调用改写为 `apps/desktop/build/nsis/aumid.nsh` 的宏（NSIS 自带 System 插件 + Windows 公开 API），快捷方式 AUMID 仍照常写入/清除。证据见 `upstream/official/nsis-plugins/winshell/README.md`。
@@ -155,7 +175,7 @@
 
 - **libjpeg-turbo（IJG）**：随包分发的 Tesseract WASM 与 `skia.node` 只含 libjpeg-turbo 二进制、不含其源码，按 IJG 许可需在产品文档中写明：`This software is based in part on the work of the Independent JPEG Group.`
 - **MPL-2.0**：cssparser、cssparser-macros、dtoa-short、selectors 四个组件按 MPL-2.0 §3.2(a) 随包提供未修改源码归档（见上文 `mpl-sources/`），并同时给出官方仓库地址。
-- **随包字体**：9 个 woff2 按各自自身许可分发，不属于本项目许可范围；逐款许可、版权行、保留名与改名说明见 `legal/fonts.json`、`legal/font-licenses/README.md` 与本文件「随包字体」一节。
+- **随包字体**：9 个 woff2 与 1 个水印专用子集 TTF（`StudiandaWatermark.ttf`，源自 Noto Sans CJK SC，经 `extraResources` 放在 `resources/assets/fonts/`）按各自自身许可分发，不属于本项目许可范围；逐款许可、版权行、保留名与改名说明见 `legal/fonts.json`、`legal/font-licenses/README.md` 与本文件「随包字体」一节。
 
 
 ## 运行时下载、不随包分发的资源
@@ -168,12 +188,13 @@
 
 ## 清单范围
 
-本清单的 npm 依赖表只列安装包 `node_modules` 中实际存在的包；字体、内嵌原生二进制/WASM 组件、安装器组件与运行时下载资源分别见上文各节。
+本清单的 npm 依赖表只列安装包 `node_modules` 中实际存在的包；字体、内嵌原生二进制/WASM 组件、安装器组件与运行时下载资源分别见上文各节。非 npm 随包组件的机器可读记录在 `legal/inventory.json`：`runtime[]`（Electron 运行时平台文件、FFmpeg）、`bundled[]`（安装器 stub/插件、预编译原生二进制、内嵌 WASM、随包源码归档）与 `fonts[]`（逐字体文件），每条都带 `artifacts[].bytes` 与 `artifacts[].sha256`。
 
 ## 说明
 
 - 许可证文件来自安装包内的实际文件；缺失项用 `legal/upstream/` 中的上游原文补充，并在 `inventory.json` 标记来源；
-- `legal/SOURCES.md` 记录每个组件的官方仓库地址和许可证文件哈希；
+- `legal/SOURCES.md` 记录每个组件的官方仓库地址、许可证文件哈希与非 npm 组件的随包实物哈希；
+- 非 npm 组件的 `bytes`/`sha256` 由 `scripts/audit-packaged-legal.mjs` 从仓库工作区内的实际文件现算，不手写、不编造；`source.verified: false` 的条目在 `source.reason` 写明无法核对的原因；
 - 官方仓库许可证原文证据保存在 `legal/upstream/official/repos/`；
 - 本文件是工程记录，不构成法律意见；商业发布前应做人工法律复核。
 

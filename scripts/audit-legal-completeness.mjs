@@ -141,6 +141,7 @@ const repoRequiredFiles = [
   'legal/COMPATIBILITY.md',
   'legal/BRAND.md',
   'legal/fonts.json',
+  'legal/bundled.json',
   'legal/THIRD-PARTY.md',
   'legal/SOURCES.md',
   'legal/NOTICE.html',
@@ -301,6 +302,7 @@ const inventoryForLicenses = JSON.parse(readFileSync(path.join(root, 'legal/inve
 for (const record of [
   ...(inventoryForLicenses.runtime ?? []),
   ...(inventoryForLicenses.fonts ?? []),
+  ...(inventoryForLicenses.bundled ?? []),
   ...(inventoryForLicenses.packages ?? [])
 ]) {
   for (const file of record.licenseFiles ?? []) {
@@ -388,6 +390,7 @@ if (existsSync(inventoryPath)) {
   const records = [
     ...(inventory.runtime ?? []),
     ...(inventory.fonts ?? []),
+    ...(inventory.bundled ?? []),
     ...(inventory.packages ?? [])
   ];
   for (const record of records) {
@@ -442,6 +445,7 @@ const reverse = {
   versionMismatch: 0,
   skippedRuntime: 0,
   skippedFonts: 0,
+  skippedBundled: 0,
   skippedAllowlisted: 0,
   unregisteredNonNpm: 0
 };
@@ -450,6 +454,7 @@ if (existsSync(inventoryPath)) {
   const inventoryForLockCheck = JSON.parse(readFileSync(inventoryPath, 'utf8'));
   reverse.skippedRuntime = (inventoryForLockCheck.runtime ?? []).length;
   reverse.skippedFonts = (inventoryForLockCheck.fonts ?? []).length;
+  reverse.skippedBundled = (inventoryForLockCheck.bundled ?? []).length;
   const lockfile = readLockfileComponents();
 
   if (!lockfile) {
@@ -503,14 +508,133 @@ if (existsSync(inventoryPath)) {
       `清单反向核对（${lockfile.file}）：checked=${reverse.checked}，matched=${reverse.matched}，` +
         `missing=${reverse.missing}，version-mismatch=${reverse.versionMismatch}；` +
         `跳过非 npm 组件 ` +
-        `${reverse.skippedRuntime + reverse.skippedFonts + reverse.skippedAllowlisted} 个` +
-        `（runtime ${reverse.skippedRuntime}、fonts ${reverse.skippedFonts}、` +
+        `${reverse.skippedRuntime + reverse.skippedFonts + reverse.skippedBundled + reverse.skippedAllowlisted} 个` +
+        `（runtime ${reverse.skippedRuntime}、fonts ${reverse.skippedFonts}、bundled ${reverse.skippedBundled}、` +
         `显式白名单 ${reverse.skippedAllowlisted}）` +
         (reverse.unregisteredNonNpm > 0
           ? `；另有 ${reverse.unregisteredNonNpm} 个未登记来源的非 npm 组件（见失败项）`
           : '')
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// 6.6) 非 npm 随包组件：结构 + 随包实物哈希核对
+//       非 npm 组件没有锁文件可核，但不能因此免检：清单必须带实物路径、字节数与
+//       SHA-256；仓库内存在的实物逐文件复算，legal/ 内的证据文件必须存在，
+//       构建产物（node_modules/release/asar 内资源）在未构建时允许缺席。
+// ---------------------------------------------------------------------------
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+let verifiedNonNpmArtifacts = 0;
+let missingNonNpmArtifacts = 0;
+if (existsSync(inventoryPath)) {
+  const inventoryForArtifacts = JSON.parse(readFileSync(inventoryPath, 'utf8'));
+  const nonNpmGroups = [
+    ['runtime', inventoryForArtifacts.runtime ?? []],
+    ['fonts', inventoryForArtifacts.fonts ?? []],
+    ['bundled', inventoryForArtifacts.bundled ?? []]
+  ];
+  let nonNpmEntries = 0;
+  for (const [group, groupRecords] of nonNpmGroups) {
+    for (const record of groupRecords) {
+      // 旧版 runtime[]（Electron/Chromium/Node）没有 ecosystem 字段，其完整性由第 6 节
+      // 的许可证文件检查覆盖；这里只校验本次扩展显式声明 ecosystem=bundled 的条目。
+      if (record?.ecosystem !== 'bundled') continue;
+      nonNpmEntries += 1;
+      const label = `${group}[] 条目「${record.name ?? '?'}」`;
+      for (const field of ['name', 'version', 'license', 'kind']) {
+        if (typeof record[field] !== 'string' || record[field].trim() === '') {
+          fail(`inventory.json 的 ${label} 缺少 ${field}`);
+        }
+      }
+      const source = record.source ?? {};
+      if (typeof source.url !== 'string' || source.url.trim() === '') {
+        fail(`inventory.json 的 ${label} 缺少 source.url`);
+      }
+      if (typeof source.verified !== 'boolean') {
+        fail(`inventory.json 的 ${label} 的 source.verified 必须是布尔值`);
+      }
+      if (source.verified === false && String(source.reason ?? '').trim() === '') {
+        fail(`inventory.json 的 ${label} 标了 source.verified=false，但没有在 source.reason 写明原因`);
+      }
+      if (!Array.isArray(record.licenseFiles) || record.licenseFiles.length === 0) {
+        fail(`inventory.json 的 ${label} 必须至少登记一份许可证原文（licenseFiles[]）`);
+      }
+      if (!Array.isArray(record.artifacts) || record.artifacts.length === 0) {
+        fail(`inventory.json 的 ${label} 必须至少登记一个随包实物（artifacts[]）`);
+        continue;
+      }
+      for (const artifact of record.artifacts) {
+        const artifactPath = typeof artifact?.path === 'string' ? artifact.path : '';
+        if (artifactPath === '') {
+          fail(`inventory.json 的 ${label} 有空的 artifacts[].path`);
+          continue;
+        }
+        if (!Number.isInteger(artifact.bytes) || artifact.bytes < 0) {
+          fail(`inventory.json 的 ${label} 的 artifacts[].bytes 必须是非负整数：${artifactPath}`);
+        }
+        if (typeof artifact.sha256 !== 'string' || !SHA256_PATTERN.test(artifact.sha256)) {
+          fail(`inventory.json 的 ${label} 的 artifacts[].sha256 必须是 64 位小写十六进制：${artifactPath}`);
+        }
+        if (artifact.container) {
+          // asar 内资源只在构建产物里存在；生成器从实际 app.asar 解出后算哈希，
+          // 这里不强制构建产物在场，但容器字段不能为空。
+          if (typeof artifact.container !== 'string' || artifact.container.trim() === '') {
+            fail(`inventory.json 的 ${label} 的 artifacts[].container 为空：${artifactPath}`);
+          }
+          continue;
+        }
+        const relative = artifactPath.replace(/^\.?\//, '');
+        const full = path.join(root, relative);
+        if (existsSync(full)) {
+          const actualBytes = statSync(full).size;
+          const actualSha256 = sha256(readFileSync(full));
+          if (actualBytes !== artifact.bytes) {
+            fail(
+              `随包实物字节数与清单不一致：${relative}（清单 ${artifact.bytes} B，实际 ${actualBytes} B）`
+            );
+          }
+          if (actualSha256 !== artifact.sha256) {
+            fail(`随包实物 SHA-256 与清单不一致：${relative}`);
+          }
+          verifiedNonNpmArtifacts += 1;
+        } else if (relative.startsWith('legal/')) {
+          fail(`inventory.json 的 ${label} 登记的仓库内法律证据不存在：${relative}`);
+        } else {
+          missingNonNpmArtifacts += 1;
+        }
+      }
+    }
+  }
+  // 安装器容器：安装器插件/stub 的实际二进制被编译进安装器本体，只登记一次。
+  const installer = inventoryForArtifacts.installer;
+  if (installer && typeof installer === 'object') {
+    const installerRelative =
+      typeof installer.path === 'string' ? installer.path.replace(/^\.?\//, '') : '';
+    const installerShapeOk =
+      installerRelative !== '' &&
+      Number.isInteger(installer.bytes) &&
+      typeof installer.sha256 === 'string' &&
+      SHA256_PATTERN.test(installer.sha256);
+    if (!installerShapeOk) {
+      fail('inventory.json 的 installer 记录缺少可核对的 path/bytes/sha256');
+    } else if (existsSync(path.join(root, installerRelative))) {
+      const full = path.join(root, installerRelative);
+      if (statSync(full).size !== installer.bytes) {
+        fail(`安装器容器字节数与清单不一致：${installerRelative}`);
+      }
+      if (sha256(readFileSync(full)) !== installer.sha256) {
+        fail(`安装器容器 SHA-256 与清单不一致：${installerRelative}`);
+      }
+      verifiedNonNpmArtifacts += 1;
+    } else {
+      missingNonNpmArtifacts += 1;
+    }
+  }
+  notes.push(
+    `非 npm 随包组件 ${nonNpmEntries} 条（runtime/fonts/bundled 中 ecosystem=bundled 的条目）：` +
+      `随包实物哈希复算 ${verifiedNonNpmArtifacts} 个，构建产物未在场 ${missingNonNpmArtifacts} 个`
+  );
 }
 
 // ---------------------------------------------------------------------------
