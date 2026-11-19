@@ -513,6 +513,148 @@ describe('精读入口按项目圈范围（/chat/budget、/chat/ask）', () => {
   });
 });
 
+/**
+ * 设计文档 §7 第 2 条（`applyChatProjectScope` vs `/chat/budget` 内联版本）的特征化测试。
+ *
+ * 两处的差异是历来的命名口径不同，**不是可由当前客户端触发的 bug**：
+ * - `/chat/budget`：camel `scopeDocuments` 与 snake `scope_documents` 都收（camel 优先），
+ *   两者都参与 projectId 互斥，400 文案固定写 camelCase；`scope_tags` 不参与互斥
+ *   （预算估算本来就不消费标签）。
+ * - `/chat/ask*`：只认 `ChatRequest` 声明的 snake `scope_documents`/`scope_tags` 判互斥，
+ *   camel 命名被当未知字段忽略（不报冲突）。
+ * 界面 `projectScopeAskPayload` 保证项目/手选文献/标签三选一，且 ask 只发 snake_case，
+ * 因此客户端发不出"同时给 projectId 与显式范围"的请求。本组用例固化现状；
+ * 若要统一命名/文案，需先确认契约与产品口径，并同步改这些断言。
+ */
+describe('精读入口 projectId 冲突校验：命名差异（设计文档 §7 第 2 条特征化）', () => {
+  it('/chat/budget：camel/snake 两种命名都参与互斥，400 文案固定 camelCase', async () => {
+    const projectId = makeProject('预算命名互斥项目', [documentA]);
+    const camel = await server.inject({
+      method: 'POST',
+      url: '/api/v1/chat/budget',
+      headers,
+      payload: {
+        question: '这两篇讲了什么？',
+        reading_scope: 'corpus',
+        projectId,
+        scopeDocuments: [documentA]
+      }
+    });
+    expect(camel.statusCode).toBe(400);
+    expect(String((camel.json() as { message?: string }).message)).toContain(
+      'projectId 与 scopeDocuments 不能同时给：请二选一'
+    );
+
+    const snake = await server.inject({
+      method: 'POST',
+      url: '/api/v1/chat/budget',
+      headers,
+      payload: {
+        question: '这两篇讲了什么？',
+        reading_scope: 'corpus',
+        projectId,
+        scope_documents: [documentA]
+      }
+    });
+    expect(snake.statusCode).toBe(400);
+    // 既有文案写的是 camel 变量名：snake 命中冲突时也回 camel 文案（改字会动返回体）。
+    expect(String((snake.json() as { message?: string }).message)).toContain(
+      'projectId 与 scopeDocuments 不能同时给：请二选一'
+    );
+  });
+
+  it('/chat/budget：camel scopeDocuments 优先于 snake（空 camel 数组会压掉 snake）', async () => {
+    const projectId = makeProject('预算命名优先级项目', [documentA]);
+    const both = await server.inject({
+      method: 'POST',
+      url: '/api/v1/chat/budget',
+      headers,
+      payload: {
+        question: '这两篇讲了什么？',
+        reading_scope: 'corpus',
+        projectId,
+        scopeDocuments: [documentA],
+        scope_documents: [documentB]
+      }
+    });
+    expect(both.statusCode).toBe(400);
+
+    // `scopeDocumentIds` 的既有语义：camel 是数组就只看 camel，哪怕它是空数组。
+    const emptyCamel = await server.inject({
+      method: 'POST',
+      url: '/api/v1/chat/budget',
+      headers,
+      payload: {
+        question: '这两篇讲了什么？',
+        reading_scope: 'corpus',
+        projectId,
+        scopeDocuments: [],
+        scope_documents: [documentB]
+      }
+    });
+    expect(emptyCamel.statusCode).toBe(200);
+    expect((emptyCamel.json() as { documents: number }).documents).toBe(1);
+  });
+
+  it('/chat/budget：projectId 与 scope_tags 不互斥（预算不消费标签），ask 侧才 400', async () => {
+    const projectId = makeProject('预算标签项目', [documentA]);
+    const payload = {
+      question: '这两篇讲了什么？',
+      reading_scope: 'corpus' as const,
+      projectId,
+      scope_tags: ['任意标签']
+    };
+    const budget = await server.inject({
+      method: 'POST',
+      url: '/api/v1/chat/budget',
+      headers,
+      payload
+    });
+    expect(budget.statusCode).toBe(200);
+    expect((budget.json() as { documents: number }).documents).toBe(1);
+
+    // ask 的 scope_tags 会改变实际阅读范围，所以与 projectId 同时在就 400（模型调用前）。
+    const ask = await server.inject({
+      method: 'POST',
+      url: '/api/v1/chat/ask',
+      headers,
+      payload: { ...payload, documentId: documentB }
+    });
+    expect(ask.statusCode).toBe(400);
+    expect(String((ask.json() as { message?: string }).message)).toContain(
+      'projectId 与 scope_tags 不能同时给：请二选一'
+    );
+  });
+
+  it('/chat/ask*：camel scopeDocuments 不参与互斥（同请求 budget 400、ask 走项目解析）', async () => {
+    // 项目不存在时两个入口都走不到模型：budget 先报互斥 400；ask 忽略 camel 后解析项目 → 404。
+    // 这是两处差异的最小可复现形态（同一 payload，状态码不同）。
+    const payload = {
+      question: '这两篇讲了什么？',
+      documentId: documentB,
+      reading_scope: 'corpus' as const,
+      projectId: 'missing-project',
+      scopeDocuments: [documentA]
+    };
+    const budget = await server.inject({
+      method: 'POST',
+      url: '/api/v1/chat/budget',
+      headers,
+      payload
+    });
+    expect(budget.statusCode).toBe(400);
+    expect(String((budget.json() as { message?: string }).message)).toContain(
+      'projectId 与 scopeDocuments 不能同时给：请二选一'
+    );
+
+    for (const url of ['/api/v1/chat/ask', '/api/v1/chat/ask/stream'] as const) {
+      const ask = await server.inject({ method: 'POST', url, headers, payload });
+      expect(ask.statusCode).toBe(404);
+      expect(String((ask.json() as { message?: string }).message)).toContain('项目不存在');
+    }
+  });
+});
+
 describe('项目列表的 documentCount 直接复用', () => {
   it('documentCount 等于项目当前可检索/阅读的文献数，移出后同步减少', async () => {
     const projectId = makeProject('计数项目', [documentA, documentB]);

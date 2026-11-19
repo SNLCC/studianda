@@ -15,9 +15,7 @@ import {
   writeFileSync,
   type Dirent
 } from 'node:fs';
-import { createRequire } from 'node:module';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { SCHEMA_SQL } from './store-schema.js';
 import * as projectDomain from './store/projects.js';
@@ -82,7 +80,6 @@ import type {
   FolderOverview,
   FolderSummary,
   LegacyMigrationReport,
-  MetadataSource,
   NoteAssetRecord,
   NoteAssetGcReport,
   NoteAssetReindexJob,
@@ -119,7 +116,13 @@ import {
   markdownPlainText,
   parseMarkdownInternalLink
 } from '@studianda/shared';
-import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { normalizeDoi } from './pdf-metadata.js';
+import {
+  parsePdfOffMainThread,
+  PdfParseCancelledError,
+  type ParsedChunk,
+  type ParsedPdf
+} from './pdf-worker.js';
 import { matchedExcerpt } from './retrieval.js';
 import {
   extractPdfLayout,
@@ -143,7 +146,6 @@ import {
   documentStructure,
   masksForPage,
   navigationNodes,
-  orderPageLines,
   textQuality,
   visibleLines,
   visualNodes,
@@ -277,12 +279,6 @@ function navigationReason(status: NavigationStatus): string {
 // 批注行映射 toAnnotation 与批注写路径同样随批注域搬到 ./store/annotations.ts；
 // origin 口径复用 notes.ts 导出的 normalizeContentOrigin，本文件不再持有该映射。
 
-interface ParsedChunk {
-  page: number;
-  text: string;
-  bbox: string;
-}
-
 interface SelectionSnapshotRow {
   id: string;
   document_id: string;
@@ -307,36 +303,11 @@ function toSelectionSnapshot(row: SelectionSnapshotRow): SelectionSnapshotRecord
   };
 }
 
-interface ParsedPdf {
-  pages: number;
-  author: string;
-  publication: string;
-  title: string;
-  doi: string;
-  /**
-   * 题录字段的实际来源（文件名/PDF 内嵌元数据/首页 DOI）。
-   * 供 `importDocument` 落 `documents.metadata_source`；Zotero 导入会覆盖成 `zotero`。
-   */
-  metadataSource: MetadataSource;
-  chunks: ParsedChunk[];
-}
-
+// ParsedChunk / ParsedPdf 与 `parsePdf` 一起搬到 ./pdf-worker.ts：解析只在 worker 线程跑，
+// 主线程拿回同一结构的解析结果直接落库。normalizeDoi / extractDoi / XMP 字段读取的
+// 唯一实现在 ./pdf-metadata.ts（worker 通过源码投递复用同一份实现）。
 // normalizeKey / firstAuthorKey 已随文献域搬到 ./store/documents.ts：题录/查重归一只有一份，
 // 导入管线与迁移回填从该模块 import，不在这里复制。
-
-function normalizeDoi(value: string): string {
-  return value
-    .trim()
-    .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '')
-    .replace(/^doi:\s*/i, '')
-    .replace(/[.,;:)\]}。]+$/g, '')
-    .toLowerCase();
-}
-
-function extractDoi(text: string): string {
-  const match = /10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i.exec(text);
-  return match ? normalizeDoi(match[0]) : '';
-}
 
 /** LIKE 查询把用户输入当字面量：转义 %、_ 与转义符本身。 */
 function escapeLike(value: string): string {
@@ -551,75 +522,7 @@ interface CachedReferenceGraph {
   nodeById: Map<string, ReferenceGraphNode>;
 }
 
-function metadataString(metadata: unknown, keys: string[]): string {
-  const source = metadata as { metadata?: { get?: (name: string) => unknown } | null } | null;
-  const reader = source?.metadata;
-  if (!reader || typeof reader.get !== 'function') return '';
-  for (const key of keys) {
-    try {
-      const value = reader.get(key);
-      if (typeof value === 'string' && value.trim()) {
-        return value.replace(/\s+/g, ' ').trim().slice(0, 240);
-      }
-    } catch {
-      // 缺失的 XMP 字段直接跳过
-    }
-  }
-  return '';
-}
-
-function publicationFromMetadata(metadata: unknown): string {
-  return metadataString(metadata, [
-    'prism:publicationName',
-    'prism:publicationname',
-    'dc:publisher',
-    'dc:source'
-  ]);
-}
-
-// 页文本行重排（tidyCjkSpacing / reflowPageLines）已随页文本读路径搬到 ./store/documents.ts。
-
-const require = createRequire(import.meta.url);
-const pdfjsRoot = path.dirname(require.resolve('pdfjs-dist/package.json'));
-
-/**
- * PDF.js 在 Node 中默认把 file:// URL 直接交给 fs，导致 GBK 等 CMap 读取失败，
- * 中文文本会被拆成标点/数字碎片。这里改为按本地路径读取内置 CMap 和标准字体。
- */
-class DiskBinaryDataFactory {
-  private readonly cMapUrl: string | null;
-  private readonly standardFontDataUrl: string | null;
-  private readonly wasmUrl: string | null;
-
-  constructor({
-    cMapUrl = null,
-    standardFontDataUrl = null,
-    wasmUrl = null
-  }: {
-    cMapUrl?: string | null;
-    standardFontDataUrl?: string | null;
-    wasmUrl?: string | null;
-  }) {
-    this.cMapUrl = cMapUrl;
-    this.standardFontDataUrl = standardFontDataUrl;
-    this.wasmUrl = wasmUrl;
-  }
-
-  async fetch({ kind, filename }: { kind: string; filename: string }): Promise<Uint8Array> {
-    const base =
-      kind === 'cMapUrl'
-        ? this.cMapUrl
-        : kind === 'standardFontDataUrl'
-          ? this.standardFontDataUrl
-          : kind === 'wasmUrl'
-            ? this.wasmUrl
-            : null;
-    if (!base) throw new Error(`missing ${kind}`);
-    return new Uint8Array(readFileSync(fileURLToPath(`${base}${filename}`)));
-  }
-}
-
-
+// 题录 XMP 字段读取/DOI 抽取的唯一实现在 ./pdf-metadata.ts；PDF 解析在 ./pdf-worker.ts。
 
 export class DuplicateImportError extends Error {
   readonly candidates: ImportDuplicateCandidate[];
@@ -639,134 +542,18 @@ export { AttachmentChangedError } from './store/documents.js';
 
 /** 索引分块口径：span/行级，1000 步长、1200 窗口。 */
 
-export async function parsePdf(bytes: Uint8Array): Promise<ParsedPdf> {
-  const loadingTask = getDocument({
-    data: new Uint8Array(bytes),
-    disableFontFace: true,
-    useSystemFonts: true,
-    useWorkerFetch: false,
-    BinaryDataFactory: DiskBinaryDataFactory,
-    cMapUrl: pathToFileURL(path.join(pdfjsRoot, 'cmaps') + path.sep).href,
-    cMapPacked: true,
-    standardFontDataUrl: pathToFileURL(path.join(pdfjsRoot, 'standard_fonts') + path.sep).href,
-    wasmUrl: pathToFileURL(path.join(pdfjsRoot, 'wasm') + path.sep).href
-  });
-  const pdf = await loadingTask.promise;
-  const pages = pdf.numPages;
-  let author = '';
-  let publication = '';
-  let title = '';
-  let doi = '';
-  let metadataDoi = '';
-  try {
-    const metadata = await pdf.getMetadata();
-    const info = metadata.info as { Author?: unknown; Title?: unknown } | undefined;
-    if (info && typeof info.Author === 'string') author = info.Author.trim().slice(0, 200);
-    if (info && typeof info.Title === 'string') title = info.Title.trim().slice(0, 240);
-    publication = publicationFromMetadata(metadata);
-    metadataDoi = normalizeDoi(
-      metadataString(metadata, ['prism:doi', 'prism:DOI', 'dc:identifier', 'dc:source'])
-    );
-    if (metadataDoi && !/^10\.\d{4,9}\//.test(metadataDoi)) metadataDoi = '';
-    doi = metadataDoi;
-  } catch {
-    author = '';
-    publication = '';
-    title = '';
-    doi = '';
-    metadataDoi = '';
-  }
-
-  const chunks: ParsedChunk[] = [];
-  for (let pageNumber = 1; pageNumber <= pages; pageNumber += 1) {
-    const page = await pdf.getPage(pageNumber);
-    const viewport = page.getViewport({ scale: 1 });
-    const content = await page.getTextContent();
-    const lines: Array<{
-      text: string;
-      x0: number;
-      y0: number;
-      x1: number;
-      y1: number;
-      baseline: number;
-      ended: boolean;
-    }> = [];
-    let current: (typeof lines)[number] | null = null;
-
-    for (const item of content.items) {
-      if (!('str' in item) || !item.str) continue;
-      const [, , , , x, y] = item.transform as [number, number, number, number, number, number];
-      const width = item.width ?? 0;
-      const height = item.height ?? 0;
-      const startsNewLine =
-        current == null ||
-        Math.abs(current.baseline - y) > 2 ||
-        current.ended ||
-        (x - current.x1 > 20 && item.str.trim().length > 0);
-      if (startsNewLine) {
-        if (current) lines.push(current);
-        current = { text: '', x0: x, y0: y, x1: x + width, y1: y + height, baseline: y, ended: false };
-      }
-      const line = current as NonNullable<typeof current>;
-      line.text += item.str;
-      line.x0 = Math.min(line.x0, x);
-      line.y0 = Math.min(line.y0, y);
-      line.x1 = Math.max(line.x1, x + width);
-      line.y1 = Math.max(line.y1, y + height);
-      line.ended = Boolean(item.hasEOL);
-    }
-    if (current) lines.push(current);
-
-    // 阅读顺序与引用定位/目录共用 structure.orderPageLines（左栏整栏 → 右栏，
-    // 跨栏标题分段；单栏按 y,x）。这里先把行换成左上原点的页面点坐标再排序。
-    // 用 viewport.convertToViewportPoint 而不是手写 height - y：旋转页（90/180/270）
-    // 的坐标轴会互换，手写换算会把 bbox 落到页面外。
-    const boxOf = (line: (typeof lines)[number]): [number, number, number, number] => {
-      const corners = [
-        viewport.convertToViewportPoint(line.x0, line.y0),
-        viewport.convertToViewportPoint(line.x1, line.y1)
-      ];
-      return [
-        Math.min(corners[0]![0], corners[1]![0]),
-        Math.min(corners[0]![1], corners[1]![1]),
-        Math.max(corners[0]![0], corners[1]![0]),
-        Math.max(corners[0]![1], corners[1]![1])
-      ];
-    };
-    const ordered = orderPageLines(
-      lines.map((line) => ({ line, bbox: boxOf(line) })),
-      viewport.width
-    );
-    for (const { line } of ordered) {
-      const text = line.text.replace(/\s+/g, ' ').trim();
-      if (!text) continue;
-      const bbox = boxOf(line);
-      for (let start = 0; start < text.length; start += 1000) {
-        chunks.push({
-          page: pageNumber,
-          text: text.slice(start, start + 1200),
-          bbox: JSON.stringify(bbox)
-        });
-      }
-    }
-  }
-
-  await loadingTask.destroy();
-  if (!doi) {
-    for (const chunk of chunks) {
-      doi = extractDoi(chunk.text);
-      if (doi) break;
-    }
-  }
-  // 来源按「实际被 importDocument 使用的字段」判断：作者/发表处/DOI 来自 PDF 内嵌元数据
-  // （Info 字典或 XMP）→ pdf_xmp；只用首页正文识别到 DOI → pdf_first_page；否则只有文件名。
-  const metadataSource: MetadataSource =
-    author || publication || metadataDoi
-      ? 'pdf_xmp'
-      : doi
-        ? 'pdf_first_page'
-        : 'filename';
-  return { pages, author, publication, title, doi, metadataSource, chunks };
+/**
+ * 解析 PDF（导入/重连/快照/Zotero 路径共用）。
+ *
+ * 实际解析在 `pdf-worker` 的 worker 线程里跑：主线程只等结果、落库、写 FTS，
+ * 解析期间事件循环不被 PDF.js 占住。返回结构、错误语义与旧主线程实现完全相同；
+ * 需要取消时传 `signal`（worker 任务会被终止，并以 `PdfParseCancelledError` 失败）。
+ */
+export async function parsePdf(
+  bytes: Uint8Array,
+  options?: { signal?: AbortSignal }
+): Promise<ParsedPdf> {
+  return parsePdfOffMainThread(bytes, options);
 }
 
 function makeSnippet(text: string, query: string, radius = 80): string {
@@ -849,6 +636,15 @@ function compareMigrationBackupsNewestFirst(a: string, b: string): number {
   // 时间戳相同（理论上不会发生）：按完整文件名倒序，保证排序稳定。
   return a < b ? 1 : a > b ? -1 : 0;
 }
+
+/**
+ * `reading_tasks` 表里翻译任务进度行的 key 前缀（`translation-job:<documentId>`）。
+ *
+ * 该表由阅读任务与翻译任务共用：问答/跨文献任务的 `task` 是无前缀 UUID，翻译任务用本前缀。
+ * `listReadingTasks` 默认不按前缀过滤（保持既有返回结构），需要严格只取问答任务时由调用方
+ * 传 `{ kind: 'reading' }`。
+ */
+const TRANSLATION_JOB_TASK_PREFIX = 'translation-job:';
 
 export class Store {
   readonly dataDir: string;
@@ -1564,7 +1360,26 @@ export class Store {
     };
   }
 
-  listReadingTasks(documentId: string): ReadingTaskSummary[] {
+  /**
+   * 某篇文献的「继续阅读」任务列表（`GET /documents/:id/reading-tasks` 的返回）。
+   *
+   * 数据直接来自共享表 `reading_tasks`，表里实际有两类行：
+   * - 问答/跨文献任务：`task` 是 randomUUID（无前缀），payload 带 question/pagesRead/unread_pages；
+   * - 翻译任务进度：`task` 是 `translation-job:<documentId>`（见 `saveTranslationJob`），payload 只有
+   *   status/total/done/currentPage/error。
+   *
+   * 为保持既有 HTTP 返回结构不变，本方法**默认不筛行类型**：同文档的翻译任务行也会返回，
+   * 映射为 `question:''`、`pagesRead:[]`、`unreadPages:[]`。只渲染「还有几页未读」的调用方按
+   * `unreadPages.length > 0` 过滤即可（界面 StudiandaApp 的 pendingTasks 就是这么做的，
+   * 所以翻译任务行不会显示给用户）；需要严格只取问答任务时传 `{ kind: 'reading' }`。
+   *
+   * 性能：`documents` 是 JSON 数组、无索引，现有实现本就是全表扫描后逐行 JSON 解析；
+   * 按 key 前缀跳过放在解析 payload 之前，不增加扫描次数。
+   */
+  listReadingTasks(
+    documentId: string,
+    options: { kind?: 'all' | 'reading' } = {}
+  ): ReadingTaskSummary[] {
     const rows = this.db
       .prepare('SELECT task, payload, documents, updated FROM reading_tasks ORDER BY updated DESC')
       .all() as unknown as Array<{
@@ -1573,8 +1388,10 @@ export class Store {
       documents: string | null;
       updated: number | null;
     }>;
+    const onlyReading = options.kind === 'reading';
     const result: ReadingTaskSummary[] = [];
     for (const row of rows) {
+      if (onlyReading && row.task.startsWith(TRANSLATION_JOB_TASK_PREFIX)) continue;
       try {
         const documents = row.documents ? (JSON.parse(row.documents) as unknown) : [];
         if (!Array.isArray(documents) || !documents.includes(documentId)) continue;
@@ -2096,9 +1913,14 @@ export class Store {
   }
 
   /**
-   * 重新生成：删除该会话「最后一条用户消息之后」的消息（助手回答/失败占位），
-   * 返回最后一条用户消息的正文（没有可重生成的轮次时返回 null）。
-   */  saveTranslationJob(state: {
+   * 保存整篇翻译任务的进度快照。
+   *
+   * 与阅读任务共用 `reading_tasks` 表：key 用 `translation-job:<documentId>` 前缀与问答任务
+   * 区分（见 `TRANSLATION_JOB_TASK_PREFIX`），payload 只有 status/total/done/currentPage/error，
+   * 没有 question/pagesRead/unread_pages；因此 `listReadingTasks` 默认返回里会出现这类行
+   * （question 为空），消费方不能假设列表里只有问答任务。
+   */
+  saveTranslationJob(state: {
     documentId: string;
     status: string;
     total: number;
@@ -2106,7 +1928,9 @@ export class Store {
     currentPage: number | null;
     error: string;
   }): void {
-    this.saveReadingTask(`translation-job:${state.documentId}`, state, [state.documentId]);
+    this.saveReadingTask(`${TRANSLATION_JOB_TASK_PREFIX}${state.documentId}`, state, [
+      state.documentId
+    ]);
   }
 
   loadTranslationJob(documentId: string): {
@@ -2125,7 +1949,7 @@ export class Store {
         done: number;
         currentPage: number | null;
         error: string;
-      }>(`translation-job:${documentId}`)?.payload ?? null
+      }>(`${TRANSLATION_JOB_TASK_PREFIX}${documentId}`)?.payload ?? null
     );
   }
 
@@ -3013,7 +2837,24 @@ export class Store {
 
     if (options?.isCancelled?.()) throw new ImportCancelledError();
     options?.onProgress?.({ stage: 'parsing', percent: 30 });
-    const parsed = await parsePdf(new Uint8Array(bytes));
+    // 解析在 worker 线程：把 isCancelled 轮询接到 AbortSignal 上，取消能中断 worker 任务
+    // （排队时直接出队，执行中 terminate 该 worker），错误仍映射成 ImportCancelledError。
+    const controller = new AbortController();
+    const cancelPoll = options?.isCancelled
+      ? setInterval(() => {
+          if (options.isCancelled?.()) controller.abort();
+        }, 100)
+      : null;
+    cancelPoll?.unref?.();
+    let parsed: ParsedPdf;
+    try {
+      parsed = await parsePdf(new Uint8Array(bytes), { signal: controller.signal });
+    } catch (error) {
+      if (error instanceof PdfParseCancelledError) throw new ImportCancelledError();
+      throw error;
+    } finally {
+      if (cancelPoll) clearInterval(cancelPoll);
+    }
     options?.onProgress?.({ stage: 'parsing', percent: 75 });
     if (options?.isCancelled?.()) throw new ImportCancelledError();
     const name = nameOverride?.trim() || path.basename(resolved);

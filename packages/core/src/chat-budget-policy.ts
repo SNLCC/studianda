@@ -205,6 +205,18 @@ export function createChatBudgetPolicy(deps: ChatBudgetPolicyDeps): ChatBudgetPo
       }
       // 逻辑项目范围：projectId 代替显式文献列表（与精读入口同一口径）。
       // 同时给 400、项目不存在 404、项目没有文献 400——空范围不能静默退化成"全库"。
+      //
+      // 与 `applyChatProjectScope`（chat-routes.ts）的差异是**故意的**（设计文档 §7 第 2 条）：
+      // 1. 本入口双写命名：camel `scopeDocuments` 与 snake `scope_documents` 都收、camel 优先
+      //    （见 `scopeDocumentIds`）。camel 是 `/search`（SearchRequest）的既有命名，预算估算
+      //    一直兼容旧调用方；ask 契约 `ChatRequest` 只声明 snake，故 ask 侧只认 snake。
+      // 2. 本入口**不校验** `scope_tags`：预算估算只消费文献 id 集合，标签圈范围在
+      //    `/chat/budget` 从未参与估算（scope 为空时按全部文献估，是既有口径）；ask 侧
+      //    scope_tags 会改变实际阅读范围，所以那边必须与 projectId 互斥。
+      // 3. 400 文案固定写 camel 变量名（`projectId 与 scopeDocuments 不能同时给`），
+      //    即使冲突来自 snake 字段也一样——文案属既有返回体，不在这里改。
+      // 当前客户端三选一（ui/project-scope.tsx 的 projectScopeAskPayload）且只调 ask，
+      // 因此这条差异不可达；要统一须先确认契约/产品（§7 结论：各自保留）。
       const rawProjectId = body.projectId;
       let scopeDocuments = scopeDocumentIds(body.scopeDocuments, body.scope_documents);
       if (rawProjectId !== undefined) {

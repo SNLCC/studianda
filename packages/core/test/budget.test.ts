@@ -259,15 +259,18 @@ describe('budget estimate for a cross-document scope', () => {
     expect(body.pages).toBe(docA.pages);
   });
 
-  it.skip('returns 200 needs_confirmation (not 409) for an over-budget stream request', async () => {
+  it('returns 200 needs_confirmation (not 409) for an over-budget stream request', async () => {
     const response = await server.inject({
       method: 'POST',
       url: '/api/v1/chat/ask/stream',
       headers: headers(),
       payload: {
         question: '这篇长文献讲了什么？',
+        // 独立会话移除后 HTTP 入口必须有当前文献；跨文献范围用真实客户端的
+        // `scope_documents` 字段（闸门只读 snake 写法，camel 只在 /chat/budget 兼容）。
+        documentId: heavyDoc.id,
         reading_scope: 'corpus',
-        scopeDocuments: [heavyDoc.id]
+        scope_documents: [heavyDoc.id]
       }
     });
     expect(response.statusCode).toBe(200);
@@ -288,15 +291,16 @@ describe('budget estimate for a cross-document scope', () => {
     expect(body.budget?.tokens).toBeGreaterThan(60_000);
   }, 60_000);
 
-  it.skip('returns 200 needs_confirmation from POST /chat/ask too', async () => {
+  it('returns 200 needs_confirmation from POST /chat/ask too', async () => {
     const response = await server.inject({
       method: 'POST',
       url: '/api/v1/chat/ask',
       headers: headers(),
       payload: {
         question: '这篇长文献讲了什么？',
+        documentId: heavyDoc.id,
         reading_scope: 'corpus',
-        scopeDocuments: [heavyDoc.id]
+        scope_documents: [heavyDoc.id]
       }
     });
     expect(response.statusCode).toBe(200);
@@ -308,7 +312,7 @@ describe('budget estimate for a cross-document scope', () => {
     expect(body.budget?.exceeded).toBe(true);
   }, 60_000);
 
-  it.skip('lets confirm_budget=true through the gate (no needs_confirmation)', async () => {
+  it('lets confirm_budget=true through the gate (no needs_confirmation)', async () => {
     // 放行后继续走原有阅读路径：这里没有配置模型，最终返回一问空回答，
     // 重点是**不再被预算闸门拦下**（不出现 needs_confirmation）。不调用真实模型。
     const stream = await server.inject({
@@ -317,8 +321,9 @@ describe('budget estimate for a cross-document scope', () => {
       headers: headers(),
       payload: {
         question: '这篇长文献讲了什么？',
+        documentId: heavyDoc.id,
         reading_scope: 'corpus',
-        scopeDocuments: [heavyDoc.id],
+        scope_documents: [heavyDoc.id],
         confirm_budget: true
       }
     });

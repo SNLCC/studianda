@@ -68,6 +68,17 @@ export function registerChatRoutes(app: FastifyInstance, options: ChatRouteOptio
    * 预算闸门薄封装：实现见 chat-budget-policy.ts 的 `gate`（估算失败吞错返回 null）。
    * 调用点顺序必须保持：scope（applyChatProjectScope）→ gate → needs_confirmation → beginTurn；
    * 把闸门挪进轮次锁内会让"并发 + 超预算"的响应从 needs_confirmation 变成 409。
+   *
+   * 已知微窗口（设计文档 §6 R7 的入口侧变体，实测判为**数据无害**）：
+   * 本函数是异步的，之后才 `chatTurns.begin` + `documentRequests.track`。闸门与 track 之间
+   * 本身是同步代码（单线程不会被其它请求插进来），但闸门内部可能 await 章节结构 I/O；
+   * 若 purge 恰在这段时间里完成，本请求尚未登记、收不到 abort，会继续为已删文献走到
+   * `answerQuestion`。实测（`test/chat-budget-window.test.ts`）：`answerWithReading` 入口
+   * 复查 `store.getDocument` 为 null → 响应 200 + `answer:null`（notice「完整阅读没有返回结果」），
+   * purge 之后不写 messages / reading_tasks / checkpoints / 选区快照，轮次锁与登记表照常清理；
+   * 唯一代价是复查前已发出的一次 QUESTION_ROUTE 路由模型调用。**因此不在这里加 track 前复查**：
+   * 复查只多一次同步 DB 读、消不掉那次路由调用；把 track 前移到闸门前则会把
+   * `needs_confirmation` 分支也纳入在途登记、改变其语义。
    */
   const budgetGate = (body: Partial<ChatRequest>) => budget.gate(body);
 
@@ -80,6 +91,15 @@ export function registerChatRoutes(app: FastifyInstance, options: ChatRouteOptio
    * 项目范围本身就是跨文献：解析成功后一并把 reading_scope 定为 'corpus'，不让调用方
    * 因为漏传这个开关而把项目范围静默降级成"只读当前一篇"。
    * 返回 null 表示错误响应已发送，调用方直接返回。
+   *
+   * 命名/互斥字段与 `/chat/budget` 的内联版本**故意不同**（设计文档 §7 第 2 条，已核实）：
+   * 本函数只认 `ChatRequest` 声明的 snake_case（`scope_documents`/`scope_tags`），camelCase
+   * `scopeDocuments` 不在 ask 契约里、按未知字段忽略；`/chat/budget` 侧收 camel 是它自带的
+   * 旧命名兼容（见 chat-budget-policy.ts 的 `scopeDocumentIds`），400 文案也因此写 camelCase。
+   * 现状不可由客户端触发：界面 `projectScopeAskPayload` 保证项目/文献/标签三选一且 ask 只发
+   * snake_case，所以这里和 `/chat/budget` 的差异不会让同一个真实请求一边 400 一边通过。
+   * **不要顺手统一**：让 ask 接受 camel 会把"显式文献范围"静默改成项目范围（或反过来），
+   * 是行为变更而不是文案整理；真要统一得先改契约与产品口径。
    */
   const applyChatProjectScope = (
     body: Partial<ChatRequest>,

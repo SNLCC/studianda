@@ -1891,6 +1891,14 @@ export interface ChatUsage {
   estimated?: boolean;
 }
 
+/**
+ * 阅读任务列表项（`GET /documents/:id/reading-tasks`）。
+ *
+ * 列表直接映射共享表 `reading_tasks`：同一张表也存翻译任务进度行
+ * （task=`translation-job:<documentId>`，没有问答字段），因此结果里可能出现
+ * question/pagesRead/unreadPages 全为空的项。只渲染「继续阅读」入口的调用方应按
+ * `unreadPages.length > 0` 过滤（界面现有行为）。
+ */
 export interface ReadingTaskSummary {
   taskId: string;
   question: string;

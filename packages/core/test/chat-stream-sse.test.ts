@@ -8,6 +8,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { clearRouteCache } from '../src/question-route.js';
 import { SecretStore } from '../src/secrets.js';
 import { buildServer } from '../src/server.js';
+import { DocumentRequestRegistry } from '../src/server/document-request-registry.js';
 import { Store } from '../src/store.js';
 
 /**
@@ -48,10 +49,17 @@ interface CapturedRequest {
   res: ServerResponse;
   abortedBaseline: number;
   closeBaseline: number;
+  /** 该请求上真实发生的 `aborted` 事件次数（只读观测，不影响路由）。 */
+  abortedEvents: number;
 }
 const captured: CapturedRequest[] = [];
 /** 最近一条真实请求：ServerResponse.prototype 探针用它过滤目标响应。 */
 let lastCaptured: CapturedRequest | undefined;
+/** 本轮测试里模型调用收到的 AbortSignal（用于断言取消真的传到了 answerQuestion）。 */
+const modelSignals: AbortSignal[] = [];
+/** 通过 prototype 探针抓到的真实登记表实例（buildServer 内部创建，不对外暴露）。 */
+let requestRegistry: DocumentRequestRegistry | null = null;
+const originalTrack = DocumentRequestRegistry.prototype.track;
 
 function headers(): Record<string, string> {
   return { 'x-studianda-token': token };
@@ -122,6 +130,7 @@ function firstAuditEvidence(user: string): { source: number; quote: string } | n
 function installModelMock(): void {
   vi.stubGlobal('fetch', async (_url: unknown, init?: RequestInit) => {
     const signal = init?.signal ?? undefined;
+    if (signal) modelSignals.push(signal);
     if (modelDelayMs > 0 || signal?.aborted) {
       await new Promise<void>((resolve, reject) => {
         if (signal?.aborted) {
@@ -283,6 +292,69 @@ function askStreamThenAbort(payload: Record<string, unknown>): Promise<string> {
   });
 }
 
+/**
+ * 真实 HTTP 连接：收到第一条 `event: stage` 后，在**服务端真实的 IncomingMessage**
+ * 上直接触发 `aborted` 事件，等连接由服务端收尾后返回全部 SSE 文本。
+ *
+ * 为什么不用"客户端真断连"来造 `aborted`：Node 24 实测，请求体已被 Fastify 读完后再
+ * 断连，服务端只会收到 `request.raw` 的 `close`（响应侧 close），不会触发 `aborted`
+ * （见下面对照样例）。路由注册的是 `request.raw.once('aborted', abort)`，所以在同一个
+ * IncomingMessage 对象上 emit 就是该分支本身；它不是 stub，只是事件来源由测试构造。
+ */
+function askStreamThenEmitAborted(payload: Record<string, unknown>): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    let settled = false;
+    let emitted = false;
+    let data = '';
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(data);
+    };
+    const fail = (error: unknown): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    };
+    const timer = setTimeout(() => fail(new Error('5s 内没有收到 aborted 分支的收尾')), 5_000);
+    const request = httpRequest(
+      {
+        host: '127.0.0.1',
+        port: appPort,
+        path: '/api/v1/chat/ask/stream',
+        method: 'POST',
+        headers: {
+          'x-studianda-token': token,
+          'content-type': 'application/json',
+          accept: 'text/event-stream'
+        }
+      },
+      (response) => {
+        response.setEncoding('utf8');
+        response.on('data', (chunk: string) => {
+          data += chunk;
+          if (emitted || !data.includes('event: stage')) return;
+          emitted = true;
+          const target = captured.at(-1);
+          if (!target) {
+            fail(new Error('没有捕获到该请求的 IncomingMessage'));
+            return;
+          }
+          // 与路由 `request.raw.once('aborted', abort)` 完全同一条分支：真实 IncomingMessage、
+          // 真实 ServerResponse/真实 socket；只是 `aborted` 由测试构造（真实断连触发的是 close）。
+          target.req.emit('aborted');
+        });
+        response.on('end', finish);
+        response.on('error', (error) => fail(error));
+      }
+    );
+    request.on('error', (error) => fail(error));
+    request.end(JSON.stringify(payload));
+  });
+}
+
 /** 反复重试直到轮次锁被释放（rewind 不再 409）；超时上限 5s。 */
 async function waitForLockRelease(): Promise<void> {
   const deadline = Date.now() + 5_000;
@@ -310,6 +382,15 @@ beforeAll(async () => {
   process.env.STUDIANDA_MODEL_BASE_URL = 'https://model.example.com/v1';
   process.env.STUDIANDA_MODEL_NAME = 'chat-model';
   process.env.STUDIANDA_MODEL_API_KEY = 'k-1';
+  // 在第一次请求前装探针：抓取 buildServer 内部真实创建的登记表实例（只读观测待清理项）。
+  vi.spyOn(DocumentRequestRegistry.prototype, 'track').mockImplementation(function (
+    this: DocumentRequestRegistry,
+    documentIds: readonly (string | undefined)[],
+    controller: AbortController
+  ) {
+    requestRegistry = this;
+    return originalTrack.call(this, documentIds, controller);
+  });
   documentId = await importTestDocument();
   // 断开用例需要真实 HTTP 连接；其它用例仍用 server.inject。
   await server.listen({ port: 0, host: '127.0.0.1' });
@@ -321,9 +402,16 @@ beforeAll(async () => {
     const entry: CapturedRequest = {
       req,
       res,
-      abortedBaseline: req.listenerCount('aborted'),
-      closeBaseline: res.listenerCount('close')
+      abortedBaseline: 0,
+      closeBaseline: res.listenerCount('close'),
+      abortedEvents: 0
     };
+    // 只读观测：真实断连/测试构造的 aborted 各触发了几次（不影响路由的 once 监听）。
+    req.on('aborted', () => {
+      entry.abortedEvents += 1;
+    });
+    // 观测器先挂上再记基线：路由 cleanup 之后计数应精确回到这里（含观测器自己的 1 个）。
+    entry.abortedBaseline = req.listenerCount('aborted');
     captured.push(entry);
     lastCaptured = entry;
   });
@@ -331,6 +419,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   modelDelayMs = 0;
+  modelSignals.length = 0;
   clearRouteCache();
   installModelMock();
 });
@@ -342,6 +431,7 @@ afterEach(() => {
 });
 
 afterAll(async () => {
+  vi.restoreAllMocks();
   await server.close();
   store.close();
   rmSync(dataDir, { recursive: true, force: true });
@@ -530,6 +620,89 @@ describe('SSE 客户端中途断开', () => {
     // 路由在 finally 里 off('aborted') / off('close')；实测两条计数都精确回到请求开始时的基线。
     expect(target!.req.listenerCount('aborted')).toBe(target!.abortedBaseline);
     expect(target!.res.listenerCount('close')).toBe(target!.closeBaseline);
+  }, 30_000);
+
+  it('对照：客户端断开只触发 reply.raw 的 close，不会触发 request.raw 的 aborted', async () => {
+    // 现有断连用例走的是 `response.destroy()`（客户端 socket 断开）。Node 24 实测：
+    // 请求体已被 Fastify 读完后再断连，服务端 IncomingMessage 只发 close、不发 aborted；
+    // 所以 `request.raw.once('aborted')` 分支必须单独构造事件才能覆盖（下一条用例）。
+    modelDelayMs = 300;
+    const received = await askStreamThenAbort({
+      question: '这篇文献讲了什么？',
+      documentId,
+      page: 1,
+      source_policy: 'document_only'
+    });
+    expect(received).toContain('event: stage');
+    await waitForLockRelease();
+    await nextMacrotask();
+
+    const target = captured.at(-1);
+    expect(target).toBeDefined();
+    expect(target!.abortedEvents).toBe(0);
+    expect(target!.req.aborted).toBe(false);
+    // close 分支的 finally 同样注销了 aborted 监听：没触发不等于泄漏。
+    expect(target!.req.listenerCount('aborted')).toBe(target!.abortedBaseline);
+  }, 30_000);
+
+  it('request.raw 的 aborted 分支：客户端仍在线，收到 error{status:499} 收尾、锁释放、登记归零、服务端不崩', async () => {
+    // 这条用例覆盖 `request.raw.once('aborted', abort)`：事件在真实的 IncomingMessage 上触发，
+    // 与路由注册时的对象是同一个；区别在于客户端没有断连，所以服务端写出的 499 事件
+    // 客户端**收得到**（close 分支里 socket 已销毁，只能观测"服务端尝试写"）。
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      modelDelayMs = 300;
+      const received = await askStreamThenEmitAborted({
+        question: '这篇文献讲了什么？',
+        documentId,
+        page: 1,
+        source_policy: 'document_only'
+      });
+      expect(received).toContain('event: stage');
+
+      // ① 客户端在线：真的收到 499 error 事件，且之后不会再有 result。
+      const events = parseSse(received);
+      const errorEvents = events.filter((event) => event.event === 'error');
+      expect(errorEvents).toHaveLength(1);
+      const errorPayload = JSON.parse(errorEvents[0]!.data) as { message?: unknown; status?: unknown };
+      expect(errorPayload.status).toBe(499);
+      expect(errorPayload.message).toBe('已取消阅读');
+      expect(events.some((event) => event.event === 'result')).toBe(false);
+
+      // ② aborted 真的传到了 answerQuestion：后续模型调用的 signal 已被中止。
+      expect(modelSignals.length).toBeGreaterThan(0);
+      expect(modelSignals.at(-1)?.aborted).toBe(true);
+
+      // ③ 清理与 close 分支同口径（同一段 finally）：锁释放、documentRequests 归零。
+      await waitForLockRelease();
+      await nextMacrotask();
+      expect(requestRegistry).not.toBeNull();
+      expect(requestRegistry!.pending(documentId)).toBe(0);
+      expect(requestRegistry!.pending()).toBe(0);
+
+      // ④ 监听从 aborted 分支回来时也已注销（不会因为 close 没触发而泄漏）。
+      const target = captured.at(-1);
+      expect(target).toBeDefined();
+      expect(target!.abortedEvents).toBe(1);
+      expect(target!.req.listenerCount('aborted')).toBe(target!.abortedBaseline);
+      expect(target!.res.listenerCount('close')).toBe(target!.closeBaseline);
+
+      // ⑤ 服务端不崩：健康检查正常，没有 unhandledRejection。
+      const health = await server.inject({
+        method: 'GET',
+        url: '/api/v1/health',
+        headers: headers()
+      });
+      expect(health.statusCode).toBe(200);
+      await nextMacrotask();
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
   }, 30_000);
 });
 

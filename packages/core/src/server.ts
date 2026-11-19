@@ -1001,6 +1001,8 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   // 归属依据（设计文档 §4.3 / §7.5）：reading_tasks 表由阅读任务与翻译任务持久化共用，
   // 本路由只读 store.listReadingTasks、无任何实例状态依赖，跟 reading 域整批走最省风险；
   // 本批不为它单独新建 reading-routes.ts。
+  // 返回可能含同文档的翻译任务行（key=`translation-job:<id>`，question 为空）；界面按
+  // unreadPages 非空过滤，用户不可见，故本路由保持原样、不做行类型过滤（核查见设计文档 §7 第 5 条）。
   app.get(`${API_PREFIX}/documents/:id/reading-tasks`, async (request) => {
     const { id } = request.params as { id: string };
     return options.store.listReadingTasks(id);
