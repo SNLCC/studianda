@@ -24,6 +24,7 @@ import {
   type ZoteroNoteCandidate,
   type ZoteroPageGeometry
 } from './zotero-annotations.js';
+import { assertNoUrlCredentials } from './net-policy.js';
 import type { SecretStore } from './secrets.js';
 import { DuplicateImportError } from './store.js';
 import type { Store } from './store.js';
@@ -73,12 +74,15 @@ export function saveZoteroConfig(
   }
   if (mode === 'webdav') {
     if (libraryType !== 'users') throw new Error('Zotero WebDAV 附件仅支持个人资料库');
+    let webdavParsed: URL;
     try {
-      const url = new URL(webdavUrl);
-      if (url.protocol !== 'https:') throw new Error();
+      webdavParsed = new URL(webdavUrl);
     } catch {
       throw new Error('WebDAV 地址必须使用 HTTPS');
     }
+    if (webdavParsed.protocol !== 'https:') throw new Error('WebDAV 地址必须使用 HTTPS');
+    // 账号密码必须走单独的字段，不能内嵌在地址里（否则会明文落进资料目录与备份）。
+    assertNoUrlCredentials(webdavParsed, 'WebDAV 地址');
   }
   if (input.clear_key) {
     secrets.clear('zotero.api_key');

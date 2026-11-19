@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { unzipSync } from 'fflate';
@@ -30,6 +30,25 @@ describe('backup snapshots', () => {
     expect(result.entries).toContain('reader.sqlite3');
     expect(result.entries.some((entry) => entry.startsWith('papers/'))).toBe(true);
     expect(result.entries.some((entry) => entry.startsWith('backups/'))).toBe(false);
+  });
+
+  it('excludes runtime.json (plaintext local Core token) from the archive', async () => {
+    const runtimeFile = path.join(dataDir, 'runtime.json');
+    // Core 启动时会把本地 HTTP 鉴权 token 明文写在这里；它不能进备份。
+    writeFileSync(
+      runtimeFile,
+      JSON.stringify({ port: 4321, token: 'plaintext-local-token', pid: 1 }),
+      'utf8'
+    );
+    try {
+      const result = await createSnapshot(store);
+      expect(result.entries).not.toContain('runtime.json');
+      const archive = unzipSync(new Uint8Array(readFileSync(result.backup.path)));
+      expect(archive['runtime.json']).toBeUndefined();
+      expect(Object.keys(archive).some((name) => name.endsWith('runtime.json'))).toBe(false);
+    } finally {
+      rmSync(runtimeFile, { force: true });
+    }
   });
 
   it('lists only completed backup zips', () => {

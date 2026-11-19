@@ -29,6 +29,11 @@ const PREFIX = 'studianda-data-';
 const EXCLUDED_DIRS = new Set(['backups', 'diagnostics', 'cache', 'migration-backups']);
 const EXCLUDED_PREFIXES = ['.pre-restore-', '.restore-staging-', '.studianda-lock'];
 const MARKER_NAME = 'restore-pending.json';
+/**
+ * Core 运行期文件：含本地 HTTP 鉴权 token（明文）。与 `restore-pending.json` 一样只在
+ * 资料目录根部有意义，不能进备份；恢复旧备份时也不需要它（Core 启动会重新生成）。
+ */
+const RUNTIME_FILE_NAME = 'runtime.json';
 const SKIP_SUFFIXES = ['-wal', '-shm', '-journal'];
 const WORKER_CANCEL_POLL_MS = 50;
 
@@ -311,6 +316,8 @@ function collectRelativePaths(
       }
       if (!entry.isFile()) continue;
       if (entry.name === MARKER_NAME) continue;
+      // runtime.json 是 Core 的明文本地 token，只在资料目录根部；不进备份。
+      if (relativeBase === '' && entry.name === RUNTIME_FILE_NAME) continue;
       // 单实例锁/旧版锁文件不进备份：恢复时不能把锁状态带回来。
       if (entry.name === '.instance-lock.sqlite3' || entry.name === '.studianda-lock') continue;
       if (relativeBase === '' && databaseNames.has(entry.name)) continue;

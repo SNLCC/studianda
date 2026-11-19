@@ -423,6 +423,9 @@ export const SCHEMA_SQL = `      CREATE TABLE IF NOT EXISTS schema_meta(
         PRIMARY KEY(document_id, entry_id)
       );
 
+      -- schema_version 27：历史遗留表，当前代码零读零写。旧版本曾把平台 API Key 的
+      -- DPAPI 密文写在 value 的 encrypted_key 里；v27 迁移会清空所有行，但**保留表本身**，
+      -- 以免旧版本回滚后查询该表时报 "no such table"。新库只会建出这张空表。
       CREATE TABLE IF NOT EXISTS platform_connections(
         id TEXT PRIMARY KEY,
         value TEXT NOT NULL

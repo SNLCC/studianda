@@ -155,7 +155,8 @@ describe('legacy migration', () => {
     expect(report.pageMasks).toBe(1);
     expect(report.readingTasks).toBe(2);
     expect(report.structures).toBe(2);
-    expect(report.connections).toBe(1);
+    // 27：platform_connections 可能含旧版 API Key 密文，旧库迁移不再复制该表。
+    expect(report.connections).toBe(0);
     expect(report.backupPath).toBeTruthy();
     expect(existsSync(report.backupPath as string)).toBe(true);
 
@@ -176,5 +177,15 @@ describe('legacy migration', () => {
     expect(existsSync(path.join(newDir, 'papers'))).toBe(true);
     expect(store.search('retrieval', 'legacy-doc')).toHaveLength(1);
     store.close();
+    // 旧库 platform_connections 的密文行既没有复制进新库，启动迁移也把它清空。
+    const check = new DatabaseSync(path.join(newDir, 'reader.sqlite3'), { readOnly: true });
+    try {
+      const row = check
+        .prepare('SELECT COUNT(*) AS n FROM platform_connections')
+        .get() as { n?: number } | undefined;
+      expect(Number(row?.n ?? 0)).toBe(0);
+    } finally {
+      check.close();
+    }
   });
 });

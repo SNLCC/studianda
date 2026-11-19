@@ -5,7 +5,7 @@ import type {
 } from '@studianda/shared';
 import { resolveModelConnection, resolveModelService } from './model-services.js';
 import { isDeepSeekHost } from './model-protocol.js';
-import { isLocalOrLanHost } from './net-policy.js';
+import { assertNoUrlCredentials, isLocalOrLanHost } from './net-policy.js';
 import { isOcrLanguageCode, OCR_LANGUAGE_CATALOG } from './ocr-languages.js';
 import type { SecretStore } from './secrets.js';
 import type { Store } from './store.js';
@@ -276,16 +276,24 @@ export function parsingConfigForUse(
 }
 
 function validateUrl(value: string): void {
+  let url: URL;
   try {
-    const url = new URL(value);
-    if (!['http:', 'https:'].includes(url.protocol)) throw new Error();
-    // 与使用须知第 3 节一致：http 只允许本机/局域网，远程解析服务必须 https。
-    if (url.protocol === 'http:' && !isLocalOrLanHost(url.hostname)) {
-      throw new ParsingConfigError(400, '识别服务地址必须使用 https；http 仅允许本机或局域网地址');
-    }
-  } catch (error) {
-    if (error instanceof ParsingConfigError) throw error;
+    url = new URL(value);
+  } catch {
     throw new ParsingConfigError(400, '识别服务地址必须是 http/https URL');
+  }
+  if (!['http:', 'https:'].includes(url.protocol)) {
+    throw new ParsingConfigError(400, '识别服务地址必须是 http/https URL');
+  }
+  // 与使用须知第 3 节一致：http 只允许本机/局域网，远程解析服务必须 https。
+  if (url.protocol === 'http:' && !isLocalOrLanHost(url.hostname)) {
+    throw new ParsingConfigError(400, '识别服务地址必须使用 https；http 仅允许本机或局域网地址');
+  }
+  // 账号密码不能内嵌在地址里（否则会明文落进资料目录与备份）。
+  try {
+    assertNoUrlCredentials(url, '识别服务地址');
+  } catch (error) {
+    throw new ParsingConfigError(400, error instanceof Error ? error.message : '识别服务地址格式不正确');
   }
 }
 

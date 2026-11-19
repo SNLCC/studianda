@@ -134,7 +134,7 @@ describe('迁移快照保留策略', () => {
       const before = listSnapshots(dir);
       expect(before).toEqual([...HISTORY_SNAPSHOTS].sort());
 
-      const store = new Store(dir); // 触发真实 25 → 26 迁移
+      const store = new Store(dir); // 触发真实 25 → 27 迁移
       try {
         expect(store).toBeTruthy();
       } finally {
@@ -157,7 +157,7 @@ describe('迁移快照保留策略', () => {
       expect(after).not.toContain(HISTORY_SNAPSHOTS[2]);
       expect(readSchemaVersion(path.join(dir, 'migration-backups', created[0]!))).toBe('25');
 
-      expect(readSchemaVersion(path.join(dir, 'reader.sqlite3'))).toBe('26');
+      expect(readSchemaVersion(path.join(dir, 'reader.sqlite3'))).toBe('27');
       expectUserFilesUntouched(dir, userBackups);
     } finally {
       rmSync(dir, { recursive: true, force: true });

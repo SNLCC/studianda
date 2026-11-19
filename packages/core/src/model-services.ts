@@ -9,7 +9,7 @@ import type {
 import type { SecretStore } from './secrets.js';
 import type { Store } from './store.js';
 import { officialModelMetadata, speechModels } from './model-metadata.js';
-import { isLocalOrLanHost } from './net-policy.js';
+import { assertNoUrlCredentials, isLocalOrLanHost } from './net-policy.js';
 
 const SERVICES_KEY = 'model.services';
 const ROUTING_KEY = 'model.routing';
@@ -136,7 +136,7 @@ export function validateModelServiceUrl(raw: string): string {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new Error('服务地址必须以 http:// 或 https:// 开头');
   }
-  if (url.username || url.password) throw new Error('服务地址不能包含账号密码');
+  assertNoUrlCredentials(url, '服务地址');
   if (url.search || url.hash) throw new Error('服务地址不能包含查询参数或片段');
   const host = url.hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
   if (url.protocol === 'http:' && !isLocalOrLanHost(host)) {
@@ -216,6 +216,47 @@ function removedModelsOf(
   return result;
 }
 
+/**
+ * 落库前的模型字段白名单：只保留 `ModelServiceModel` 定义的字段。
+ *
+ * 旧实现用 `{ ...model }` 整对象展开，会把 `max_output`（读取时按官方快照补的只读字段）
+ * 之外的任意未知字段也写进 `settings['model.services']`；这里显式挑选，防止未知字段
+ * （例如另一个客户端塞进来的 `apiKey`）被持久化。
+ */
+function sanitizeModel(model: ModelServiceModel): ModelServiceModel {
+  const next: ModelServiceModel = {
+    id: String(model.id ?? ''),
+    name: String(model.name ?? ''),
+    capabilities: Array.isArray(model.capabilities) ? model.capabilities.map(String) : [],
+    source: model.source,
+    enabled: model.enabled
+  };
+  if (model.context_window !== undefined) next.context_window = model.context_window;
+  if (model.capacity_mode !== undefined) next.capacity_mode = model.capacity_mode;
+  if (model.task_thinking !== undefined) next.task_thinking = model.task_thinking;
+  if (model.reasoning_effort !== undefined) next.reasoning_effort = model.reasoning_effort;
+  if (model.safety_check !== undefined) next.safety_check = model.safety_check;
+  if (model.capacity_source !== undefined) next.capacity_source = model.capacity_source;
+  if (model.metadata_url !== undefined) next.metadata_url = model.metadata_url;
+  return next;
+}
+
+/**
+ * 落库前的连接字段白名单：只保留 `ModelServiceConnection` 定义的字段。
+ *
+ * `hasKey` 是 `publicModelServices` 按 SecretStore 现算的派生字段，不属于存储结构；
+ * 真实库里已有用户数据带了它（旧实现原样 spread 导致），保存时一律剥掉。
+ */
+function sanitizeConnection(connection: ModelServiceConnection): ModelServiceConnection {
+  return {
+    id: String(connection.id ?? ''),
+    name: String(connection.name ?? ''),
+    platform: String(connection.platform ?? ''),
+    baseUrl: validateModelServiceUrl(connection.baseUrl),
+    models: (connection.models ?? []).map(sanitizeModel)
+  };
+}
+
 export function saveModelServices(
   store: Store,
   input: Partial<ModelServicesConfig>,
@@ -223,21 +264,7 @@ export function saveModelServices(
 ): SaveModelServicesResult {
   const current = readModelServices(store);
   const connections = Array.isArray(input.connections)
-    ? input.connections.map((connection) => {
-        // `max_output` / `max_output_source` 是读取时按官方快照填入的只读字段，不落库：
-        // 否则快照更新（或换平台）后会一直留着旧值，误导容量显示。
-        const models = (connection.models ?? []).map((model) => {
-          const next = { ...model };
-          delete next.max_output;
-          delete next.max_output_source;
-          return next;
-        });
-        return {
-          ...connection,
-          models,
-          baseUrl: validateModelServiceUrl(connection.baseUrl)
-        };
-      })
+    ? input.connections.map(sanitizeConnection)
     : current.connections;
   const routing: ModelServiceRouting = input.routing && typeof input.routing === 'object'
     ? input.routing
@@ -808,8 +835,8 @@ function mergeSpeechPresets(
 /**
  * 把 `/models` 失败时的回退列表（已保存模型 + 官方语音快照）写回该 connection。
  *
- * 落库方式：`data['models']=models_of(data)` 后
- * UPDATE platform_connections，让下次打开或其它调用也能看到这些模型。
+ * 落库方式：`data['models']=models_of(data)` 后写回 `settings['model.services']`，
+ * 让下次打开或其它调用也能看到这些模型。
  *
  * 只追加缺失项：已有条目（尤其用户标注/source 元数据）原样保留；走与
  * `saveModelServices` 相同的设置键持久化，不触发路由/密钥副作用。

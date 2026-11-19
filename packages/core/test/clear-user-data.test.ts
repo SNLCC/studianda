@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { PDFDocument } from 'pdf-lib';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ClearUserDataResult } from '@studianda/shared';
@@ -170,6 +171,20 @@ beforeAll(async () => {
   mkdirSync(path.join(dataDir, '.pre-restore-old'), { recursive: true });
   writeFileSync(path.join(dataDir, '.pre-restore-old', 'reader.sqlite3'), 'old');
 
+  // schema 27：历史 platform_connections 可能残留旧版 API Key 密文（当前代码零读零写，
+  // 所以直接写库模拟升级用户库里的旧行）；「清空全部本地数据」必须把这些行也删掉。
+  const residue = new DatabaseSync(path.join(dataDir, 'reader.sqlite3'));
+  try {
+    residue
+      .prepare('INSERT INTO platform_connections(id, value) VALUES (?, ?)')
+      .run(
+        'legacy-conn',
+        JSON.stringify({ name: '旧平台', encrypted_key: 'AQAAANCM-should-be-cleared' })
+      );
+  } finally {
+    residue.close();
+  }
+
   // 必须保留的配置与密钥。
   store.updateSettings({
     [settingsMarker.key]: settingsMarker.value,
@@ -259,6 +274,17 @@ describe('POST /api/v1/maintenance/clear-user-data', () => {
     expect(settings['markdown.scan_job']).toBeUndefined();
     expect(secrets.get('platform.demo.api_key')).toBe(secretValue);
     expect(secrets.get('search.api_key')).toBe('search-secret');
+
+    // 历史 platform_connections 的残留行同样被清掉（表保留、0 行）。
+    const cleared = new DatabaseSync(path.join(dataDir, 'reader.sqlite3'), { readOnly: true });
+    try {
+      const row = cleared
+        .prepare('SELECT COUNT(*) AS n FROM platform_connections')
+        .get() as { n?: number } | undefined;
+      expect(Number(row?.n ?? 0)).toBe(0);
+    } finally {
+      cleared.close();
+    }
 
     // 数据库文件本身没有被删（Windows 上打开的文件删不掉），清空后仍可正常读写。
     expect(existsSync(path.join(dataDir, 'reader.sqlite3'))).toBe(true);

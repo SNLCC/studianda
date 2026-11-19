@@ -355,7 +355,7 @@ describe('题录来源（metadata_source）', () => {
     }
   });
 
-  it('v25 老库升级：新增列默认值可用，版本升到 26，来源仍为 null', async () => {
+  it('v25 老库升级：新增列默认值可用，版本升到 27，来源仍为 null', async () => {
     const store = storeAt('migrate-v25');
     const document = await store.importDocument(pdfPath.plain);
     store.close();
@@ -380,7 +380,7 @@ describe('题录来源（metadata_source）', () => {
           .prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'")
           .get() as { value?: string }
       ).value;
-      expect(version).toBe('26');
+      expect(version).toBe('27');
       const migrated = reopened.getDocument(document.id);
       expect(migrated?.metadataSource).toBeNull();
       expect(migrated?.zoteroMissing).toBe(false);

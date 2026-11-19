@@ -52,6 +52,12 @@ const BUNDLE_DIR = path.join(
 const DB_FILE = 'reader.sqlite3';
 /** 行数必须保持不变的业务表（迁移只加列/建表，不动行）。 */
 const COUNTED_TABLES = ['documents', 'notes', 'annotations', 'messages', 'document_chat_sessions'];
+/**
+ * 只报告、不要求行数不变的表：
+ * - platform_connections：schema 27 迁移会清空历史 API Key 密文，迁移后必须为 0 行；
+ *   旧库可能没有这张表（null），有表就必须被清空。
+ */
+const CLEARED_TABLES = ['platform_connections'];
 /** 23 之后必须存在的表（20 基线新增 + 19/20 都依赖 + 21/22/23 新增）。 */
 const EXPECTED_TABLES = [
   'selection_snapshots',
@@ -219,7 +225,7 @@ function readSnapshot(dbPath) {
       version = row?.value === undefined ? null : String(row.value);
     }
     const counts = {};
-    for (const table of COUNTED_TABLES) {
+    for (const table of [...COUNTED_TABLES, ...CLEARED_TABLES]) {
       counts[table] = tableExists(db, table)
         ? Number(db.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).get().n ?? 0)
         : null;
@@ -418,6 +424,12 @@ async function main() {
         `行数变化：${table} ${before.counts[table] ?? '(无表)'} → ${after.counts[table] ?? '(无表)'}`
       );
     }
+  }
+  // 历史密钥密文清理：旧库有该表时，迁移后必须是 0 行（表可以保留，用于旧版本回滚兼容）。
+  if ((after.counts.platform_connections ?? 0) !== 0) {
+    failures.push(
+      `platform_connections 迁移后仍有 ${after.counts.platform_connections} 行，历史密钥密文未被清理`
+    );
   }
   if (removedTables.length > 0) failures.push(`迁移删除了表：${removedTables.join(', ')}`);
   if (integrity !== 'ok') failures.push(`integrity_check 未通过：${integrity}`);

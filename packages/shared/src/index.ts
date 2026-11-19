@@ -39,27 +39,25 @@ export const TOKEN_HEADER = 'x-studianda-token' as const;
 export const RUNTIME_FILE_NAME = 'runtime.json' as const;
 
 /**
- * 密钥名称白名单：Core 的 SecretStore 与桌面主进程的 safeStorage 持久化共用。
- *
- * 两处各自维护会出现“一处接受、另一处静默丢弃”的漂移：设置里填了密钥，重启后又要重填。
- * 新增密钥只改这里，并同步 `packages/core/src/secrets.ts` 的使用方与测试。
+ * 密钥白名单与 `secrets.json` 格式拆到独立模块（含 Electron / 未来宿主的加密落盘逻辑），
+ * 这里只做 re-export，保持 `@studianda/shared` 对外入口不变。
  */
-const FIXED_SECRET_NAMES = new Set([
-  'parsing.service_key',
-  'zotero.api_key',
-  'zotero.webdav_password',
-  'speech.asr_key',
-  'speech.tts_key',
-  'search.api_key'
-]);
-
-export function isAllowedSecretName(name: string): boolean {
-  return (
-    FIXED_SECRET_NAMES.has(name) ||
-    /^platform\.[A-Za-z0-9_-]+\.api_key$/.test(name) ||
-    /^speech\.[A-Za-z0-9_-]+\.key$/.test(name)
-  );
-}
+export {
+  SECRETS_FILE_VERSION,
+  SECRET_ENCRYPTION_UNAVAILABLE_MESSAGE,
+  isAllowedSecretName,
+  emptySecretsFile,
+  parseSecretsFile,
+  serializeSecretsFile,
+  encryptSecretValue,
+  clearSecretFromFile,
+  decryptSecretsFile,
+  SecretFileStore,
+  type EncryptedSecretsFile,
+  type SecretsFileCipher,
+  type SecretsFileStorage,
+  type SecretsFileStatus
+} from './secrets-file.js';
 
 export interface HealthResponse {
   application: typeof APP_NAME;

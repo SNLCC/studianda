@@ -239,7 +239,7 @@ describe('逻辑项目数据层', () => {
       const versionRow = db
         .prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'")
         .get() as { value?: string } | undefined;
-      expect(versionRow?.value).toBe('26');
+      expect(versionRow?.value).toBe('27');
       const projectRow = db
         .prepare('SELECT id, name FROM projects WHERE id = ?')
         .get(project.id) as { id?: string; name?: string } | undefined;

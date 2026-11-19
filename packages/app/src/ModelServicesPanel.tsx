@@ -12,6 +12,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type JSX } from 'react';
 import { HintMark, SendingNotice } from './Hint.js';
 import { useSettingsFeedback } from './SettingsFeedback.js';
+import { canPersistHostSecrets, clearPersistedHostSecrets } from './host-secrets.js';
 import type { RuntimeAdapter } from './runtime.js';
 
 // 顺序有意义：全模态放最前，它蕴含的「会话 / 视觉 / 语音识别」紧跟在后面。
@@ -218,17 +219,36 @@ export function ModelServicesPanel({
   const save = useMutation({
     mutationFn: async (next: ModelServicesConfig) => {
       if (apiKey.trim() && draft) {
-        if (!adapter.setSecret) {
+        const setSecret = adapter.setSecret;
+        if (!setSecret) {
           throw new Error(
             '当前宿主不支持保存密钥；请先在宿主设置中配置模型服务凭据，或使用无需密钥的本机模型。'
           );
         }
-        await adapter.setSecret(`platform.${draft.id}.api_key`, apiKey.trim());
+        await setSecret(`platform.${draft.id}.api_key`, apiKey.trim());
       }
-      return api.updateModelServices({
+      const saved = await api.updateModelServices({
         connections: next.connections,
         routing: next.routing
       });
+      // 删除平台/模型时 Core 会在内存里清掉平台密钥与被降级的语音密钥：
+      // 同步删除加密文件里的条目，否则重启注入会把旧密钥又推回 Core。
+      // 用 query 缓存里的保存前配置判断“删了哪些平台”，避免依赖 React 状态快照。
+      const previous = queryClient.getQueryData<ModelServicesConfig>(['model-services']) ?? config;
+      const removedIds = previous.connections
+        .filter((item) => !next.connections.some((candidate) => candidate.id === item.id))
+        .map((item) => item.id);
+      await clearPersistedHostSecrets(adapter, [
+        ...removedIds.map((id) => `platform.${id}.api_key`),
+        ...(saved.unbound ?? []).flatMap((item) =>
+          item.kind === 'speech:asr'
+            ? ['speech.asr_key']
+            : item.kind === 'speech:tts'
+              ? ['speech.tts_key']
+              : []
+        )
+      ]);
+      return saved;
     },
     onSuccess: (saved) => {
       setConfig(saved);
@@ -585,9 +605,9 @@ export function ModelServicesPanel({
                   onChange={(event) => setApiKey(event.target.value)}
                   placeholder={draft.hasKey ? '已保存，留空保留' : '填写平台 API Key'}
                   autoComplete="off"
-                  disabled={!adapter.setSecret}
+                  disabled={!canPersistHostSecrets(adapter)}
                 />
-                {!adapter.setSecret ? (
+                {!canPersistHostSecrets(adapter) ? (
                   <small className="kr-muted">
                     当前宿主不支持保存密钥；请先在宿主设置中配置模型服务凭据，或使用无需密钥的本机模型。
                   </small>

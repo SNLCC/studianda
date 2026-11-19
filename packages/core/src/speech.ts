@@ -7,7 +7,7 @@ import type { SecretStore } from './secrets.js';
 import type { Store } from './store.js';
 import { readModelServices, resolveModelService } from './model-services.js';
 import { chatOutputOptions, thinkingOptions } from './model-protocol.js';
-import { assertEndpointTransport, isLocalOrLanHost } from './net-policy.js';
+import { assertEndpointTransport, assertNoUrlCredentials, isLocalOrLanHost } from './net-policy.js';
 import { requestMaxTokensFor, TASK_MAX_TOKENS } from './output-limit.js';
 
 const DEFAULTS = {
@@ -124,17 +124,21 @@ export function saveSpeechConfig(
     [ttsUrl, ttsMode, ttsModel]
   ] as const) {
     if (url) {
+      let parsed: URL;
       try {
-        const parsed = new URL(url);
-        if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error();
-        // 与使用须知第 3 节一致：http 只允许本机/局域网，远程语音服务必须 https。
-        if (parsed.protocol === 'http:' && !isLocalOrLanHost(parsed.hostname)) {
-          throw new Error('语音服务地址必须使用 https；http 仅允许本机或局域网地址');
-        }
-      } catch (error) {
-        if (error instanceof Error && error.message.includes('必须使用 https')) throw error;
+        parsed = new URL(url);
+      } catch {
         throw new Error('语音服务地址必须是 http/https URL');
       }
+      if (!['http:', 'https:'].includes(parsed.protocol)) {
+        throw new Error('语音服务地址必须是 http/https URL');
+      }
+      // 与使用须知第 3 节一致：http 只允许本机/局域网，远程语音服务必须 https。
+      if (parsed.protocol === 'http:' && !isLocalOrLanHost(parsed.hostname)) {
+        throw new Error('语音服务地址必须使用 https；http 仅允许本机或局域网地址');
+      }
+      // 账号密码不能内嵌在地址里（否则会明文落进资料目录与备份）。
+      assertNoUrlCredentials(parsed, '语音服务地址');
     }
     if (mode === 'custom' && (!url || !model)) {
       throw new Error('自定义语音服务需要地址和模型名称');

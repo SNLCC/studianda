@@ -2029,7 +2029,9 @@ export class Store {
     //     zotero_item_key（Zotero 顶层条目 key，collection 增量同步按它就地更新）、
     //     zotero_collection_key（最近同步的 collection）、zotero_missing（Zotero 侧已删除标记，
     //     只标记不删本地文献）。都只是加列 + 一个索引，不重建表、不动旧行。
-    const currentVersion = 26;
+    // 27：清空历史遗留表 platform_connections（旧版本存过平台 API Key 的 DPAPI 密文）。
+    //     当前代码零读零写；保留表结构以防旧版本回滚后报 "no such table"，只 DELETE 所有行。
+    const currentVersion = 27;
     // 本次升级生成的快照路径；迁移成功后据此清理旧快照并保证这一份不被删。
     let migrationBackupPath: string | null = null;
     if (previousVersion > 0 && previousVersion < currentVersion) {
@@ -2038,6 +2040,12 @@ export class Store {
     this.db.exec('BEGIN IMMEDIATE');
     try {
     this.db.exec(SCHEMA_SQL);
+
+    // schema_version 27：清空 platform_connections 里的历史 API Key 密文。
+    // 该表当前代码零读零写（migrateLegacy 也不再复制旧库的该表），保留空表只为兼容回滚。
+    // 无条件 DELETE 而非 `if (previousVersion < 27)`：每次启动都幂等执行，也能兜住
+    // “版本号已是 27 但表里仍有旧行”的半迁移库；表不存在时 SCHEMA_SQL 已先建出来。
+    this.db.exec('DELETE FROM platform_connections');
 
     // 独立会话与 Agent 已移除：一次性删除旧会话表与历史备份（不可恢复）。
     const qaRemoved = this.db
@@ -2223,7 +2231,7 @@ export class Store {
     }
     this.db
       .prepare('INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)')
-      .run('schema_version', '26');
+      .run('schema_version', '27');
       this.db.exec('COMMIT');
     } catch (error) {
       // 整体回滚：schema、回填、schema_version 一起回到迁移前；迁移前快照仍保留在
@@ -3621,7 +3629,9 @@ export class Store {
       'vectors',
       'embedding_cache',
       'audit_cache',
-      'retrieval_document_revision'
+      'retrieval_document_revision',
+      // 27：历史遗留表，旧版本可能残留平台 API Key 密文；「清空全部本地数据」也要清掉。
+      'platform_connections'
     ];
     this.db.exec('BEGIN IMMEDIATE');
     try {
@@ -7248,10 +7258,8 @@ export class Store {
       'y1',
       'created'
     ]);
-    report.connections += copyAux(legacy, 'platform_connections', 'platform_connections', [
-      'id',
-      'value'
-    ]);
+    // 27：旧版 platform_connections 可能含平台 API Key 的 DPAPI 密文（当前代码零读零写），
+    // **不再复制**到新库；迁移报告的 connections 保持 0，由启动迁移清空既有库的该表。
 
     const legacyReading = path.join(sourceDir, 'reading.sqlite3');
     if (existsSync(legacyReading)) {

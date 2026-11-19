@@ -358,7 +358,7 @@ describe('老库迁移（无 origin 列）', () => {
       const version = raw
         .prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'")
         .get() as { value?: string } | undefined;
-      expect(version?.value).toBe('26');
+      expect(version?.value).toBe('27');
       for (const table of ['notes', 'annotations']) {
         const columns = (
           raw.prepare(`PRAGMA table_info(${table})`).all() as unknown as Array<{ name: string }>

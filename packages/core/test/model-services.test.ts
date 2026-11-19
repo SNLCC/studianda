@@ -9,9 +9,11 @@ import type {
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   modelSupports,
+  readModelServices,
   resolveModelService,
   resolveOmniService,
-  resolveVisualService
+  resolveVisualService,
+  saveModelServices
 } from '../src/model-services.js';
 import { SecretStore } from '../src/secrets.js';
 import { Store } from '../src/store.js';
@@ -155,5 +157,50 @@ describe('existing model resolution stays the same', () => {
     expect(resolveModelService(store, secrets, 'chat')).toBeNull();
     expect(resolveModelService(store, secrets, 'embedding')).toBeNull();
     expect(resolveModelService(store, secrets, 'translation')).toBeNull();
+  });
+});
+
+describe('saveModelServices 字段裁剪', () => {
+  it('不把 hasKey 等派生字段或未知字段写进 settings["model.services"]', () => {
+    // 模拟协议面把派生字段 hasKey 与未知字段 apiKey 一起 POST 进来；真实库里
+    // model.services 已经出现过 hasKey 污染，这次保存必须把它剥掉。
+    const connection = {
+      id: 'strip-1',
+      name: '裁剪平台',
+      platform: 'custom',
+      baseUrl: 'https://api.example.com/v1/',
+      hasKey: true,
+      apiKey: 'sk-should-not-persist',
+      extraUnknown: 'nope',
+      models: [
+        {
+          ...model('m1', ['chat']),
+          max_output: 123456,
+          max_output_source: '官方文档',
+          apiKey: 'sk-model-should-not-persist'
+        }
+      ]
+    } as unknown as ModelServiceConnection;
+
+    saveModelServices(store, { connections: [connection], routing: {} });
+
+    const raw = store.getSettings()['model.services'] ?? '';
+    expect(raw).not.toContain('hasKey');
+    expect(raw).not.toContain('apiKey');
+    expect(raw).not.toContain('sk-should-not-persist');
+    expect(raw).not.toContain('extraUnknown');
+    expect(raw).not.toContain('max_output');
+
+    const saved = readModelServices(store).connections.find((item) => item.id === 'strip-1');
+    expect(saved).toMatchObject({
+      id: 'strip-1',
+      name: '裁剪平台',
+      platform: 'custom',
+      // 尾斜杠仍按原规则去掉。
+      baseUrl: 'https://api.example.com/v1'
+    });
+    expect(saved).not.toHaveProperty('hasKey');
+    expect(saved?.models[0]).toMatchObject({ id: 'm1', name: 'm1', capabilities: ['chat'] });
+    expect(saved?.models[0]).not.toHaveProperty('max_output');
   });
 });

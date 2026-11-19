@@ -7,7 +7,7 @@ import type {
 } from '@studianda/shared';
 import { resolveModelConnection, resolveModelService } from './model-services.js';
 import { chatOutputOptions, thinkingOptions } from './model-protocol.js';
-import { assertEndpointTransport } from './net-policy.js';
+import { assertEndpointTransport, assertNoUrlCredentials } from './net-policy.js';
 import type { SecretStore } from './secrets.js';
 import { annotate } from './source-tier.js';
 import type { Store } from './store.js';
@@ -115,7 +115,7 @@ export function saveSearchConfig(
       throw new Error('搜索服务地址无效');
     }
     if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('搜索地址必须是 http/https');
-    if (parsed.username || parsed.password) throw new Error('搜索地址不能带凭据');
+    assertNoUrlCredentials(parsed, '搜索地址');
     // 与使用须知第 3 节一致：http 只允许本机/局域网，远程端点必须 https。
     assertEndpointTransport(baseUrl, '搜索服务地址');
   }

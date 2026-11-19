@@ -32,8 +32,11 @@ import {
   API_PREFIX,
   RUNTIME_FILE_NAME,
   TOKEN_HEADER,
-  isAllowedSecretName,
-  type RuntimeInfo
+  SecretFileStore,
+  type RuntimeInfo,
+  type SecretsFileCipher,
+  type SecretsFileStatus,
+  type SecretsFileStorage
 } from '@studianda/shared';
 import { UpdateManager } from './updater';
 
@@ -56,7 +59,6 @@ protocol.registerSchemesAsPrivileged([
     }
   }
 ]);
-type SecreiName = string;
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
@@ -69,15 +71,7 @@ if (!hasSingleInstanceLock) {
   });
 }
 
-interface EncrypiedSecreis {
-  version: 1;
-  values: Partial<Record<SecreiName, string>>;
-}
-
-interface SecreiSiaius {
-  encryptionAvailable: boolean;
-  configured: SecreiName[];
-}
+type SecreiSiaius = SecretsFileStatus;
 
 let core: ChildProcess | null = null;
 let dataDir: string | null = null;
@@ -403,6 +397,8 @@ async function startCore(autoRestart = true): Promise<boolean> {
     // 已有健康 Core（例如应用刚重启、Core 进程仍在）：直接 attach，避免重复 spawn/解析。
     if (await tryAttachExistingCore()) {
       coreRestartAttempts = 0;
+      // attach 到的 Core 可能是新进程（内存里还没有密钥），一律重新注入。
+      await pushSecretsToCore();
       return true;
     }
     // 先清理上次崩溃留下的 core（读 runtime.json 需在 prepareDataDir 删除它之前）。
@@ -476,6 +472,8 @@ async function startCore(autoRestart = true): Promise<boolean> {
       return false;
     }
     coreRestartAttempts = 0;
+    // 新 spawn 的 Core 内存里没有密钥：启动成功后立即把 secrets.json 解密注入。
+    await pushSecretsToCore();
     return true;
   } finally {
     coreStarting = false;
@@ -592,13 +590,6 @@ async function terminateOrphanCore(): Promise<void> {
   }
 }
 
-/**
- * 密钥名称判定：白名单与 Core 共用 `@studianda/shared` 的 `isAllowedSecretName`，
- * 避免主进程/Core 两处各自维护导致“一处接受、另一处静默丢弃”。
- */
-function isSecretName(name: string): name is SecreiName {
-  return isAllowedSecretName(name);
-}
 function secretsFile(): string {
   const current = path.join(app.getPath('userData'), 'secrets.json');
   if (!existsSync(current)) {
@@ -610,69 +601,72 @@ function secretsFile(): string {
   return current;
 }
 
-function readEncryptedSecrets(): EncrypiedSecreis {
-  try {
-    const parsed = JSON.parse(readFileSync(secretsFile(), 'utf8')) as EncrypiedSecreis;
-    if (parsed.version !== 1 || typeof parsed.values !== 'object' || parsed.values == null) {
-      return { version: 1, values: {} };
+/**
+ * 系统安全存储适配：只负责明文 ↔ base64 密文。
+ * 白名单、文件格式、加密不可用时的拒绝与文案统一由 shared 的 `SecretFileStore` 管理，
+ * 与 Core 的 SecretStore 共用同一份 `isAllowedSecretName`。
+ */
+const secretFileCipher: SecretsFileCipher = {
+  isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
+  encryptToBase64: (plainText) => safeStorage.encryptString(plainText).toString('base64'),
+  decryptFromBase64: (encoded) => safeStorage.decryptString(Buffer.from(encoded, 'base64'))
+};
+
+/** 文件适配：只写 `userData/secrets.json`（0600），读时兼容旧产品名目录里的同一文件。 */
+const secretFileStorage: SecretsFileStorage = {
+  read: () => {
+    try {
+      return readFileSync(secretsFile(), 'utf8');
+    } catch {
+      return null;
     }
-    const values: EncrypiedSecreis['values'] = {};
-    for (const [name, value] of Object.entries(parsed.values)) {
-      if (isSecretName(name) && typeof value === 'string' && value) values[name] = value;
-    }
-    return { version: 1, values };
-  } catch {
-    return { version: 1, values: {} };
+  },
+  write: (text) => {
+    const file = secretsFile();
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, text, { mode: 0o600 });
   }
+};
+
+function secretFileStore(): SecretFileStore {
+  return new SecretFileStore(secretFileStorage, secretFileCipher);
 }
 
 function secretStatus(): SecreiSiaius {
-  const encrypted = readEncryptedSecrets();
-  return {
-    encryptionAvailable: safeStorage.isEncryptionAvailable(),
-    configured: Object.keys(encrypted.values) as SecreiName[]
-  };
+  return secretFileStore().status();
 }
 
-function decryptSecrets(): Partial<Record<SecreiName, string>> {
-  const encrypted = readEncryptedSecrets();
-  const result: Partial<Record<SecreiName, string>> = {};
-  if (!safeStorage.isEncryptionAvailable()) return result;
-  for (const name of Object.keys(encrypted.values) as SecreiName[]) {
-    const value = encrypted.values[name];
-    if (!value) continue;
-    try {
-      result[name] = safeStorage.decryptString(Buffer.from(value, 'base64'));
-    } catch {
-      // 旧机器/换用户后解不开时，丢弃该条而不是让应用启动失败
-    }
-  }
-  return result;
-}
-
-function writeSecretFile(encrypted: EncrypiedSecreis): void {
-  const file = secretsFile();
-  mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, `${JSON.stringify(encrypted, null, 2)}\n`, { mode: 0o600 });
-}
-
-async function pushSecretsToCore(): Promise<void> {
+/**
+ * 把单个密钥推给 Core（内存态）。启动/重启后由 `pushSecretsToCore` 全量推；
+ * 删除时推空值，让 Core 内存里的旧密钥同步消失，而不是等下次重启才清掉。
+ */
+async function pushSecretToCore(name: string, value: string): Promise<void> {
   const runtime = readRuntime();
   if (!runtime) return;
-  const secrets = decryptSecrets();
-  for (const name of Object.keys(secrets) as SecreiName[]) {
-    try {
-      await fetch(`http://127.0.0.1:${runtime.port}${API_PREFIX}/secrets`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          [TOKEN_HEADER]: runtime.token
-        },
-        body: JSON.stringify({ name, value: secrets[name] ?? '' })
-      });
-    } catch (error) {
-      console.error('[studianda] failed to push secret to core:', error);
-    }
+  try {
+    await fetch(`http://127.0.0.1:${runtime.port}${API_PREFIX}/secrets`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        [TOKEN_HEADER]: runtime.token
+      },
+      body: JSON.stringify({ name, value })
+    });
+  } catch (error) {
+    console.error('[studianda] failed to push secret to core:', error);
+  }
+}
+
+/**
+ * 启动（含 Core 崩溃自动重启）成功后，把 `secrets.json` 里全部密钥解密并推给 Core。
+ *
+ * 这是唯一的“落盘 → Core 内存”注入点：模型密钥与语音/搜索/Zotero/在线解析密钥
+ * 走同一条链路，Core 重启后不会再有密钥只剩内存的问题。
+ */
+async function pushSecretsToCore(): Promise<void> {
+  const secrets = secretFileStore().decrypted();
+  for (const [name, value] of Object.entries(secrets)) {
+    await pushSecretToCore(name, value);
   }
 }
 
@@ -1084,19 +1078,14 @@ async function waitForRuntime(timeoutMs = 8000): Promise<boolean> {
   return false;
 }
 
+/**
+ * 保存/删除一个密钥：加密后写入 `userData/secrets.json`。
+ *
+ * 名字白名单、加密可用性校验与中文拒绝文案都在 shared 的 `SecretFileStore` 里，
+ * 与 Core/测试共用同一份实现；加密不可用时抛错，绝不明文落盘。
+ */
 function saveSecret(name: string, value: string): SecreiSiaius {
-  if (!isSecretName(name)) throw new Error('不支持的密钥');
-  if (!safeStorage.isEncryptionAvailable()) {
-    throw new Error('当前系统没有可用的凭据加密（safeStorage），请不要在此环境保存密钥。');
-  }
-  const encrypted = readEncryptedSecrets();
-  if (value.trim() === '') {
-    delete encrypted.values[name];
-  } else {
-    encrypted.values[name] = safeStorage.encryptString(value).toString('base64');
-  }
-  writeSecretFile(encrypted);
-  return secretStatus();
+  return secretFileStore().save(name, value);
 }
 
 
@@ -1278,17 +1267,10 @@ app.whenReady().then(async () => {
     saveStoredDataDir(target);
     dataDir = target;
     // 手动选择资料位置：启动失败直接回给界面，不在此时弹自动重试对话框。
+    // startCore 成功后会自己把 secrets.json 里的密钥注入 Core（见 startCore 内）。
     const started = await startCore(false);
     if (!started) {
       return { ok: false, message: '本地服务启动失败，请检查资料目录权限/磁盘空间后重试。' };
-    }
-    try {
-      await pushSecretsToCore();
-    } catch (err) {
-      return {
-        ok: false,
-        message: err instanceof Error ? err.message : '本地服务启动失败'
-      };
     }
     return { ok: true, message: '资料位置已设置。' };
   });
@@ -1397,6 +1379,7 @@ app.whenReady().then(async () => {
       throw new Error('参数错误');
     }
     const status = saveSecret(name, value);
+    // 全量重推：既注入刚保存的值，也顺手修复 Core 重启/异常后可能缺少的其它密钥。
     await pushSecretsToCore();
     return status;
   });
@@ -1404,7 +1387,8 @@ app.whenReady().then(async () => {
     if (!isTrustedIpcSender(_event)) throw new Error('不可信的调用来源');
     if (typeof name !== 'string') throw new Error('参数错误');
     const status = saveSecret(name, '');
-    await pushSecretsToCore();
+    // 显式推空：Core 内存里的同名旧密钥也要立刻消失，不能等下次重启。
+    await pushSecretToCore(name, '');
     return status;
   });
 
@@ -1472,14 +1456,8 @@ app.whenReady().then(async () => {
   if (dataDir) {
     await applyPendingDataMove();
     // 首次启动/正常启动：失败时 startCore 会自动退避重试，用尽后弹窗让用户选择。
-    const started = await startCore();
-    if (started) {
-      try {
-        await pushSecretsToCore();
-      } catch (error) {
-        console.error('[studianda] failed to push secrets to core', error);
-      }
-    }
+    // 启动成功后 startCore 内部会把 secrets.json 里的全部密钥解密注入 Core。
+    await startCore();
   }
   installSessionGuards();
   createWindow();

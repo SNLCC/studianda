@@ -15,6 +15,12 @@ import { HintMark, SendingNotice } from './Hint.js';
 import { SettingsFeedbackProvider, useSettingsFeedback } from './SettingsFeedback.js';
 import type { RuntimeAdapter } from './runtime.js';
 import { mediaRecordingSupport } from './runtime.js';
+import {
+  persistHostSecretChanges,
+  syncPersistedHostSecrets,
+  withSecretPersistenceNotice,
+  type HostSecretChange
+} from './host-secrets.js';
 import { ModelServicesPanel } from './ModelServicesPanel.js';
 import { ModelUsagePanel } from './ModelUsagePanel.js';
 import { ShortcutSettingsPanel } from './ShortcutSettingsPanel.js';
@@ -485,13 +491,32 @@ function SettingsViewContent({
     ...overrides
   });
 
+  /**
+   * 保存 Zotero 配置：密钥先经桌面 IPC 加密落盘（无该能力时仍随配置请求交给 Core
+   * 内存态），再按 Core 返回的 has_* 校准文件，最后清空界面上的明文输入。
+   */
+  const saveZoteroConfig = async (overrides: Record<string, unknown> = {}) => {
+    const changes: HostSecretChange[] = [];
+    if (zoteroKey.trim()) changes.push({ name: 'zotero.api_key', value: zoteroKey.trim() });
+    if (webdavPassword.trim()) {
+      changes.push({ name: 'zotero.webdav_password', value: webdavPassword.trim() });
+    }
+    await persistHostSecretChanges(adapter, changes);
+    const saved = await api.updateZoteroConfig(zoteroPayload(overrides));
+    await syncPersistedHostSecrets(adapter, [
+      { name: 'zotero.api_key', present: saved.has_key },
+      { name: 'zotero.webdav_password', present: saved.has_password }
+    ]);
+    return saved;
+  };
+
   const saveZotero = useMutation({
-    mutationFn: () => api.updateZoteroConfig(zoteroPayload()),
+    mutationFn: () => saveZoteroConfig(),
     onSuccess: () => {
       setZoteroKey('');
       setWebdavPassword('');
       void queryClient.invalidateQueries({ queryKey: ['zotero-config'] });
-      notify('Zotero（第三方服务）设置已保存。');
+      notify(withSecretPersistenceNotice(adapter, 'Zotero（第三方服务）设置已保存。'));
     },
     onError: (error: Error) => notify(`Zotero（第三方服务）设置保存失败：${error.message}`)
   });
@@ -502,7 +527,8 @@ function SettingsViewContent({
    */
   const checkZotero = useMutation({
     mutationFn: async () => {
-      await api.updateZoteroConfig(zoteroPayload());
+      // 与「保存」走同一条密钥落盘路径，避免“检查连接”顺手把密钥只留在内存。
+      await saveZoteroConfig();
       let result = await api.testZotero();
       let corrected = '';
       if (!result.ok && zoteroMode !== 'local' && zoteroType === 'users') {
@@ -510,7 +536,7 @@ function SettingsViewContent({
           const diagnosis = await api.diagnoseZotero();
           const suggested = (diagnosis.suggested_library_id ?? '').trim();
           if (suggested && /^\d+$/.test(suggested) && suggested !== zoteroId) {
-            await api.updateZoteroConfig(zoteroPayload({ library_id: suggested }));
+            await saveZoteroConfig({ library_id: suggested });
             setZoteroId(suggested);
             result = await api.testZotero();
             corrected = suggested;
@@ -746,8 +772,15 @@ function SettingsViewContent({
   }, [searchQueryConfig.data]);
 
   const saveSearch = useMutation({
-    mutationFn: () =>
-      api.updateSearchConfig({
+    mutationFn: async () => {
+      // 搜索密钥先加密落盘（无宿主能力时随配置请求落到 Core 内存），
+      // Core 只在显式 clear_key 时才清它，这里不需要回删。
+      if (searchKey.trim()) {
+        await persistHostSecretChanges(adapter, [
+          { name: 'search.api_key', value: searchKey.trim() }
+        ]);
+      }
+      return api.updateSearchConfig({
         provider: searchProvider,
         base_url: searchBaseUrl,
         connection_id: searchConnectionId,
@@ -770,11 +803,12 @@ function SettingsViewContent({
         fetch_content: false,
         send_question: searchSendQuestion,
         ...(searchKey.trim() ? { api_key: searchKey.trim() } : {})
-      }),
+      });
+    },
     onSuccess: () => {
       setSearchKey('');
       void queryClient.invalidateQueries({ queryKey: ['search-config'] });
-      notify('联网搜索设置已保存。');
+      notify(withSecretPersistenceNotice(adapter, '联网搜索设置已保存。'));
     },
     onError: (error: Error) => notify(`联网搜索设置保存失败：${error.message}`, 'error')
   });
@@ -866,30 +900,47 @@ function SettingsViewContent({
   const saveSpeech = useMutation({
     // 识别页与播报页各有自己的保存按钮：只提交本页字段，另一页保持已保存值。
     // 这样一页配置不完整（例如自定义播报还没填地址）不会挡住另一页保存。
-    mutationFn: (scope: 'asr' | 'tts') =>
-      scope === 'asr'
-        ? api.updateSpeechConfig({
-            asr_mode: asrMode,
-            asr_url: asrUrl,
-            asr_model: asrModel,
-            asr_connection_id: asrConnectionId,
-            input_enabled: inputEnabled,
-            auto_send: autoSend,
-            trigger_mode: triggerMode,
-            direct_audio: directAudio,
-            correction,
-            context: correctionContext,
-            ...(asrKey.trim() ? { asr_key: asrKey.trim() } : {})
-          })
-        : api.updateSpeechConfig({
-            tts_mode: ttsMode,
-            tts_url: ttsUrl,
-            tts_model: ttsModel,
-            tts_connection_id: ttsConnectionId,
-            voice: ttsVoice,
-            auto_read: autoRead,
-            ...(ttsKey.trim() ? { tts_key: ttsKey.trim() } : {})
-          }),
+    mutationFn: async (scope: 'asr' | 'tts') => {
+      // 本页填了新密钥时先加密落盘（无宿主能力时仍随配置请求交给 Core 内存态），
+      // 成功后按 Core 的 has_* 校准文件：模型/平台变更可能让 Core 隐式清掉旧密钥。
+      const changes: HostSecretChange[] = [];
+      if (scope === 'asr' && asrKey.trim()) {
+        changes.push({ name: 'speech.asr_key', value: asrKey.trim() });
+      }
+      if (scope === 'tts' && ttsKey.trim()) {
+        changes.push({ name: 'speech.tts_key', value: ttsKey.trim() });
+      }
+      await persistHostSecretChanges(adapter, changes);
+      const saved =
+        scope === 'asr'
+          ? await api.updateSpeechConfig({
+              asr_mode: asrMode,
+              asr_url: asrUrl,
+              asr_model: asrModel,
+              asr_connection_id: asrConnectionId,
+              input_enabled: inputEnabled,
+              auto_send: autoSend,
+              trigger_mode: triggerMode,
+              direct_audio: directAudio,
+              correction,
+              context: correctionContext,
+              ...(asrKey.trim() ? { asr_key: asrKey.trim() } : {})
+            })
+          : await api.updateSpeechConfig({
+              tts_mode: ttsMode,
+              tts_url: ttsUrl,
+              tts_model: ttsModel,
+              tts_connection_id: ttsConnectionId,
+              voice: ttsVoice,
+              auto_read: autoRead,
+              ...(ttsKey.trim() ? { tts_key: ttsKey.trim() } : {})
+            });
+      await syncPersistedHostSecrets(adapter, [
+        { name: 'speech.asr_key', present: saved.has_asr_key },
+        { name: 'speech.tts_key', present: saved.has_tts_key }
+      ]);
+      return saved;
+    },
     onSuccess: (saved, scope) => {
       // 只清空刚保存的那一页的密钥输入，不把另一页正在填写的内容抹掉。
       if (scope === 'asr') setAsrKey('');
@@ -927,7 +978,10 @@ function SettingsViewContent({
               }`
             : saved.tts_url || '未填写地址';
       notify(
-        `语音设置已保存：识别 ${asrModeLabel} / ${asrTarget}；播报 ${ttsModeLabel} / ${ttsTarget}，音色 ${saved.voice || '默认音色'}。`
+        withSecretPersistenceNotice(
+          adapter,
+          `语音设置已保存：识别 ${asrModeLabel} / ${asrTarget}；播报 ${ttsModeLabel} / ${ttsTarget}，音色 ${saved.voice || '默认音色'}。`
+        )
       );
     },
     onError: (error: Error) => notify(`语音设置保存失败：${error.message}`)
@@ -1426,8 +1480,16 @@ function SettingsViewContent({
   }, [parsingQuery.data]);
 
   const saveParsing = useMutation({
-    mutationFn: () =>
-      api.updateParsingConfig({
+    mutationFn: async () => {
+      // 识别 Token 与其它密钥同一条链路：新值先加密落盘、勾选「清除」先删文件条目；
+      // 保存成功后按 Core 的 has_key 校准（改服务地址时 Core 会隐式清掉旧 Token）。
+      const changes: HostSecretChange[] = [];
+      if (parsingKey.trim()) {
+        changes.push({ name: 'parsing.service_key', value: parsingKey.trim() });
+      }
+      if (parsingClearKey) changes.push({ name: 'parsing.service_key', clear: true });
+      await persistHostSecretChanges(adapter, changes);
+      const saved = await api.updateParsingConfig({
         mode: parsingMode,
         connection_id: parsingConnectionId,
         service_url: parsingUrl.trim(),
@@ -1436,12 +1498,17 @@ function SettingsViewContent({
         auto_ocr: autoOcr,
         ...(parsingKey.trim() ? { service_key: parsingKey.trim() } : {}),
         ...(parsingClearKey ? { clear_service_key: true } : {})
-      }),
+      });
+      await syncPersistedHostSecrets(adapter, [
+        { name: 'parsing.service_key', present: saved.has_key }
+      ]);
+      return saved;
+    },
     onSuccess: () => {
       setParsingKey('');
       setParsingClearKey(false);
       void queryClient.invalidateQueries({ queryKey: ['parsing-config'] });
-      notify('识别设置已保存。');
+      notify(withSecretPersistenceNotice(adapter, '识别设置已保存。'));
     },
     onError: (error: Error) => notify(`识别设置保存失败：${error.message}`)
   });

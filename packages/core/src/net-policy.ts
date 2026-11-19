@@ -22,6 +22,19 @@ export function isLocalOrLanHost(host: string): boolean {
 }
 
 /**
+ * 拒绝 URL 内嵌的账号密码（`userinfo`，即 `https://user:pass@host/...`）。
+ *
+ * 这类地址一旦存进 `settings` 就会以明文写进资料目录并随备份外流；用户多半是想
+ * “顺手把账号密码带上”，应当改由单独的密钥/账号字段保存。各处错误文案统一为中文，
+ * 明确告诉用户不要把账号密码写在地址里。
+ */
+export function assertNoUrlCredentials(url: URL, label: string): void {
+  if (url.username || url.password) {
+    throw new Error(`${label}不能包含账号密码，请不要把账号密码写在地址里`);
+  }
+}
+
+/**
  * 断言地址满足 HTTPS 要求：`http:` 只允许本机/局域网主机，其余必须 `https:`。
  * 调用方负责先把字符串解析成 URL（或捕获这里的异常并换成自己的错误文案）。
  */

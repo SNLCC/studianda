@@ -1476,6 +1476,47 @@ describe('settings', () => {
     });
     expect(reloaded.json()).toEqual(expected);
   });
+
+  it('accepts whitelisted UI preference keys written by the settings page', async () => {
+    const saved = await server.inject({
+      method: 'PUT',
+      url: '/api/v1/settings',
+      headers: headers(),
+      payload: { 'ui.fontSize': '15', 'shortcut.nextPage': 'PageDown', 'note_image.max_mb': '8' }
+    });
+    expect(saved.statusCode).toBe(200);
+    const settings = saved.json() as Record<string, string>;
+    expect(settings['ui.fontSize']).toBe('15');
+    expect(settings['shortcut.nextPage']).toBe('PageDown');
+    expect(settings['note_image.max_mb']).toBe('8');
+  });
+
+  it('rejects keys outside the whitelist with a clear Chinese error and writes nothing', async () => {
+    const before = (
+      await server.inject({ method: 'GET', url: '/api/v1/settings', headers: headers() })
+    ).json() as Record<string, string>;
+    const rejected = await server.inject({
+      method: 'PUT',
+      url: '/api/v1/settings',
+      headers: headers(),
+      payload: {
+        // 凭据类键是这次白名单要挡住的主要目标。
+        'platform.evil.api_key': 'sk-should-not-be-written',
+        // 同一次请求里的合法键也不能被部分写入：整单拒绝。
+        'ui.answerFontSize': '18'
+      }
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(String((rejected.json() as { message?: string }).message)).toContain(
+      '不允许通过 /settings 写入设置项'
+    );
+    const after = (
+      await server.inject({ method: 'GET', url: '/api/v1/settings', headers: headers() })
+    ).json() as Record<string, string>;
+    expect(after['platform.evil.api_key']).toBeUndefined();
+    expect(after['ui.answerFontSize']).toBe(before['ui.answerFontSize']);
+    expect(JSON.stringify(after)).not.toContain('sk-should-not-be-written');
+  });
 });
 
 describe('large file confirmation', () => {
