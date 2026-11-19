@@ -15,28 +15,14 @@ import {
   type HealthResponse,
   type MaintenanceStatus,
   type OutlineResult,
-  type ReadingPlanRecord,
   type SearchRequest,
-  type TranslationConfigRecord,
-  type BookSummaryJob
+  type TranslationConfigRecord
 } from '@studianda/shared';
-import { answerQuestion, resolveReadingChatConfig } from './chat.js';
-import {
-  bookSummaryPlan,
-  outlineOverview,
-  readCachedBookSummary,
-  resetBookSummary,
-  runBookSummary
-} from './book-summary.js';
+import { answerQuestion } from './chat.js';
+import { BookSummaryRunner } from './book-summary-runner.js';
+import { createChatBudgetPolicy } from './chat-budget-policy.js';
 import { planQuestion } from './planning.js';
 import { planReading } from './reading-plan.js';
-import { resolveChapterReading } from './chapters.js';
-import {
-  budgetThresholds,
-  estimateBudgetForScope,
-  estimateTurnBudget
-} from './budget.js';
-import { readCapacity } from './capacity.js';
 import { listBackups } from './backup.js';
 import { registerBackupRoutes } from './server/backup-routes.js';
 import { registerCorpusSessionRoutes } from './server/corpus-session-routes.js';
@@ -45,6 +31,12 @@ import { registerNoteAssetRoutes } from './server/note-assets-routes.js';
 import { registerDocumentNotesRoute, registerNotesRoutes } from './server/notes-routes.js';
 import { registerDocumentImportRoutes } from './server/document-import-routes.js';
 import { registerDocumentManageRoutes } from './server/document-manage-routes.js';
+import { registerChatMessageRoutes } from './server/chat-message-routes.js';
+import { registerChatBookSummaryRoutes } from './server/chat-book-summary-routes.js';
+import { registerChatBudgetRoutes } from './server/chat-budget-routes.js';
+import { registerDocumentChatSessionRoutes } from './server/document-chat-session-routes.js';
+import { ChatTurnRegistry, chatTurnKeyOf } from './server/chat-turn-registry.js';
+import { DocumentRequestRegistry } from './server/document-request-registry.js';
 import { registerDocumentPageRoutes, registerDocumentExportRoutes } from './server/document-pages-routes.js';
 import { registerDocumentStructureRoutes } from './server/document-structure-routes.js';
 import { registerLibraryRoutes } from './server/library-routes.js';
@@ -90,18 +82,13 @@ import {
   translationProgress
 } from './translation-service.js';
 import { embeddingStatus, indexChunks } from './embeddings.js';
-import { readingBatchBudget } from './reading-chat.js';
 import { retrieve, warmRetrievalIndex } from './retrieval.js';
 import { annotateSearchHits } from './section-context.js';
 import { resolveScopeIds } from './scope.js';
 import { resolveProjectScope } from './project-scope.js';
 import type { SecretStore } from './secrets.js';
 import { AttachmentChangedError, type Store } from './store.js';
-import {
-  normalizeDocumentChatSessions,
-  readDocumentChatSessions,
-  writeDocumentChatSessions
-} from './document-chat-sessions.js';
+import { readDocumentChatSessions, writeDocumentChatSessions } from './document-chat-sessions.js';
 
 export interface ServerOptions {
   token: string;
@@ -180,60 +167,56 @@ function isAllowedOrigin(value: string): boolean {
 
 export function buildServer(options: ServerOptions): FastifyInstance {
   const app = Fastify({ logger: false, bodyLimit: 2 * 1024 * 1024 });
-  // 全书摘要任务（进程内、按文献隔离）：后台跑，前端轮询进度；摘要缓存本身落库，重启后仍可复用。
-  interface BookSummaryRunJob extends BookSummaryJob {
-    controller: AbortController;
-    content?: string;
-  }
-  const bookSummaryJobs = new Map<string, BookSummaryRunJob>();
-  const bookSummaryJobView = (documentId: string): BookSummaryJob => {
-    const job = bookSummaryJobs.get(documentId);
-    if (!job) {
-      return { document_id: documentId, status: 'idle', done: 0, total: 0, phase: '' };
-    }
-    return {
-      document_id: job.document_id,
-      status: job.status,
-      done: job.done,
-      total: job.total,
-      phase: job.phase,
-      ...(job.error ? { error: job.error } : {}),
-      ...(job.started_at ? { started_at: job.started_at } : {}),
-      ...(job.finished_at ? { finished_at: job.finished_at } : {})
-    };
-  };
   // 维护状态里的运行时长：进程启动即记录，只用于展示，不持久化。
   const startedAt = Date.now();
   // 已导入的本地 tokenizer：启动即生效；文件缺失/损坏时停在保守估算，不影响启动。
   loadActiveTokenizer(options.store);
   // 进行中的请求按文献登记：彻底删除文献之前先取消这些请求，避免后台任务继续
-  // 读写已删除的数据。
-  const documentRequests = new Map<string, Set<AbortController>>();
-  const trackDocumentRequests = (
-    documentIds: Array<string | undefined>,
-    controller: AbortController
-  ): (() => void) => {
-    const ids = [...new Set(documentIds.filter((id): id is string => Boolean(id)))];
-    for (const id of ids) {
-      const set = documentRequests.get(id) ?? new Set<AbortController>();
-      set.add(controller);
-      documentRequests.set(id, set);
+  // 读写已删除的数据。每实例一张表：chat / 翻译单页 / 全书摘要三处登记，
+  // purge 与清空数据两处消费，因此不能做成模块级单例（会跨 server 实例泄漏）。
+  const documentRequests = new DocumentRequestRegistry();
+  // 同一文献同一时刻只处理一轮问答：两个窗口同时提问会让 user/assistant 交错落库。
+  // 每实例一份（进程内集合足够，单机 Core）；与 documentRequests 分工不同，不要合并。
+  const chatTurns = new ChatTurnRegistry();
+  // 全书摘要长任务（进程内、按文献隔离）：后台跑，前端轮询进度；摘要缓存本身落库，重启后仍可复用。
+  // 状态机在 book-summary-runner.ts；start 把 controller 登记进 documentRequests，purge/清空数据也能中止。
+  const bookSummaries = new BookSummaryRunner({
+    store: options.store,
+    requests: documentRequests
+  });
+  // 预算策略（**无状态**）：`/chat/budget` 与 ask 的预算闸门共享同一套估算 helper。
+  // 两套错误语义必须分开保留：闸门估算失败吞错返回 null（不阻断提问）；`/chat/budget`
+  // 抛错由路由映射 400（项目不存在 404）。每次调用都重读设置，所以设置改动立即生效。
+  const budget = createChatBudgetPolicy({ store: options.store });
+  // 关停清理：全仓此前没有任何 `onClose` 接线（grep 确认），这是唯一一处，不新开第二个
+  // 清理 hook。顺序按"共享中止通道 → 准入锁 → 任务状态"分层：
+  // 1) 先 abort 在途请求：abort 只是发停止信号，让在途请求/后台 run 的 finally 收尾
+  //    （释放锁、落库）仍可正常执行；它是 chat / 翻译单页 / 全书摘要三处共用的唯一中止通道；
+  // 2) 再 close 轮次锁：拒绝后续 begin，是"不再接新轮次"的最后一道门；
+  // 3) 最后 close 全书摘要运行器：中止它自己的 controller 并清空 job 表，让恢复中的 run
+  //    因身份比较/closed 而放弃回写。三者都同步、不 await、各自容错：单个失败只记日志，
+  //    不能阻断 app.close()。store 由调用方（index.ts shutdown / 测试 teardown）在
+  //    app.close() 之后关闭，不并入这里。
+  app.addHook('onClose', async () => {
+    try {
+      documentRequests.abortAll();
+    } catch (error) {
+      console.error('[core] onClose abortAll failed:', error instanceof Error ? error.message : error);
     }
-    return () => {
-      for (const id of ids) {
-        const set = documentRequests.get(id);
-        if (!set) continue;
-        set.delete(controller);
-        if (set.size === 0) documentRequests.delete(id);
-      }
-    };
-  };
-  const abortDocumentRequests = (documentId: string): void => {
-    const set = documentRequests.get(documentId);
-    if (!set) return;
-    documentRequests.delete(documentId);
-    for (const controller of set) controller.abort();
-  };
+    try {
+      chatTurns.close();
+    } catch (error) {
+      console.error('[core] onClose chatTurns.close failed:', error instanceof Error ? error.message : error);
+    }
+    try {
+      bookSummaries.close();
+    } catch (error) {
+      console.error(
+        '[core] onClose bookSummaries.close failed:',
+        error instanceof Error ? error.message : error
+      );
+    }
+  });
   void app.register(multipart, {
     limits: {
       files: 1,
@@ -437,7 +420,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       }
       // 先取消所有进行中的文献请求/翻译/Markdown 任务：避免后台任务在删除后继续写回已删数据；
       // 同时清掉内存里的搜索计划（含用户问题派生的关键词）。
-      for (const documentId of [...documentRequests.keys()]) abortDocumentRequests(documentId);
+      documentRequests.abortAll();
       for (const document of [...options.store.listDocuments(), ...options.store.listDocuments(true)]) {
         stopDocumentTranslation(document.id);
       }
@@ -703,7 +686,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     };
     const controller = new AbortController();
     const abort = (): void => controller.abort();
-    const untrackDocument = trackDocumentRequests([id], controller);
+    const untrackDocument = documentRequests.track([id], controller);
     // 用响应流的 close / request 的 aborted 判断真正的取消：
     // request.raw 的 'close' 在正常收完请求体时也会触发，会让翻译一开始就被取消（499）。
     reply.raw.once('close', abort);
@@ -850,7 +833,10 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   registerDocumentExportRoutes(app, { store: options.store, secrets: options.secrets });
 
   // 文献元数据/排序/回收站/标签/重新连接见 server/document-manage-routes.ts。
-  registerDocumentManageRoutes(app, { store: options.store, abortDocumentRequests });
+  registerDocumentManageRoutes(app, {
+    store: options.store,
+    abortDocumentRequests: (id) => documentRequests.abort(id)
+  });
 
   app.get(`${API_PREFIX}/documents/:id/file`, async (request, reply) => {
     const { id } = request.params as { id: string };
@@ -993,109 +979,10 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     if (changed) writeDocumentChatSessions(options.store, documentId, updated);
   };
 
-  app.get(`${API_PREFIX}/documents/:id/chat-sessions`, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    if (!options.store.getDocument(id)) return notFound(reply, '文档不存在');
-    return { sessions: readDocumentChatSessions(options.store, id) };
-  });
-
-  app.post(`${API_PREFIX}/documents/:id/chat-sessions`, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    if (!options.store.getDocument(id)) return notFound(reply, '文档不存在');
-    const body = (request.body ?? {}) as { session?: unknown };
-    if (!body.session || typeof body.session !== 'object') {
-      return badRequest(reply, '需要 session 对象');
-    }
-    const normalized = normalizeDocumentChatSessions([body.session]);
-    const session = normalized[0];
-    if (!session) return badRequest(reply, 'session.id 不能为空');
-    try {
-      return options.store.createDocumentChatSession(id, session);
-    } catch (error) {
-      return badRequest(reply, error instanceof Error ? error.message : '创建会话失败');
-    }
-  });
-
-  // 细粒度更新：只改显式字段（标题/更新时间/摘要），不再要求客户端提交整张清单。
-  app.patch(
-    `${API_PREFIX}/documents/:id/chat-sessions/:sessionId`,
-    async (request, reply) => {
-      const { id, sessionId } = request.params as { id: string; sessionId: string };
-      if (!options.store.getDocument(id)) return notFound(reply, '文档不存在');
-      const body = (request.body ?? {}) as {
-        title?: unknown;
-        updated?: unknown;
-        contextSummary?: unknown;
-        summaryUpto?: unknown;
-      };
-      const patch: {
-        title?: string;
-        updated?: string;
-        contextSummary?: string | undefined;
-        summaryUpto?: number;
-      } = {};
-      if (body.title !== undefined) {
-        if (typeof body.title !== 'string') return badRequest(reply, 'title 必须是字符串');
-        patch.title = body.title;
-      }
-      if (body.updated !== undefined) {
-        if (typeof body.updated !== 'string') return badRequest(reply, 'updated 必须是字符串');
-        patch.updated = body.updated;
-      }
-      if (body.contextSummary !== undefined) {
-        if (typeof body.contextSummary !== 'string') {
-          return badRequest(reply, 'contextSummary 必须是字符串');
-        }
-        patch.contextSummary = body.contextSummary;
-        if (body.summaryUpto !== undefined) {
-          if (
-            typeof body.summaryUpto !== 'number' ||
-            !Number.isInteger(body.summaryUpto) ||
-            body.summaryUpto < 0
-          ) {
-            return badRequest(reply, 'summaryUpto 必须是非负整数');
-          }
-          patch.summaryUpto = body.summaryUpto;
-        }
-      }
-      try {
-        const updated = options.store.updateDocumentChatSession(id, sessionId, patch);
-        if (!updated) return notFound(reply, '会话不存在');
-        return updated;
-      } catch (error) {
-        return badRequest(reply, error instanceof Error ? error.message : '更新会话失败');
-      }
-    }
-  );
-
-  app.put(`${API_PREFIX}/documents/:id/chat-sessions`, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    if (!options.store.getDocument(id)) return notFound(reply, '文档不存在');
-    const body = (request.body ?? {}) as { sessions?: unknown };
-    if (!Array.isArray(body.sessions)) return badRequest(reply, '需要 sessions 数组');
-    const sessions = normalizeDocumentChatSessions(body.sessions);
-    try {
-      const saved = writeDocumentChatSessions(options.store, id, sessions);
-      return { sessions: saved };
-    } catch (error) {
-      return badRequest(reply, error instanceof Error ? error.message : '保存会话清单失败');
-    }
-  });
-
-  app.delete(
-    `${API_PREFIX}/documents/:id/chat-sessions/:sessionId`,
-    async (request, reply) => {
-      const { id, sessionId } = request.params as { id: string; sessionId: string };
-      if (!options.store.getDocument(id)) return notFound(reply, '文档不存在');
-      try {
-        const removed = options.store.deleteDocumentChatSession(id, sessionId);
-        const sessions = readDocumentChatSessions(options.store, id);
-        return { ok: true, removed, sessions };
-      } catch (error) {
-        return badRequest(reply, error instanceof Error ? error.message : '删除会话消息失败');
-      }
-    }
-  );
+  // 阅读伙伴会话清单的 5 条读写路由见 server/document-chat-session-routes.ts。
+  // 注册位置保持原内联路由的位置：在 retrieval/prewarm 与 messages 读路由之前、
+  // settings-update 之前（顺序经 route-order 比对逐条一致）。
+  registerDocumentChatSessionRoutes(app, { store: options.store });
 
   // 打开文献后在后台预热单篇检索索引，减少第一问的冷启动分词（纯本机内存缓存）。
   app.post(`${API_PREFIX}/documents/:id/retrieval/prewarm`, async (request, reply) => {
@@ -1112,51 +999,10 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     return { ok: true };
   });
 
-  app.get(`${API_PREFIX}/documents/:id/messages`, async (request) => {
-    const { id } = request.params as { id: string };
-    const query = (request.query ?? {}) as { sessionId?: unknown };
-    const sessionId = typeof query.sessionId === 'string' ? query.sessionId : '';
-    return options.store.listMessages(id, sessionId ? { sessionId } : {});
-  });
-
-  // 阅读伙伴消息分页：最新一页 + hasMore；beforeId 往前翻（旧接口仍返回全部，兼容其它调用方）。
-  app.get(`${API_PREFIX}/documents/:id/messages/page`, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    if (!options.store.getDocument(id)) return notFound(reply, '文档不存在');
-    const query = (request.query ?? {}) as {
-      sessionId?: unknown;
-      limit?: unknown;
-      before?: unknown;
-    };
-    const sessionId = typeof query.sessionId === 'string' ? query.sessionId : '';
-    const limit = Number(query.limit);
-    const beforeId = Number(query.before);
-    return options.store.listMessagesPage(id, {
-      ...(sessionId ? { sessionId } : {}),
-      ...(Number.isInteger(limit) && limit > 0 ? { limit } : {}),
-      ...(Number.isInteger(beforeId) && beforeId > 0 ? { beforeId } : {})
-    });
-  });
-
-  // 阅读伙伴会话内搜索：在完整会话消息里做词面匹配，返回命中片段（供界面定位/预览）。
-  app.get(`${API_PREFIX}/documents/:id/messages/search`, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    if (!options.store.getDocument(id)) return notFound(reply, '文档不存在');
-    const query = (request.query ?? {}) as {
-      sessionId?: unknown;
-      q?: unknown;
-      limit?: unknown;
-    };
-    const sessionId = typeof query.sessionId === 'string' ? query.sessionId : '';
-    const term = typeof query.q === 'string' ? query.q.trim().slice(0, 200) : '';
-    if (!term) return { matches: [], total: 0 };
-    const limit = Number(query.limit);
-    return options.store.searchDocumentSessionMessages(id, {
-      ...(sessionId ? { sessionId } : {}),
-      query: term,
-      ...(Number.isInteger(limit) && limit > 0 ? { limit } : {})
-    });
-  });
+  // 阅读伙伴消息的 3 条读路由见 server/chat-message-routes.ts（GET /messages 不检查文档存在，
+  // /messages/page 与 /messages/search 检查；写路由仍在本文件，待下一步迁出）。
+  // 注册位置保持原内联路由的位置：在 retrieval/prewarm 之后、POST /messages 之前。
+  registerChatMessageRoutes(app, { store: options.store });
 
   // 阅读页问答消息可能带整轮 ChatResponse（notice/audit/coverage 等）与来源正文，
   // 单独放宽这一条路由的 body 上限，避免大回答因默认 2MB 被 413 丢掉。
@@ -1198,104 +1044,12 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     return options.store.listReadingTasks(id);
   });
 
-  // 全书摘要：分层生成 + 缓存复用。plan 只读本地目录与缓存，不调用模型；
-  // overview 是纯本地目录/页区间概览（T1，不调用模型）；start 在后台跑。
-  app.get(`${API_PREFIX}/documents/:id/book-summary`, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    if (!options.store.getDocument(id)) return notFound(reply, '文档不存在');
-    const config = resolveReadingChatConfig(options.store, options.secrets);
-    const plan = await bookSummaryPlan(options.store, id, config?.model ?? '');
-    const result = readCachedBookSummary(options.store, id);
-    const document = options.store.getDocument(id)!;
-    return {
-      plan,
-      job: bookSummaryJobView(id),
-      result,
-      overview: outlineOverview(document.name, plan.blocks)
-    };
-  });
-
-  app.post(`${API_PREFIX}/documents/:id/book-summary/start`, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    if (!options.store.getDocument(id)) return notFound(reply, '文档不存在');
-    const running = bookSummaryJobs.get(id);
-    if (running?.status === 'running') return { job: bookSummaryJobView(id) };
-    const config = resolveReadingChatConfig(options.store, options.secrets);
-    if (!config) {
-      return badRequest(reply, '请先在「平台与模型」里配置会话模型，再生成全书摘要');
-    }
-    const plan = await bookSummaryPlan(options.store, id, config.model);
-    const controller = new AbortController();
-    const job: BookSummaryRunJob = {
-      document_id: id,
-      status: 'running',
-      done: 0,
-      total: plan.total,
-      phase: '准备中',
-      started_at: new Date().toISOString(),
-      controller
-    };
-    bookSummaryJobs.set(id, job);
-    const untrack = trackDocumentRequests([id], controller);
-    void (async () => {
-      try {
-        const result = await runBookSummary({
-          store: options.store,
-          config,
-          documentId: id,
-          signal: controller.signal,
-          onProgress: (done, total, phase) => {
-            const current = bookSummaryJobs.get(id);
-            if (!current || current.status !== 'running') return;
-            current.done = done;
-            current.total = total;
-            current.phase = phase;
-          }
-        });
-        const current = bookSummaryJobs.get(id);
-        if (current) {
-          current.status = 'done';
-          current.done = plan.total;
-          current.total = plan.total;
-          current.phase = '已完成';
-          current.content = result.content;
-          current.finished_at = new Date().toISOString();
-        }
-      } catch (error) {
-        const current = bookSummaryJobs.get(id);
-        if (current) {
-          const aborted =
-            controller.signal.aborted || (error as { name?: string } | null)?.name === 'AbortError';
-          current.status = aborted ? 'cancelled' : 'error';
-          current.phase = aborted ? '已取消' : '生成失败';
-          current.error = aborted ? undefined : error instanceof Error ? error.message : '生成失败';
-          current.finished_at = new Date().toISOString();
-        }
-      } finally {
-        untrack();
-      }
-    })();
-    return { job: bookSummaryJobView(id), plan };
-  });
-
-  app.post(`${API_PREFIX}/documents/:id/book-summary/cancel`, async (request) => {
-    const { id } = request.params as { id: string };
-    const job = bookSummaryJobs.get(id);
-    if (job?.status === 'running') {
-      job.controller.abort();
-      job.phase = '正在取消';
-    }
-    return bookSummaryJobView(id);
-  });
-
-  app.delete(`${API_PREFIX}/documents/:id/book-summary`, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    if (!options.store.getDocument(id)) return notFound(reply, '文档不存在');
-    const job = bookSummaryJobs.get(id);
-    if (job?.status === 'running') job.controller.abort();
-    bookSummaryJobs.delete(id);
-    resetBookSummary(options.store, id);
-    return { ok: true };
+  // 全书摘要的 4 条路由见 server/chat-book-summary-routes.ts（状态机在 book-summary-runner.ts）。
+  // 注册位置保持原内联路由的位置：在 reading-tasks 之后、messages 写路由之前。
+  registerChatBookSummaryRoutes(app, {
+    store: options.store,
+    secrets: options.secrets,
+    runner: bookSummaries
   });
 
   // 阅读页「重新生成」：删除最后一轮助手回答（DB 内），保留用户问题；返回最后用户问题正文。
@@ -1305,14 +1059,16 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     if (!options.store.getDocument(id)) return notFound(reply, '文档不存在');
     const body = (request.body ?? {}) as { sessionId?: unknown };
     const sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : '';
-    const lockKey = `doc:${id}`;
+    // 路由参数 id 类型上仍可为 null；getDocument 已保证非空，这里显式收窄，不做 `!` 强断言。
+    const lockKey = chatTurnKeyOf(id);
+    if (!lockKey) return notFound(reply, '文档不存在');
     if (!tryBeginChatWrite(lockKey, reply)) return;
     try {
       return { ok: true, ...options.store.rewindDocumentMessagesTail(id, sessionId) };
     } catch (error) {
       return badRequest(reply, error instanceof Error ? error.message : '重置上一轮回答失败');
     } finally {
-      endChatTurn(lockKey);
+      chatTurns.end(lockKey);
     }
   });
 
@@ -1329,7 +1085,9 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       return badRequest(reply, '消息 id 不合法');
     }
     const sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : '';
-    const lockKey = `doc:${id}`;
+    // 路由参数 id 类型上仍可为 null；getDocument 已保证非空，这里显式收窄，不做 `!` 强断言。
+    const lockKey = chatTurnKeyOf(id);
+    if (!lockKey) return notFound(reply, '文档不存在');
     if (!tryBeginChatWrite(lockKey, reply)) return;
     try {
       const result = options.store.editDocumentUserMessage(
@@ -1344,7 +1102,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     } catch (error) {
       return badRequest(reply, error instanceof Error ? error.message : '编辑消息失败');
     } finally {
-      endChatTurn(lockKey);
+      chatTurns.end(lockKey);
     }
   });
 
@@ -1358,7 +1116,9 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     }
     const body = (request.body ?? {}) as { sessionId?: unknown };
     const sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : '';
-    const lockKey = `doc:${id}`;
+    // 路由参数 id 类型上仍可为 null；getDocument 已保证非空，这里显式收窄，不做 `!` 强断言。
+    const lockKey = chatTurnKeyOf(id);
+    if (!lockKey) return notFound(reply, '文档不存在');
     if (!tryBeginChatWrite(lockKey, reply)) return;
     try {
       const result = options.store.deleteDocumentMessagesFrom(id, numericId, sessionId);
@@ -1368,7 +1128,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     } catch (error) {
       return badRequest(reply, error instanceof Error ? error.message : '删除消息失败');
     } finally {
-      endChatTurn(lockKey);
+      chatTurns.end(lockKey);
     }
   });
 
@@ -1818,221 +1578,17 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     }
   });
 
-  /**
-   * 闸门估算用的阅读范围：显式 `reading_scope` 优先（用户在输入栏选了就按它估），
-   * 否则用不调模型的规则规划（`planQuestion`）。
-   *
-   * 这里刻意**不**调模型路由：闸门必须在任何模型调用之前给出提示，不能为了估成本先花一次调用。
-   * 代价是 auto 时按规则/保守规划估，可能比模型最终判定的范围保守——所以下面用"单轮口径"截断，
-   * 让提示反映"这一轮到底会读多少"。
-   */
-  function planForBudget(
-    body: Pick<Partial<ChatRequest>, 'question' | 'selection' | 'page'>
-  ): ReadingPlanRecord {
-    // 范围只剩"自动 / 跨文献"：闸门只按问题与选文做**不调模型**的规则规划，
-    // 不再有"用户指定本页/整篇"的分支（局部范围由 `planFromRules` 从问题里解析）。
-    return planQuestion(
-      body.question ?? '',
-      typeof body.selection === 'string' ? body.selection : ''
-    );
-  }
-
-  function pageFrom(body: { page?: unknown }): number {
-    return typeof body.page === 'number' && Number.isFinite(body.page)
-      ? Math.max(1, Math.trunc(body.page))
-      : 1;
-  }
-
-  app.post(`${API_PREFIX}/chat/budget`, async (request, reply) => {
-    const body = (request.body ?? {}) as {
-      question?: unknown;
-      documentId?: unknown;
-      selection?: unknown;
-      page?: unknown;
-      budget?: unknown;
-      reading_scope?: unknown;
-      reading_chapter_index?: unknown;
-      scopeDocuments?: unknown;
-      scope_documents?: unknown;
-      projectId?: unknown;
-    };
-    if (typeof body.question !== 'string' || body.question.trim() === '') {
-      return badRequest(reply, '需要 question');
-    }
-    // 逻辑项目范围：projectId 代替显式文献列表（与精读入口同一口径）。
-    // 同时给 400、项目不存在 404、项目没有文献 400——空范围不能静默退化成"全库"。
-    const rawProjectId = body.projectId;
-    let scopeDocuments = scopeDocumentIds(body.scopeDocuments, body.scope_documents);
-    if (rawProjectId !== undefined) {
-      const projectId = typeof rawProjectId === 'string' ? rawProjectId.trim() : '';
-      if (!projectId) return badRequest(reply, 'projectId 必须是非空字符串');
-      if (scopeDocuments.length > 0) {
-        return badRequest(reply, 'projectId 与 scopeDocuments 不能同时给：请二选一');
-      }
-      const projectScope = resolveProjectScope(options.store, projectId);
-      if (projectScope === null) return notFound(reply, '项目不存在');
-      if (projectScope.length === 0) return badRequest(reply, '项目里还没有可用于估算的文献');
-      scopeDocuments = projectScope;
-    }
-    const settings = options.store.getSettings();
-    const thresholds = budgetThresholds(settings);
-    const page = pageFrom(body);
-    const plan = planForBudget({
-      question: body.question,
-      selection: typeof body.selection === 'string' ? body.selection : '',
-      page
-    });
-    // 项目范围本身就是跨文献：给了 projectId 就按跨文献口径估算，不依赖调用方是否带 reading_scope。
-    const corpus =
-      rawProjectId !== undefined
-        ? true
-        : isCorpusBudgetRequest(body.reading_scope, body.documentId, scopeDocuments);
-    try {
-      if (corpus) {
-        const scopeIds =
-          scopeDocuments.length > 0
-            ? scopeDocuments
-            : options.store.listDocuments(false).map((document) => document.id);
-        if (scopeIds.length === 0) return badRequest(reply, '没有可估算的文献');
-        // 跨文献请求按"整轮要读这些文献"估：用 discovery 口径（页数=scope 内页数之和）。
-        return estimateBudgetForScope(
-          options.store,
-          { ...plan, breadth: 'discovery' },
-          scopeIds,
-          { thresholds, scope: 'discovery' }
-        );
-      }
-      if (typeof body.documentId !== 'string') {
-        return badRequest(reply, '需要 question 与 documentId');
-      }
-      const document = options.store.getDocument(body.documentId);
-      // 估算口径与实际阅读一致：自动选章不裁剪（结构只标注），只有用户**显式指定**章节时才按章估。
-      const planForEstimate =
-        typeof body.reading_chapter_index === 'number' &&
-        Number.isInteger(body.reading_chapter_index) &&
-        body.reading_chapter_index >= 1
-          ? (
-              await resolveChapterReading(options.store, body.documentId, plan, {
-                scope: (body.reading_scope ?? 'auto') as 'auto' | 'local' | 'document' | 'corpus',
-                page,
-                question: body.question,
-                selection: typeof body.selection === 'string' ? body.selection : '',
-                chapterIndex: body.reading_chapter_index
-              })
-            ).plan
-          : plan;
-      return estimateTurnBudget(options.store, planForEstimate, body.documentId, {
-        page,
-        maxBatches: readCapacity(settings).maxReadBatches,
-        // 与实际阅读同一口径：批预算跟随模型容量（环境变量覆盖只用于测试/调试）。
-        batchBudget: readingBatchBudget(options.store),
-        thresholds,
-        scope: planForEstimate.breadth === 'local' ? 'local' : 'document',
-        documentCategory: document?.docCategory
-      });
-    } catch (error) {
-      return badRequest(reply, error instanceof Error ? error.message : '预算估算失败');
-    }
-  });
-
-  /** `/chat/budget` 与 budgetGate 共用的 scope 参数解析：同时接受 camel 与 snake 写法。 */
-  function scopeDocumentIds(camel: unknown, snake: unknown): string[] {
-    const source = Array.isArray(camel) ? camel : Array.isArray(snake) ? snake : [];
-    const seen = new Set<string>();
-    const ids: string[] = [];
-    for (const value of source) {
-      if (typeof value !== 'string') continue;
-      const id = value.trim();
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      ids.push(id);
-    }
-    return ids;
-  }
+  // 预算估算与闸门逻辑见 chat-budget-policy.ts（无状态，每次调用重读设置）；
+  // `POST /chat/budget` 路由见 server/chat-budget-routes.ts。
+  // 注册位置保持原 URL 的相对位置：/plan-reading 之后、/chat/ask* 之前。
+  registerChatBudgetRoutes(app, { budget });
 
   /**
-   * 这一轮要不要按"跨文献精读"估算：显式 corpus，或旧调用没有当前文献但给了跨书范围。
-   * 独立问答的「库内检索」（reading_scope='auto' + scope_documents）只做检索，不读全文，不估算。
-   * 现已无该入口，仅保留旧调用兼容。
+   * 预算闸门薄封装：实现见 chat-budget-policy.ts 的 `gate`（估算失败吞错返回 null）。
+   * 调用点顺序必须保持：scope（applyChatProjectScope）→ gate → needs_confirmation → beginTurn；
+   * 把闸门挪进轮次锁内会让"并发 + 超预算"的响应从 needs_confirmation 变成 409。
    */
-  function isCorpusBudgetRequest(
-    readingScope: unknown,
-    documentId: unknown,
-    scopeDocuments: readonly string[]
-  ): boolean {
-    if (readingScope === 'corpus') return true;
-    return (
-      readingScope === undefined &&
-      typeof documentId !== 'string' &&
-      scopeDocuments.length > 0
-    );
-  }
-
-  /**
-   * 预算闸门：超过确认阈值返回估算（调用方回 200 + needs_confirmation），不拒绝、不读任何页。
-   *
-   * 单篇用**单轮口径**（estimateTurnBudget）：按 `reading.max_read_batches` 截断后本轮实际会读的页算，
-   * 不再拿整本页数吓人；跨文献仍按 scope 总页数（discovery 口径）。
-   * 阈值来自设置 `reading.budget_pages` / `reading.budget_tokens`（默认 20 页 / 60000 token）。
-   */
-  const budgetGate = async (body: Partial<ChatRequest>) => {
-    // 语音直接提问没有文字问题（录音本身是输入），不做预算估算。
-    if (body.confirm_budget || !body.question || body.audio) return null;
-    const settings = options.store.getSettings();
-    const thresholds = budgetThresholds(settings);
-    const page = pageFrom(body);
-    const scopeDocuments = scopeDocumentIds(undefined, body.scope_documents);
-    if (isCorpusBudgetRequest(body.reading_scope, body.documentId, scopeDocuments)) {
-      const scopeIds =
-        scopeDocuments.length > 0
-          ? scopeDocuments
-          : options.store.listDocuments(false).map((document) => document.id);
-      if (scopeIds.length === 0) return null;
-      try {
-        return estimateBudgetForScope(
-          options.store,
-          { ...planForBudget(body), breadth: 'discovery' },
-          scopeIds,
-          { thresholds, scope: 'discovery' }
-        );
-      } catch {
-        // 估算失败不阻断请求：预算闸门只是提醒，不能因为估算错误让提问失败。
-        return null;
-      }
-    }
-    if (!body.documentId) return null;
-    const document = options.store.getDocument(body.documentId);
-    const plan = planForBudget(body);
-    try {
-      // 与真实阅读保持一致：自动选章不裁剪，只有显式指定章节时才按章估。
-      const explicitChapterIndex =
-        typeof body.reading_chapter_index === 'number' &&
-        Number.isInteger(body.reading_chapter_index) &&
-        body.reading_chapter_index >= 1;
-      const planForEstimate = explicitChapterIndex
-        ? (
-            await resolveChapterReading(options.store, body.documentId, plan, {
-              scope: (body.reading_scope ?? 'auto') as 'auto' | 'local' | 'document' | 'corpus',
-              page,
-              question: body.question,
-              selection: typeof body.selection === 'string' ? body.selection : '',
-              chapterIndex: body.reading_chapter_index
-            })
-          ).plan
-        : plan;
-      return estimateTurnBudget(options.store, planForEstimate, body.documentId, {
-        page,
-        maxBatches: readCapacity(settings).maxReadBatches,
-        // 与实际阅读同一口径：批预算跟随模型容量（环境变量覆盖只用于测试/调试）。
-        batchBudget: readingBatchBudget(options.store),
-        thresholds,
-        scope: planForEstimate.breadth === 'local' ? 'local' : 'document',
-        documentCategory: document?.docCategory
-      });
-    } catch {
-      return null;
-    }
-  };
+  const budgetGate = (body: Partial<ChatRequest>) => budget.gate(body);
 
   /**
    * 跨文献精读入口：把逻辑项目 `projectId` 解析成项目**当前**文献集合，
@@ -2082,24 +1638,11 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   };
 
   // 同一文献同一时刻只处理一轮问答：两个窗口同时提问会让 user/assistant 交错落库。
-  // 进程内集合足够（单机 Core）。
-  const activeChatTurns = new Set<string>();
-  const beginChatTurn = (key: string | null): boolean => {
-    if (!key) return true;
-    if (activeChatTurns.has(key)) return false;
-    activeChatTurns.add(key);
-    return true;
-  };
-  const endChatTurn = (key: string | null): void => {
-    if (key) activeChatTurns.delete(key);
-  };
-  /** 并发锁的键：按文献 id；其它请求不锁。 */
-  const chatTurnKeyOf = (_session: unknown, documentId?: string): string | null =>
-    documentId ? `doc:${documentId}` : null;
-
+  // 状态收在 chatTurns（server/chat-turn-registry.ts，每实例一份）。两个 ask 路由直接
+  // 调 chatTurns.begin（文案不同）；危险写操作走下面这个本地薄封装（占用 + 失败即回 409）。
   /** 危险写操作（重新生成/编辑/分支删除/导入/删会话）也要占用同一把锁。 */
   const tryBeginChatWrite = (key: string, reply: FastifyReply): boolean => {
-    if (!beginChatTurn(key)) {
+    if (!chatTurns.begin(key)) {
       reply.code(409).send({ error: API_ERROR_CODES.busy, message: '该会话/文献正在回答中，请等这一轮结束后再试' });
       return false;
     }
@@ -2135,8 +1678,8 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     }
     const questionForTurn = questionText;
     // 同一文献只允许一轮在飞：并发请求直接 409。
-    const turnKey = chatTurnKeyOf(null, body.documentId);
-    if (!beginChatTurn(turnKey)) {
+    const turnKey = chatTurnKeyOf(body.documentId);
+    if (!chatTurns.begin(turnKey)) {
       return reply.code(409).send({ error: API_ERROR_CODES.busy, message: '该文献正在回答中，请等这一轮结束后再试' });
     }
     try {
@@ -2153,7 +1696,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     const controller = new AbortController();
     const abort = (): void => controller.abort();
     // 按文献登记，彻底删除该文献时中止本请求（含跨文献范围里列出的文献）。
-    const untrackDocument = trackDocumentRequests(
+    const untrackDocument = documentRequests.track(
       [
         typeof body.documentId === 'string' ? body.documentId : undefined,
         ...(Array.isArray(body.scope_documents) ? (body.scope_documents as string[]) : [])
@@ -2222,7 +1765,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       raw.end();
     }
     } finally {
-      endChatTurn(turnKey);
+      chatTurns.end(turnKey);
     }
   });
 
@@ -2253,14 +1796,14 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       });
     }
     const questionForTurn = questionText;
-    const turnKey = chatTurnKeyOf(null, body.documentId);
-    if (!beginChatTurn(turnKey)) {
+    const turnKey = chatTurnKeyOf(body.documentId);
+    if (!chatTurns.begin(turnKey)) {
       return reply.code(409).send({ error: API_ERROR_CODES.busy, message: '该文献正在回答中，请等这一轮结束后再试' });
     }
     try {
       const controller = new AbortController();
       const abort = (): void => controller.abort();
-      const untrackDocument = trackDocumentRequests(
+      const untrackDocument = documentRequests.track(
         [
           typeof body.documentId === 'string' ? body.documentId : undefined,
           ...(Array.isArray(body.scope_documents) ? (body.scope_documents as string[]) : [])
@@ -2322,7 +1865,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       }
       return badRequest(reply, message);
     } finally {
-      endChatTurn(turnKey);
+      chatTurns.end(turnKey);
     }
   });
 
