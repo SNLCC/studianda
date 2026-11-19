@@ -57,3 +57,35 @@ export function writeDocumentChatSessions(
 ): DocumentChatSessionRecord[] {
   return store.saveDocumentChatSessions(documentId, sessions);
 }
+
+/**
+ * 会话摘要失效：编辑/删除了某条被摘要覆盖过的消息后，把该会话的 `contextSummary`
+ * 清空、`summaryUpto` 归 0（只清 `summaryUpto >= messageId` 的会话，不是无脑清）。
+ * 只在真的变了才写库（`changed`）；`sessionId` 为空时直接返回（旧调用不失效摘要）。
+ *
+ * **调用方必须已持有该文献的轮次锁**（`ChatTurnRegistry`，key=`doc:<id>`）：这里是无 CAS
+ * 的整行读改写，而摘要压缩在 `reading-session-context.ts` 走 CAS 写回；脱离锁调用会与
+ * 压缩交错（要么摘要复活覆盖已编辑内容，要么把压缩结果写回已变化的会话）。
+ */
+export function clearSummaryCoveringMessage(
+  store: Store,
+  documentId: string,
+  sessionId: string,
+  messageId: number
+): void {
+  if (!sessionId) return;
+  const sessions = readDocumentChatSessions(store, documentId);
+  let changed = false;
+  const updated = sessions.map((session) => {
+    if (
+      session.id === sessionId &&
+      typeof session.summaryUpto === 'number' &&
+      session.summaryUpto >= messageId
+    ) {
+      changed = true;
+      return { ...session, contextSummary: undefined, summaryUpto: 0 };
+    }
+    return session;
+  });
+  if (changed) writeDocumentChatSessions(store, documentId, updated);
+}

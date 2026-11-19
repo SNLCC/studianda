@@ -8,8 +8,6 @@ import {
   API_VERSION,
   APP_NAME,
   TOKEN_HEADER,
-  type ChatRequest,
-  type ChatResponse,
   type ClearUserDataResult,
   type FileHealthReport,
   type HealthResponse,
@@ -18,7 +16,6 @@ import {
   type SearchRequest,
   type TranslationConfigRecord
 } from '@studianda/shared';
-import { answerQuestion } from './chat.js';
 import { BookSummaryRunner } from './book-summary-runner.js';
 import { createChatBudgetPolicy } from './chat-budget-policy.js';
 import { planQuestion } from './planning.js';
@@ -31,11 +28,15 @@ import { registerNoteAssetRoutes } from './server/note-assets-routes.js';
 import { registerDocumentNotesRoute, registerNotesRoutes } from './server/notes-routes.js';
 import { registerDocumentImportRoutes } from './server/document-import-routes.js';
 import { registerDocumentManageRoutes } from './server/document-manage-routes.js';
-import { registerChatMessageRoutes } from './server/chat-message-routes.js';
+import {
+  registerChatMessageRoutes,
+  registerChatMessageWriteRoutes
+} from './server/chat-message-routes.js';
 import { registerChatBookSummaryRoutes } from './server/chat-book-summary-routes.js';
 import { registerChatBudgetRoutes } from './server/chat-budget-routes.js';
+import { registerChatRoutes } from './server/chat-routes.js';
 import { registerDocumentChatSessionRoutes } from './server/document-chat-session-routes.js';
-import { ChatTurnRegistry, chatTurnKeyOf } from './server/chat-turn-registry.js';
+import { ChatTurnRegistry } from './server/chat-turn-registry.js';
 import { DocumentRequestRegistry } from './server/document-request-registry.js';
 import { registerDocumentPageRoutes, registerDocumentExportRoutes } from './server/document-pages-routes.js';
 import { registerDocumentStructureRoutes } from './server/document-structure-routes.js';
@@ -88,7 +89,6 @@ import { resolveScopeIds } from './scope.js';
 import { resolveProjectScope } from './project-scope.js';
 import type { SecretStore } from './secrets.js';
 import { AttachmentChangedError, type Store } from './store.js';
-import { readDocumentChatSessions, writeDocumentChatSessions } from './document-chat-sessions.js';
 
 export interface ServerOptions {
   token: string;
@@ -956,35 +956,15 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   // 阅读伙伴会话清单存在 settings 表（JSON），不新增表；消息归属靠 metadata.sessionId。
   // 读写在 document-chat-sessions.ts（阅读摘要压缩也会更新其中的 contextSummary）。
 
-  // 编辑/分支删除到被摘要覆盖的消息时，旧摘要不再可信：清掉该会话摘要，下一轮重新压缩。
-  const clearSummaryCoveringMessage = (
-    documentId: string,
-    sessionId: string,
-    messageId: number
-  ): void => {
-    if (!sessionId) return;
-    const sessions = readDocumentChatSessions(options.store, documentId);
-    let changed = false;
-    const updated = sessions.map((session) => {
-      if (
-        session.id === sessionId &&
-        typeof session.summaryUpto === 'number' &&
-        session.summaryUpto >= messageId
-      ) {
-        changed = true;
-        return { ...session, contextSummary: undefined, summaryUpto: 0 };
-      }
-      return session;
-    });
-    if (changed) writeDocumentChatSessions(options.store, documentId, updated);
-  };
-
   // 阅读伙伴会话清单的 5 条读写路由见 server/document-chat-session-routes.ts。
   // 注册位置保持原内联路由的位置：在 retrieval/prewarm 与 messages 读路由之前、
   // settings-update 之前（顺序经 route-order 比对逐条一致）。
   registerDocumentChatSessionRoutes(app, { store: options.store });
 
   // 打开文献后在后台预热单篇检索索引，减少第一问的冷启动分词（纯本机内存缓存）。
+  // Step 8 归属决定：**留在 server.ts**，标注「待 retrieval 域整批迁出」。本批只迁 chat 集群，
+  // 不为 1 条路由新建 retrieval-routes.ts（避免改变契约门禁的扫描边界与注册顺序噪声）；
+  // 它属于设计文档附录 B 的 retrieval 批（与 GET/POST /search、embeddings 同批）。
   app.post(`${API_PREFIX}/documents/:id/retrieval/prewarm`, async (request, reply) => {
     const { id } = request.params as { id: string };
     if (!options.store.getDocument(id)) return notFound(reply, '文档不存在');
@@ -999,138 +979,35 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     return { ok: true };
   });
 
-  // 阅读伙伴消息的 3 条读路由见 server/chat-message-routes.ts（GET /messages 不检查文档存在，
-  // /messages/page 与 /messages/search 检查；写路由仍在本文件，待下一步迁出）。
-  // 注册位置保持原内联路由的位置：在 retrieval/prewarm 之后、POST /messages 之前。
-  registerChatMessageRoutes(app, { store: options.store });
+  // 阅读伙伴消息路由见 server/chat-message-routes.ts：本处注册读 3 条 + POST /messages
+  // （4 条；GET /messages 不检查文档存在，/messages/page 与 /messages/search 检查；
+  // POST /messages 不拿轮次锁、bodyLimit 8MB）。3 条危险写路由（rewind / PATCH / DELETE）
+  // 仍注册在 book-summary 之后（见下方 registerChatMessageWriteRoutes），保持拆分前相对顺序。
+  // 注册位置：读+POST 仍在 retrieval/prewarm 之后、reading-tasks 之前。
+  registerChatMessageRoutes(app, { store: options.store, chatTurns });
 
-  // 阅读页问答消息可能带整轮 ChatResponse（notice/audit/coverage 等）与来源正文，
-  // 单独放宽这一条路由的 body 上限，避免大回答因默认 2MB 被 413 丢掉。
-  app.post(
-    `${API_PREFIX}/documents/:id/messages`,
-    { bodyLimit: 8 * 1024 * 1024 },
-    async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const body = (request.body ?? {}) as {
-      role?: unknown;
-      content?: unknown;
-      sources?: unknown;
-      metadata?: unknown;
-    };
-    if (
-      (body.role !== 'user' && body.role !== 'assistant') ||
-      typeof body.content !== 'string'
-    ) {
-      return badRequest(reply, '需要 role 与 content');
-    }
-    try {
-      return options.store.addMessage({
-        documentId: id,
-        role: body.role,
-        content: body.content,
-        sources: Array.isArray(body.sources) ? (body.sources as never) : undefined,
-        metadata:
-          body.metadata && typeof body.metadata === 'object'
-            ? (body.metadata as Record<string, unknown>)
-            : undefined
-      });
-    } catch (error) {
-      return badRequest(reply, error instanceof Error ? error.message : '保存消息失败');
-    }
-  });
-
+  // Step 8 归属决定：**留在 server.ts**，标注「待 reading 域整批迁出」。
+  // 归属依据（设计文档 §4.3 / §7.5）：reading_tasks 表由阅读任务与翻译任务持久化共用，
+  // 本路由只读 store.listReadingTasks、无任何实例状态依赖，跟 reading 域整批走最省风险；
+  // 本批不为它单独新建 reading-routes.ts。
   app.get(`${API_PREFIX}/documents/:id/reading-tasks`, async (request) => {
     const { id } = request.params as { id: string };
     return options.store.listReadingTasks(id);
   });
 
   // 全书摘要的 4 条路由见 server/chat-book-summary-routes.ts（状态机在 book-summary-runner.ts）。
-  // 注册位置保持原内联路由的位置：在 reading-tasks 之后、messages 写路由之前。
+  // 注册位置保持原内联位置：reading-tasks 之后、messages 写路由之前。
   registerChatBookSummaryRoutes(app, {
     store: options.store,
     secrets: options.secrets,
     runner: bookSummaries
   });
 
-  // 阅读页「重新生成」：删除最后一轮助手回答（DB 内），保留用户问题；返回最后用户问题正文。
-  // body.sessionId 可选：多会话时只在该会话内删除，避免误删其它会话的消息。
-  app.post(`${API_PREFIX}/documents/:id/messages/rewind`, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    if (!options.store.getDocument(id)) return notFound(reply, '文档不存在');
-    const body = (request.body ?? {}) as { sessionId?: unknown };
-    const sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : '';
-    // 路由参数 id 类型上仍可为 null；getDocument 已保证非空，这里显式收窄，不做 `!` 强断言。
-    const lockKey = chatTurnKeyOf(id);
-    if (!lockKey) return notFound(reply, '文档不存在');
-    if (!tryBeginChatWrite(lockKey, reply)) return;
-    try {
-      return { ok: true, ...options.store.rewindDocumentMessagesTail(id, sessionId) };
-    } catch (error) {
-      return badRequest(reply, error instanceof Error ? error.message : '重置上一轮回答失败');
-    } finally {
-      chatTurns.end(lockKey);
-    }
-  });
-
-  // 阅读页「编辑并重问」：改 user 消息内容并删掉它之后的消息（DB），后续由客户端重问。
-  app.patch(`${API_PREFIX}/documents/:id/messages/:messageId`, async (request, reply) => {
-    const { id, messageId } = request.params as { id: string; messageId: string };
-    if (!options.store.getDocument(id)) return notFound(reply, '文档不存在');
-    const body = (request.body ?? {}) as { content?: unknown; sessionId?: unknown };
-    if (typeof body.content !== 'string' || !body.content.trim()) {
-      return badRequest(reply, '需要 content');
-    }
-    const numericId = Number(messageId);
-    if (!Number.isInteger(numericId) || numericId <= 0) {
-      return badRequest(reply, '消息 id 不合法');
-    }
-    const sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : '';
-    // 路由参数 id 类型上仍可为 null；getDocument 已保证非空，这里显式收窄，不做 `!` 强断言。
-    const lockKey = chatTurnKeyOf(id);
-    if (!lockKey) return notFound(reply, '文档不存在');
-    if (!tryBeginChatWrite(lockKey, reply)) return;
-    try {
-      const result = options.store.editDocumentUserMessage(
-        id,
-        numericId,
-        body.content.trim(),
-        sessionId
-      );
-      if (!result.ok) return notFound(reply, '用户消息不存在');
-      clearSummaryCoveringMessage(id, sessionId, numericId);
-      return result;
-    } catch (error) {
-      return badRequest(reply, error instanceof Error ? error.message : '编辑消息失败');
-    } finally {
-      chatTurns.end(lockKey);
-    }
-  });
-
-  // 阅读页「从这个分支删除」：删除该消息及其后所有消息（可按会话限定）。
-  app.delete(`${API_PREFIX}/documents/:id/messages/:messageId`, async (request, reply) => {
-    const { id, messageId } = request.params as { id: string; messageId: string };
-    if (!options.store.getDocument(id)) return notFound(reply, '文档不存在');
-    const numericId = Number(messageId);
-    if (!Number.isInteger(numericId) || numericId <= 0) {
-      return badRequest(reply, '消息 id 不合法');
-    }
-    const body = (request.body ?? {}) as { sessionId?: unknown };
-    const sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : '';
-    // 路由参数 id 类型上仍可为 null；getDocument 已保证非空，这里显式收窄，不做 `!` 强断言。
-    const lockKey = chatTurnKeyOf(id);
-    if (!lockKey) return notFound(reply, '文档不存在');
-    if (!tryBeginChatWrite(lockKey, reply)) return;
-    try {
-      const result = options.store.deleteDocumentMessagesFrom(id, numericId, sessionId);
-      if (!result.ok) return notFound(reply, '消息不存在');
-      clearSummaryCoveringMessage(id, sessionId, numericId);
-      return result;
-    } catch (error) {
-      return badRequest(reply, error instanceof Error ? error.message : '删除消息失败');
-    } finally {
-      chatTurns.end(lockKey);
-    }
-  });
+  // messages 的 3 条危险写路由（rewind / PATCH / DELETE）注册点必须留在原位置：
+  // book-summary 之后、notes 之前（读 3 条 + POST /messages 在 retrieval/prewarm 之后，
+  // 见上方）。拆成两个注册函数只为保持原相对顺序（check-route-order.mjs 逐条对齐），
+  // 路由集合与行为不变；危险写操作注入 chatTurns，与两个 ask 路由共用同一把文档锁。
+  registerChatMessageWriteRoutes(app, { store: options.store, chatTurns });
 
   // 单篇文献的笔记清单（其余笔记路由见 server/notes-routes.ts）。
   registerDocumentNotesRoute(app, { store: options.store });
@@ -1583,290 +1460,15 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   // 注册位置保持原 URL 的相对位置：/plan-reading 之后、/chat/ask* 之前。
   registerChatBudgetRoutes(app, { budget });
 
-  /**
-   * 预算闸门薄封装：实现见 chat-budget-policy.ts 的 `gate`（估算失败吞错返回 null）。
-   * 调用点顺序必须保持：scope（applyChatProjectScope）→ gate → needs_confirmation → beginTurn；
-   * 把闸门挪进轮次锁内会让"并发 + 超预算"的响应从 needs_confirmation 变成 409。
-   */
-  const budgetGate = (body: Partial<ChatRequest>) => budget.gate(body);
-
-  /**
-   * 跨文献精读入口：把逻辑项目 `projectId` 解析成项目**当前**文献集合，
-   * 用解析结果代替显式 `scope_documents` 后交给原有链路（预算闸门与阅读完全同语义）。
-   *
-   * 规则与建跨文献会话一致：与显式范围同时给是调用方歧义 → 400；
-   * 项目不存在 → 404；项目没有文献 → 400（空范围不能静默退化成"全库"）。
-   * 项目范围本身就是跨文献：解析成功后一并把 reading_scope 定为 'corpus'，不让调用方
-   * 因为漏传这个开关而把项目范围静默降级成"只读当前一篇"。
-   * 返回 null 表示错误响应已发送，调用方直接返回。
-   */
-  const applyChatProjectScope = (
-    body: Partial<ChatRequest>,
-    reply: FastifyReply
-  ): Partial<ChatRequest> | null => {
-    const rawProjectId = body.projectId;
-    if (rawProjectId === undefined) return body;
-    const projectId = typeof rawProjectId === 'string' ? rawProjectId.trim() : '';
-    if (!projectId) {
-      badRequest(reply, 'projectId 必须是非空字符串');
-      return null;
-    }
-    const explicitDocuments = Array.isArray(body.scope_documents)
-      ? body.scope_documents.filter((id) => typeof id === 'string' && id.trim() !== '')
-      : [];
-    if (explicitDocuments.length > 0) {
-      badRequest(reply, 'projectId 与 scope_documents 不能同时给：请二选一');
-      return null;
-    }
-    const explicitTags = Array.isArray(body.scope_tags)
-      ? body.scope_tags.filter((tag) => typeof tag === 'string' && tag.trim() !== '')
-      : [];
-    if (explicitTags.length > 0) {
-      badRequest(reply, 'projectId 与 scope_tags 不能同时给：请二选一');
-      return null;
-    }
-    const scopeDocumentIds = resolveProjectScope(options.store, projectId);
-    if (scopeDocumentIds === null) {
-      notFound(reply, '项目不存在');
-      return null;
-    }
-    if (scopeDocumentIds.length === 0) {
-      badRequest(reply, '项目里还没有可用于精读的文献');
-      return null;
-    }
-    return { ...body, reading_scope: 'corpus', scope_documents: scopeDocumentIds };
-  };
-
-  // 同一文献同一时刻只处理一轮问答：两个窗口同时提问会让 user/assistant 交错落库。
-  // 状态收在 chatTurns（server/chat-turn-registry.ts，每实例一份）。两个 ask 路由直接
-  // 调 chatTurns.begin（文案不同）；危险写操作走下面这个本地薄封装（占用 + 失败即回 409）。
-  /** 危险写操作（重新生成/编辑/分支删除/导入/删会话）也要占用同一把锁。 */
-  const tryBeginChatWrite = (key: string, reply: FastifyReply): boolean => {
-    if (!chatTurns.begin(key)) {
-      reply.code(409).send({ error: API_ERROR_CODES.busy, message: '该会话/文献正在回答中，请等这一轮结束后再试' });
-      return false;
-    }
-    return true;
-  };
-
-  app.post(`${API_PREFIX}/chat/ask/stream`, async (request, reply) => {
-    let body = request.body as Partial<ChatRequest> | null;
-    // 语音直接提问（全模态）可以没有文字问题：录音本身就是问题。
-    const hasAudio = Boolean(body?.audio && typeof body.audio === 'object');
-    const questionText = typeof body?.question === 'string' ? body.question : '';
-    if (!body || (!hasAudio && questionText.trim() === '')) {
-      return badRequest(reply, '需要 question');
-    }
-    if (typeof body.documentId !== 'string' || !body.documentId.trim()) {
-      return badRequest(reply, '独立会话已移除，请先从文献库打开一篇文献再提问');
-    }
-    // 跨文献精读入口：projectId 代替显式 scope_documents（预算闸门与阅读都按解析后的范围）。
-    const scopedBody = applyChatProjectScope(body, reply);
-    if (!scopedBody) return reply;
-    body = scopedBody;
-    const gate = await budgetGate(body);
-    if (gate?.exceeded) {
-      // 预算确认不是错误：返回 200 + needs_confirmation，前端弹确认框后带 confirm_budget 重发。
-      // stream 端点在这里返回**纯 JSON**（不 hijack、不发 SSE），api-client 会按 content-type 识别。
-      return reply.send({
-        needs_confirmation: true,
-        budget: gate,
-        answer: '',
-        sources: [],
-        metadata: {}
-      });
-    }
-    const questionForTurn = questionText;
-    // 同一文献只允许一轮在飞：并发请求直接 409。
-    const turnKey = chatTurnKeyOf(body.documentId);
-    if (!chatTurns.begin(turnKey)) {
-      return reply.code(409).send({ error: API_ERROR_CODES.busy, message: '该文献正在回答中，请等这一轮结束后再试' });
-    }
-    try {
-    reply.hijack();
-    const raw = reply.raw;
-    raw.writeHead(200, {
-      'content-type': 'text/event-stream; charset=utf-8',
-      'cache-control': 'no-cache',
-      connection: 'keep-alive'
-    });
-    const send = (event: string, data: unknown): void => {
-      raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-    };
-    const controller = new AbortController();
-    const abort = (): void => controller.abort();
-    // 按文献登记，彻底删除该文献时中止本请求（含跨文献范围里列出的文献）。
-    const untrackDocument = documentRequests.track(
-      [
-        typeof body.documentId === 'string' ? body.documentId : undefined,
-        ...(Array.isArray(body.scope_documents) ? (body.scope_documents as string[]) : [])
-      ],
-      controller
-    );
-    // 用响应流的 close/aborted 判断真正的取消。
-    raw.once('close', abort);
-    request.raw.once('aborted', abort);
-    try {
-      const result = await answerQuestion(
-        options.store,
-        options.secrets,
-        {
-          question: questionForTurn,
-          documentId: typeof body.documentId === 'string' ? body.documentId : undefined,
-          page: typeof body.page === 'number' ? body.page : undefined,
-          selection: typeof body.selection === 'string' ? body.selection : undefined,
-          taskId: typeof body.taskId === 'string' ? body.taskId : undefined,
-          confirmSearch: body.confirmSearch === true,
-          confirm_gap_search: body.confirm_gap_search === true,
-          search_token:
-            typeof body.search_token === 'string' ? body.search_token : undefined,
-          history: Array.isArray(body.history) ? (body.history as never) : undefined,
-          reading_scope: body.reading_scope,
-          reading_force: body.reading_force,
-          source_policy: body.source_policy,
-          include_memory: body.include_memory === true,
-          scope_documents: Array.isArray(body.scope_documents) ? body.scope_documents as string[] : undefined,
-          scope_tags: Array.isArray(body.scope_tags) ? (body.scope_tags as string[]) : undefined,
-          voice_original:
-            typeof body.voice_original === 'string' ? body.voice_original : undefined,
-          web_query: typeof body.web_query === 'string' ? body.web_query : undefined,
-          audio:
-            body.audio && typeof body.audio === 'object'
-              ? (body.audio as never)
-              : undefined,
-        },
-        controller.signal,
-        (done, total) => send('progress', { done, total }),
-        // 回答已改为整段返回：草稿通道停用，两个形参位保留占位。
-        undefined,
-        undefined,
-        (text) => send('stage', { text }),
-        (claims) => send('audit', { claims })
-      );
-      const response: ChatResponse = result;
-      // 语音轮：模型返回逐字转写后补写用户消息正文（占位 → 「（语音）转写」）。
-      send('result', response);
-    } catch (error) {
-      const message =
-        error instanceof Error && error.name === 'AbortError'
-          ? '已取消阅读'
-          : error instanceof Error
-            ? error.message
-            : '回答失败';
-      if (error instanceof Error && error.name === 'AbortError') {
-        send('error', { message, status: 499 });
-      } else {
-        send('error', { message });
-      }
-    } finally {
-      untrackDocument();
-      request.raw.off('aborted', abort);
-      raw.off('close', abort);
-      raw.end();
-    }
-    } finally {
-      chatTurns.end(turnKey);
-    }
-  });
-
-  app.post(`${API_PREFIX}/chat/ask`, async (request, reply) => {
-    let body = request.body as Partial<ChatRequest> | null;
-    // 与 stream 端点同口径：录音可以直接作为问题。
-    const hasAudio = Boolean(body?.audio && typeof body.audio === 'object');
-    const questionText = typeof body?.question === 'string' ? body.question : '';
-    if (!body || (!hasAudio && questionText.trim() === '')) {
-      return badRequest(reply, '需要 question');
-    }
-    if (typeof body.documentId !== 'string' || !body.documentId.trim()) {
-      return badRequest(reply, '独立会话已移除，请先从文献库打开一篇文献再提问');
-    }
-    // 跨文献精读入口：projectId 代替显式 scope_documents（预算闸门与阅读都按解析后的范围）。
-    const scopedBody = applyChatProjectScope(body, reply);
-    if (!scopedBody) return reply;
-    body = scopedBody;
-    const gate = await budgetGate(body);
-    if (gate?.exceeded) {
-      // 与 stream 端点同口径：200 + needs_confirmation，不是错误。
-      return reply.send({
-        needs_confirmation: true,
-        budget: gate,
-        answer: '',
-        sources: [],
-        metadata: {}
-      });
-    }
-    const questionForTurn = questionText;
-    const turnKey = chatTurnKeyOf(body.documentId);
-    if (!chatTurns.begin(turnKey)) {
-      return reply.code(409).send({ error: API_ERROR_CODES.busy, message: '该文献正在回答中，请等这一轮结束后再试' });
-    }
-    try {
-      const controller = new AbortController();
-      const abort = (): void => controller.abort();
-      const untrackDocument = documentRequests.track(
-        [
-          typeof body.documentId === 'string' ? body.documentId : undefined,
-          ...(Array.isArray(body.scope_documents) ? (body.scope_documents as string[]) : [])
-        ],
-        controller
-      );
-      // 用响应流的 close 判断真正的取消：请求体读完时 request.raw 也会触发 close，
-      // 若监听 request.raw 会把正常的非流式请求误判为取消（真实模型 E2E 发现）。
-      reply.raw.once('close', abort);
-      request.raw.once('aborted', abort);
-      try {
-        const result = await answerQuestion(
-          options.store,
-          options.secrets,
-          {
-            question: questionForTurn,
-            documentId: typeof body.documentId === 'string' ? body.documentId : undefined,
-            page: typeof body.page === 'number' ? body.page : undefined,
-            selection: typeof body.selection === 'string' ? body.selection : undefined,
-            taskId: typeof body.taskId === 'string' ? body.taskId : undefined,
-            confirmSearch: body.confirmSearch === true,
-            confirm_gap_search: body.confirm_gap_search === true,
-            search_token:
-              typeof body.search_token === 'string' ? body.search_token : undefined,
-            history: Array.isArray(body.history) ? (body.history as never) : undefined,
-            reading_scope: body.reading_scope,
-            reading_force: body.reading_force,
-            source_policy: body.source_policy,
-            include_memory: body.include_memory === true,
-            scope_documents: Array.isArray(body.scope_documents) ? body.scope_documents as string[] : undefined,
-          scope_tags: Array.isArray(body.scope_tags) ? (body.scope_tags as string[]) : undefined,
-          voice_original:
-            typeof body.voice_original === 'string' ? body.voice_original : undefined,
-          web_query: typeof body.web_query === 'string' ? body.web_query : undefined,
-            audio:
-              body.audio && typeof body.audio === 'object'
-                ? (body.audio as never)
-                : undefined,
-            },
-          controller.signal
-        );
-        const response: ChatResponse = result;
-        // 语音轮：模型返回逐字转写后补写用户消息正文（占位 → 「（语音）转写」）。
-        return response;
-      } finally {
-        untrackDocument();
-        reply.raw.off('close', abort);
-        request.raw.off('aborted', abort);
-      }
-    } catch (error) {
-      const message =
-        error instanceof Error && error.name === 'AbortError'
-          ? '请求已取消'
-          : error instanceof Error
-            ? error.message
-            : '回答失败';
-      if (error instanceof Error && error.name === 'AbortError') {
-        return reply.code(499).send({ error: API_ERROR_CODES.cancelled, message: '请求已取消' });
-      }
-      return badRequest(reply, message);
-    } finally {
-      chatTurns.end(turnKey);
-    }
+  // 问答路由（2 条）见 server/chat-routes.ts：`POST /chat/ask/stream`（SSE）与
+  // `POST /chat/ask`（纯 JSON），依赖注入 chatTurns / documentRequests / budget。
+  // 注册位置保持原内联路由的相对位置：/chat/budget 之后、settings-update 之前。
+  registerChatRoutes(app, {
+    store: options.store,
+    secrets: options.secrets,
+    chatTurns,
+    documentRequests,
+    budget
   });
 
   // 设置写入路由见 server/settings-routes.ts（注册位置保持在 chat 之后不变）。
