@@ -31,8 +31,10 @@ import { badRequest, notFound } from './http.js';
  * 2. 409 文案是「该文献正在回答中，请等这一轮结束后再试」（与 messages 写路由的
  *    「该会话/文献…」文案**不同**，不要统一）；
  * 3. `confirmSearch`/`confirm_gap_search`/`search_token`/`history`/`reading_scope`/
- *    `scope_tags`/`voice_original`/`web_query`/`audio` 等字段照旧透传；
- *    `chat_session_id` 当前**没有**透传，保持现状（设计文档 §7.4）；
+ *    `reading_chapter_index`/`chat_session_id`/`scope_tags`/`voice_original`/`web_query`/
+ *    `audio` 等字段照旧透传；
+ *    `chat_session_id` 用于服务端读会话完整历史/摘要压缩/审计继承（审计 §2.5 已补通）；
+ *    `reading_chapter_index` 让预算闸门与真实阅读按同一章（闸门读 `body`，见下）；
  * 4. stream：hijack + `text/event-stream`，5 种事件 `progress/stage/audit/result/error`，
  *    `close`/`aborted` 监听在 finally 注销；断连 → AbortError 时发 `error{status:499}` 并
  *    `raw.end()`；非流式回 499 + `cancelled`。预算确认分支回 200 纯 JSON、**不 hijack**。
@@ -199,6 +201,18 @@ export function registerChatRoutes(app: FastifyInstance, options: ChatRouteOptio
           include_memory: body.include_memory === true,
           scope_documents: Array.isArray(body.scope_documents) ? body.scope_documents as string[] : undefined,
           scope_tags: Array.isArray(body.scope_tags) ? (body.scope_tags as string[]) : undefined,
+          // 阅读伙伴会话 id：服务端据此读该会话完整消息（超预算压缩摘要、续读审计继承）。
+          // 不传时 `answerQuestion` 的旧路径完全不变（只使用客户端 history）。
+          chat_session_id:
+            typeof body.chat_session_id === 'string' ? body.chat_session_id : undefined,
+          // 用户显式选的章：预算闸门直接读 `body`（见 budgetGate），这里同步给实际阅读，
+          // 保证"按第几章估算"与"按第几章读"是同一章。
+          reading_chapter_index:
+            typeof body.reading_chapter_index === 'number' &&
+            Number.isInteger(body.reading_chapter_index) &&
+            body.reading_chapter_index >= 1
+              ? body.reading_chapter_index
+              : undefined,
           voice_original:
             typeof body.voice_original === 'string' ? body.voice_original : undefined,
           web_query: typeof body.web_query === 'string' ? body.web_query : undefined,
@@ -307,6 +321,16 @@ export function registerChatRoutes(app: FastifyInstance, options: ChatRouteOptio
             include_memory: body.include_memory === true,
             scope_documents: Array.isArray(body.scope_documents) ? body.scope_documents as string[] : undefined,
           scope_tags: Array.isArray(body.scope_tags) ? (body.scope_tags as string[]) : undefined,
+          // 阅读伙伴会话 id：与 stream 同口径，服务端读该会话完整消息并继承摘要。
+          chat_session_id:
+            typeof body.chat_session_id === 'string' ? body.chat_session_id : undefined,
+          // 用户显式选的章：预算闸门读 `body`，这里同步给实际阅读，两者按同一章。
+          reading_chapter_index:
+            typeof body.reading_chapter_index === 'number' &&
+            Number.isInteger(body.reading_chapter_index) &&
+            body.reading_chapter_index >= 1
+              ? body.reading_chapter_index
+              : undefined,
           voice_original:
             typeof body.voice_original === 'string' ? body.voice_original : undefined,
           web_query: typeof body.web_query === 'string' ? body.web_query : undefined,

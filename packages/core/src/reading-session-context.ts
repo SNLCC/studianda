@@ -132,6 +132,25 @@ function toPublicPairs(pairs: readonly PendingPair[]): ReadingHistoryPair[] {
   }));
 }
 
+/**
+ * 去重护栏（只处理"本轮这一条"）：见 `currentQuestion` 的注释。
+ *
+ * 判据全部满足才丢：是最后一条、还没有回答（提问已落库、回答还没写）、正文等于本轮问题。
+ * 有任何一条不满足就原样返回——历史里出现重复文本本身不该被改写。
+ */
+function dropPendingCurrentTurn(
+  pairs: readonly PendingPair[],
+  currentQuestion: string | undefined
+): PendingPair[] {
+  if (pairs.length === 0) return [...pairs];
+  const question = currentQuestion?.trim() ?? '';
+  if (!question) return [...pairs];
+  const last = pairs[pairs.length - 1]!;
+  if (last.failedOnly || last.answer.trim()) return [...pairs];
+  if (last.question.trim() !== question) return [...pairs];
+  return pairs.slice(0, -1);
+}
+
 function tailWithinBudget(pairs: readonly PendingPair[], maxPairs: number, maxChars: number): PendingPair[] {
   const kept: PendingPair[] = [];
   let chars = 0;
@@ -170,6 +189,15 @@ export interface PrepareReadingSessionContextOptions {
   sessionId?: string;
   /** 客户端仍会带最近 N 轮（兼容旧客户端/无会话时）。 */
   fallbackHistory?: unknown;
+  /**
+   * 本轮问题（与 HTTP 请求的 `question` 同一个串）。
+   *
+   * 客户端会先把本轮用户消息落库、紧接着发 ask，服务端读完整会话时最后一条就是
+   * 本轮问题本身（还没有回答）。这里只丢弃「最后一条 + 没有回答 + 内容等于本轮问题」的
+   * 那一轮，避免同一个问题在「材料」和「历史」里各出现一次；**不**按文本去重其它历史
+   * （历史里本来就可能出现重复提问，那不是重复上下文）。
+   */
+  currentQuestion?: string;
   signal?: AbortSignal;
 }
 
@@ -197,7 +225,9 @@ export async function prepareReadingSessionContext(
     };
   }
   const rows = options.store.listMessages(options.documentId, { sessionId });
-  const pairs = pairsFromMessages(rows);
+  // 客户端可能已先把本轮用户消息落库：只把「最后一条未回答、且等于本轮问题」的轮次摘掉，
+  // 避免当前问题在材料与历史里各出现一次（见 currentQuestion 注释）。
+  const pairs = dropPendingCurrentTurn(pairsFromMessages(rows), options.currentQuestion);
   if (pairs.length === 0) {
     return { history: fallback, summary: session.contextSummary ?? '', compactedTurns: 0 };
   }

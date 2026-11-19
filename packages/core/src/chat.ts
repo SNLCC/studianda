@@ -901,6 +901,8 @@ async function answerQuestionInner(
         documentId: input.documentId,
         sessionId: input.chat_session_id,
         fallbackHistory: input.history,
+        // 本轮问题：客户端可能已先把本轮用户消息落库，读完整会话时它会与 question 重复一次。
+        currentQuestion: question,
         signal
       });
       readingHistory = prepared.history;
