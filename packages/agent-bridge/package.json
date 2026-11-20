@@ -1,0 +1,28 @@
+{
+  "name": "@studianda/agent-bridge",
+  "version": "0.1.3",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "studianda-agent-bridge": "dist/index.js"
+  },
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "node ../../scripts/build-lib.mjs .",
+    "test": "node ../../scripts/build-lib.mjs . && vitest run",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@studianda/agent-core": "workspace:*",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.0"
+  }
+}

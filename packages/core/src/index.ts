@@ -102,7 +102,7 @@ const dataDir = cli.dataDir ?? process.env.STUDIANDA_DATA_DIR ?? DEFAULT_DATA_DI
 if (cli.check) {
   try {
     mkdirSync(dataDir, { recursive: true });
-    const store = new Store(dataDir);
+    const store = new Store(dataDir, { exclusiveLock: true });
     try {
       const result = store.quickCheck();
       console.log(
@@ -146,7 +146,12 @@ try {
   console.error('STUDIANDA_RESTORE_FAILED', error instanceof Error ? error.message : error);
   process.exit(1);
 }
-const store = new Store(dataDir);
+const store = new Store(dataDir, { exclusiveLock: true });
+const startupIntegrity = store.integrityOnStartup();
+if (startupIntegrity && startupIntegrity !== 'ok') {
+  console.error('STUDIANDA_DB_INTEGRITY', startupIntegrity);
+}
+store.startIntegrityWatch();
 // 读回上次 Markdown 导入/扫描任务快照：running → interrupted（不续跑）。
 hydrateMarkdownJobs(store);
 const secrets = new SecretStore();

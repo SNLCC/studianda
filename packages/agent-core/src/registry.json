@@ -1,0 +1,1012 @@
+{
+  "version": 1,
+  "generatedFrom": "docs/api/route-manifest.json",
+  "ops": [
+    {
+      "id": "annotations.import",
+      "routes": [
+        "POST /api/v1/documents/:p/zotero-annotations/import"
+      ],
+      "tool": "annotations",
+      "action": "import",
+      "effect": "write",
+      "risk": "medium",
+      "phase": "P2",
+      "caps": [
+        "write"
+      ]
+    },
+    {
+      "id": "annotations.listForDocument",
+      "routes": [
+        "GET /api/v1/documents/:p/annotations"
+      ],
+      "tool": "annotations",
+      "action": "list_for_document",
+      "effect": "read",
+      "risk": "low",
+      "phase": "P0",
+      "caps": [
+        "read"
+      ]
+    },
+    {
+      "id": "annotations.write",
+      "routes": [
+        "DELETE /api/v1/annotations/:p",
+        "PATCH /api/v1/annotations/:p",
+        "POST /api/v1/annotations",
+        "POST /api/v1/annotations/:p/restore"
+      ],
+      "tool": "annotations",
+      "action": "write",
+      "effect": "write",
+      "risk": "low",
+      "phase": "P1",
+      "caps": [
+        "write"
+      ]
+    },
+    {
+      "id": "compute.ask",
+      "routes": [
+        "POST /api/v1/chat/ask",
+        "POST /api/v1/chat/ask/stream",
+        "POST /api/v1/chat/budget"
+      ],
+      "tool": "compute",
+      "action": "ask",
+      "effect": "costly",
+      "risk": "medium",
+      "phase": "P1",
+      "caps": [
+        "costly"
+      ]
+    },
+    {
+      "id": "compute.corpusAsk",
+      "routes": [
+        "POST /api/v1/corpus-sessions/:p/ask"
+      ],
+      "tool": "compute",
+      "action": "corpus_ask",
+      "effect": "costly",
+      "risk": "medium",
+      "phase": "P2",
+      "caps": [
+        "costly"
+      ]
+    },
+    {
+      "id": "compute.embed",
+      "routes": [
+        "POST /api/v1/embeddings/index"
+      ],
+      "tool": "compute",
+      "action": "embed",
+      "effect": "costly",
+      "risk": "medium",
+      "phase": "P3",
+      "caps": [
+        "costly"
+      ]
+    },
+    {
+      "id": "compute.modelProbe",
+      "routes": [
+        "POST /api/v1/model/test"
+      ],
+      "tool": "compute",
+      "action": "model_probe",
+      "effect": "costly",
+      "risk": "low",
+      "phase": "P3",
+      "caps": [
+        "costly"
+      ]
+    },
+    {
+      "id": "compute.ocr",
+      "routes": [
+        "GET /api/v1/documents/:p/ocr/jobs/:p",
+        "POST /api/v1/documents/:p/ocr",
+        "POST /api/v1/documents/:p/ocr/jobs/:p/cancel",
+        "POST /api/v1/documents/:p/ocr/pages/:p",
+        "POST /api/v1/documents/:p/ocr/start"
+      ],
+      "tool": "compute",
+      "action": "ocr",
+      "effect": "costly",
+      "risk": "medium",
+      "phase": "P2",
+      "caps": [
+        "costly"
+      ]
+    },
+    {
+      "id": "compute.parsing",
+      "routes": [
+        "POST /api/v1/parsing/check",
+        "POST /api/v1/parsing/ocr-languages/download"
+      ],
+      "tool": "compute",
+      "action": "parse",
+      "effect": "costly",
+      "risk": "medium",
+      "phase": "P2",
+      "caps": [
+        "costly"
+      ]
+    },
+    {
+      "id": "compute.plan",
+      "routes": [
+        "POST /api/v1/plan",
+        "POST /api/v1/plan-reading",
+        "POST /api/v1/search-plan"
+      ],
+      "tool": "compute",
+      "action": "plan",
+      "effect": "costly",
+      "risk": "low",
+      "phase": "P2",
+      "caps": [
+        "costly"
+      ]
+    },
+    {
+      "id": "compute.readSection",
+      "routes": [
+        "POST /api/v1/documents/:p/sections/read"
+      ],
+      "tool": "compute",
+      "action": "read_section",
+      "effect": "costly",
+      "risk": "low",
+      "phase": "P2",
+      "caps": [
+        "costly"
+      ]
+    },
+    {
+      "id": "compute.speech",
+      "routes": [
+        "POST /api/v1/speech/correct",
+        "POST /api/v1/speech/speak",
+        "POST /api/v1/speech/stream",
+        "POST /api/v1/speech/transcribe"
+      ],
+      "tool": "compute",
+      "action": "speech",
+      "effect": "costly",
+      "risk": "medium",
+      "phase": "P3",
+      "caps": [
+        "costly"
+      ]
+    },
+    {
+      "id": "compute.summary",
+      "routes": [
+        "DELETE /api/v1/documents/:p/book-summary",
+        "POST /api/v1/documents/:p/book-summary/cancel",
+        "POST /api/v1/documents/:p/book-summary/start"
+      ],
+      "tool": "compute",
+      "action": "summary",
+      "effect": "costly",
+      "risk": "medium",
+      "phase": "P2",
+      "caps": [
+        "costly"
+      ]
+    },
+    {
+      "id": "compute.translation",
+      "routes": [
+        "PATCH /api/v1/documents/:p/translation/segments/:p",
+        "POST /api/v1/documents/:p/translation",
+        "POST /api/v1/documents/:p/translation/anchor",
+        "POST /api/v1/documents/:p/translation/pages/:p",
+        "POST /api/v1/documents/:p/translation/pages/:p/segments/:p",
+        "POST /api/v1/documents/:p/translation/segments/:p/restore",
+        "POST /api/v1/documents/:p/translation/stop",
+        "POST /api/v1/translation/probe",
+        "POST /api/v1/translation/quote"
+      ],
+      "tool": "compute",
+      "action": "translate",
+      "effect": "costly",
+      "risk": "medium",
+      "phase": "P2",
+      "caps": [
+        "costly"
+      ]
+    },
+    {
+      "id": "compute.webSearch",
+      "routes": [
+        "POST /api/v1/web-search/search"
+      ],
+      "tool": "compute",
+      "action": "web_search",
+      "effect": "costly",
+      "risk": "medium",
+      "phase": "P2",
+      "caps": [
+        "costly"
+      ]
+    },
+    {
+      "id": "compute.zotero",
+      "routes": [
+        "GET /api/v1/zotero/collections",
+        "POST /api/v1/zotero/collections/:p/sync",
+        "POST /api/v1/zotero/test"
+      ],
+      "tool": "compute",
+      "action": "zotero_sync",
+      "effect": "costly",
+      "risk": "medium",
+      "phase": "P3",
+      "caps": [
+        "costly"
+      ]
+    },
+    {
+      "id": "files.backup",
+      "routes": [
+        "POST /api/v1/backups",
+        "POST /api/v1/backups/:p/verify",
+        "POST /api/v1/backups/jobs/:p/cancel",
+        "POST /api/v1/backups/start"
+      ],
+      "tool": "system",
+      "action": "backup",
+      "effect": "files",
+      "risk": "medium",
+      "phase": "P2",
+      "caps": [
+        "files"
+      ]
+    },
+    {
+      "id": "files.export",
+      "routes": [
+        "GET /api/v1/documents/:p/annotated.pdf",
+        "GET /api/v1/documents/:p/export",
+        "GET /api/v1/documents/:p/file"
+      ],
+      "tool": "system",
+      "action": "export",
+      "effect": "files",
+      "risk": "low",
+      "phase": "P3",
+      "caps": [
+        "files"
+      ]
+    },
+    {
+      "id": "files.import",
+      "routes": [
+        "GET /api/v1/documents/import/jobs/:p",
+        "POST /api/v1/documents",
+        "POST /api/v1/documents/:p/relink",
+        "POST /api/v1/documents/import",
+        "POST /api/v1/documents/import/jobs/:p/cancel",
+        "POST /api/v1/documents/import/start"
+      ],
+      "tool": "system",
+      "action": "import",
+      "effect": "files",
+      "risk": "medium",
+      "phase": "P3",
+      "caps": [
+        "files"
+      ]
+    },
+    {
+      "id": "files.markdown",
+      "routes": [
+        "GET /api/v1/markdown/events",
+        "GET /api/v1/markdown/import/report",
+        "GET /api/v1/markdown/import/status",
+        "GET /api/v1/markdown/jobs",
+        "GET /api/v1/markdown/scan/search",
+        "GET /api/v1/markdown/scan/status",
+        "GET /api/v1/markdown/scan/tree",
+        "POST /api/v1/markdown/import",
+        "POST /api/v1/markdown/import/cancel",
+        "POST /api/v1/markdown/import/preview",
+        "POST /api/v1/markdown/import/start",
+        "POST /api/v1/markdown/scan",
+        "POST /api/v1/markdown/scan/cancel",
+        "POST /api/v1/markdown/scan/start",
+        "POST /api/v1/markdown/selection/resolve"
+      ],
+      "tool": "system",
+      "action": "markdown",
+      "effect": "files",
+      "risk": "medium",
+      "phase": "P3",
+      "caps": [
+        "files"
+      ]
+    },
+    {
+      "id": "files.zoteroOpen",
+      "routes": [
+        "POST /api/v1/zotero/items/:p/open"
+      ],
+      "tool": "system",
+      "action": "zotero_open",
+      "effect": "files",
+      "risk": "low",
+      "phase": "P3",
+      "caps": [
+        "files"
+      ]
+    },
+    {
+      "id": "library.get",
+      "routes": [
+        "GET /api/v1/documents/:p"
+      ],
+      "tool": "library",
+      "action": "get",
+      "effect": "read",
+      "risk": "low",
+      "phase": "P0",
+      "caps": [
+        "read"
+      ]
+    },
+    {
+      "id": "library.graph",
+      "routes": [
+        "GET /api/v1/backlinks",
+        "GET /api/v1/reference-graph"
+      ],
+      "tool": "library",
+      "action": "graph",
+      "effect": "read",
+      "risk": "low",
+      "phase": "P0",
+      "caps": [
+        "read"
+      ]
+    },
+    {
+      "id": "library.list",
+      "routes": [
+        "GET /api/v1/documents"
+      ],
+      "tool": "library",
+      "action": "list",
+      "effect": "read",
+      "risk": "low",
+      "phase": "P0",
+      "caps": [
+        "read"
+      ]
+    },
+    {
+      "id": "library.masks",
+      "routes": [
+        "GET /api/v1/documents/:p/masks",
+        "GET /api/v1/documents/:p/masks/status"
+      ],
+      "tool": "library",
+      "action": "masks",
+      "effect": "read",
+      "risk": "low",
+      "phase": "P1",
+      "caps": [
+        "read"
+      ]
+    },
+    {
+      "id": "library.navigation",
+      "routes": [
+        "GET /api/v1/documents/:p/navigation",
+        "GET /api/v1/documents/:p/navigation/preview",
+        "GET /api/v1/documents/:p/navigation/status"
+      ],
+      "tool": "library",
+      "action": "navigation",
+      "effect": "read",
+      "risk": "low",
+      "phase": "P0",
+      "caps": [
+        "read"
+      ]
+    },
+    {
+      "id": "library.search",
+      "routes": [
+        "GET /api/v1/library-search",
+        "GET /api/v1/library-search/documents",
+        "GET /api/v1/search",
+        "POST /api/v1/search"
+      ],
+      "tool": "library",
+      "action": "search",
+      "effect": "read",
+      "risk": "low",
+      "phase": "P0",
+      "caps": [
+        "read"
+      ]
+    },
+    {
+      "id": "library.structure",
+      "routes": [
+        "GET /api/v1/documents/:p/blocks",
+        "GET /api/v1/documents/:p/chapters",
+        "GET /api/v1/documents/:p/outline",
+        "GET /api/v1/documents/:p/pages/:p",
+        "GET /api/v1/documents/:p/pages/:p/image",
+        "GET /api/v1/documents/:p/pages/:p/text",
+        "GET /api/v1/documents/:p/pages/:p/thumbnail",
+        "GET /api/v1/documents/:p/references",
+        "GET /api/v1/documents/:p/section-index",
+        "GET /api/v1/documents/:p/sections",
+        "GET /api/v1/documents/:p/structure",
+        "GET /api/v1/documents/:p/visual-nodes",
+        "PUT /api/v1/documents/:p/pages/:p/text"
+      ],
+      "tool": "library",
+      "action": "structure",
+      "effect": "read",
+      "risk": "low",
+      "phase": "P0",
+      "caps": [
+        "read"
+      ]
+    },
+    {
+      "id": "notes.list",
+      "routes": [
+        "GET /api/v1/notes/folders",
+        "GET /api/v1/notes/standalone",
+        "GET /api/v1/notes/tags"
+      ],
+      "tool": "notes",
+      "action": "list",
+      "effect": "read",
+      "risk": "low",
+      "phase": "P0",
+      "caps": [
+        "read"
+      ]
+    },
+    {
+      "id": "notes.listForDocument",
+      "routes": [
+        "GET /api/v1/documents/:p/notes"
+      ],
+      "tool": "notes",
+      "action": "list_for_document",
+      "effect": "read",
+      "risk": "low",
+      "phase": "P0",
+      "caps": [
+        "read"
+      ]
+    },
+    {
+      "id": "notes.organize",
+      "routes": [
+        "POST /api/v1/notes/:p/restore",
+        "POST /api/v1/notes/batch-move",
+        "POST /api/v1/notes/reorder"
+      ],
+      "tool": "notes",
+      "action": "organize",
+      "effect": "write",
+      "risk": "medium",
+      "phase": "P1",
+      "caps": [
+        "write"
+      ]
+    },
+    {
+      "id": "notes.write",
+      "routes": [
+        "DELETE /api/v1/notes/:p",
+        "DELETE /api/v1/notes/folders",
+        "PATCH /api/v1/notes/:p",
+        "PATCH /api/v1/notes/:p/folder",
+        "POST /api/v1/notes",
+        "POST /api/v1/notes/batch-delete",
+        "POST /api/v1/notes/folders",
+        "POST /api/v1/notes/folders/rename",
+        "PUT /api/v1/notes/:p/tags"
+      ],
+      "tool": "notes",
+      "action": "write",
+      "effect": "write",
+      "risk": "medium",
+      "phase": "P1",
+      "caps": [
+        "write"
+      ]
+    },
+    {
+      "id": "organize.folders",
+      "routes": [
+        "DELETE /api/v1/folders/:p",
+        "GET /api/v1/folders",
+        "PATCH /api/v1/folders/:p",
+        "POST /api/v1/folders"
+      ],
+      "tool": "organize",
+      "action": "folders",
+      "effect": "write",
+      "risk": "medium",
+      "phase": "P1",
+      "caps": [
+        "write"
+      ]
+    },
+    {
+      "id": "organize.metadata",
+      "routes": [
+        "PATCH /api/v1/documents/:p",
+        "PUT /api/v1/documents/:p/author"
+      ],
+      "tool": "organize",
+      "action": "metadata",
+      "effect": "write",
+      "risk": "medium",
+      "phase": "P1",
+      "caps": [
+        "write"
+      ]
+    },
+    {
+      "id": "organize.projects",
+      "routes": [
+        "DELETE /api/v1/projects/:p",
+        "DELETE /api/v1/projects/:p/documents/:p",
+        "GET /api/v1/projects",
+        "GET /api/v1/projects/:p/documents",
+        "PATCH /api/v1/projects/:p",
+        "POST /api/v1/projects",
+        "POST /api/v1/projects/:p/documents"
+      ],
+      "tool": "organize",
+      "action": "projects",
+      "effect": "write",
+      "risk": "medium",
+      "phase": "P1",
+      "caps": [
+        "write"
+      ]
+    },
+    {
+      "id": "organize.references",
+      "routes": [
+        "DELETE /api/v1/documents/:p/references/entries/:p",
+        "POST /api/v1/documents/:p/references/entries",
+        "POST /api/v1/documents/:p/references/reset",
+        "PUT /api/v1/documents/:p/references/entries/:p"
+      ],
+      "tool": "organize",
+      "action": "references",
+      "effect": "write",
+      "risk": "medium",
+      "phase": "P2",
+      "caps": [
+        "write"
+      ]
+    },
+    {
+      "id": "organize.reorder",
+      "routes": [
+        "POST /api/v1/documents/:p/move"
+      ],
+      "tool": "organize",
+      "action": "reorder",
+      "effect": "write",
+      "risk": "low",
+      "phase": "P1",
+      "caps": [
+        "write"
+      ]
+    },
+    {
+      "id": "organize.tags",
+      "routes": [
+        "PUT /api/v1/documents/:p/tags"
+      ],
+      "tool": "organize",
+      "action": "tags",
+      "effect": "write",
+      "risk": "low",
+      "phase": "P1",
+      "caps": [
+        "write"
+      ]
+    },
+    {
+      "id": "organize.trash",
+      "routes": [
+        "DELETE /api/v1/documents/:p",
+        "POST /api/v1/documents/:p/restore"
+      ],
+      "tool": "organize",
+      "action": "trash",
+      "effect": "write",
+      "risk": "medium",
+      "phase": "P1",
+      "caps": [
+        "write"
+      ]
+    },
+    {
+      "id": "reading.flows",
+      "routes": [
+        "GET /api/v1/flows",
+        "GET /api/v1/flows/:p"
+      ],
+      "tool": "reading",
+      "action": "flows",
+      "effect": "read",
+      "risk": "low",
+      "phase": "P2",
+      "caps": [
+        "read"
+      ]
+    },
+    {
+      "id": "reading.flowsWrite",
+      "routes": [
+        "DELETE /api/v1/flows/:p",
+        "POST /api/v1/flows",
+        "PUT /api/v1/flows/:p"
+      ],
+      "tool": "reading",
+      "action": "flows",
+      "effect": "write",
+      "risk": "medium",
+      "phase": "P2",
+      "caps": [
+        "write"
+      ]
+    },
+    {
+      "id": "reading.masksWrite",
+      "routes": [
+        "DELETE /api/v1/documents/:p/masks/:p",
+        "PATCH /api/v1/documents/:p/masks/:p",
+        "POST /api/v1/documents/:p/masks"
+      ],
+      "tool": "reading",
+      "action": "masks",
+      "effect": "write",
+      "risk": "medium",
+      "phase": "P2",
+      "caps": [
+        "write"
+      ]
+    },
+    {
+      "id": "reading.navigationWrite",
+      "routes": [
+        "DELETE /api/v1/documents/:p/navigation",
+        "POST /api/v1/documents/:p/navigation",
+        "POST /api/v1/documents/:p/navigation/entries",
+        "POST /api/v1/documents/:p/navigation/toc-preview",
+        "PUT /api/v1/documents/:p/navigation",
+        "PUT /api/v1/documents/:p/navigation/enabled"
+      ],
+      "tool": "reading",
+      "action": "navigation",
+      "effect": "write",
+      "risk": "medium",
+      "phase": "P2",
+      "caps": [
+        "write"
+      ]
+    },
+    {
+      "id": "reading.quoteLocate",
+      "routes": [
+        "POST /api/v1/documents/:p/quote-locate"
+      ],
+      "tool": "reading",
+      "action": "quote_locate",
+      "effect": "read",
+      "risk": "low",
+      "phase": "P0",
+      "caps": [
+        "read"
+      ]
+    },
+    {
+      "id": "reading.sessions",
+      "routes": [
+        "GET /api/v1/corpus-sessions",
+        "GET /api/v1/corpus-sessions/:p/messages",
+        "GET /api/v1/documents/:p/chat-sessions",
+        "GET /api/v1/documents/:p/messages",
+        "GET /api/v1/documents/:p/messages/page",
+        "GET /api/v1/documents/:p/messages/search"
+      ],
+      "tool": "reading",
+      "action": "sessions",
+      "effect": "read",
+      "risk": "low",
+      "phase": "P0",
+      "caps": [
+        "read"
+      ]
+    },
+    {
+      "id": "reading.snapshot",
+      "routes": [
+        "POST /api/v1/documents/:p/snapshot"
+      ],
+      "tool": "reading",
+      "action": "snapshot",
+      "effect": "read",
+      "risk": "low",
+      "phase": "P1",
+      "caps": [
+        "read"
+      ]
+    },
+    {
+      "id": "reading.summary",
+      "routes": [
+        "GET /api/v1/documents/:p/book-summary"
+      ],
+      "tool": "reading",
+      "action": "summary",
+      "effect": "read",
+      "risk": "low",
+      "phase": "P2",
+      "caps": [
+        "read"
+      ]
+    },
+    {
+      "id": "reading.tasks",
+      "routes": [
+        "GET /api/v1/documents/:p/reading-tasks"
+      ],
+      "tool": "reading",
+      "action": "tasks",
+      "effect": "read",
+      "risk": "low",
+      "phase": "P0",
+      "caps": [
+        "read"
+      ]
+    },
+    {
+      "id": "reading.translation",
+      "routes": [
+        "GET /api/v1/documents/:p/translation",
+        "GET /api/v1/documents/:p/translation/annotations",
+        "GET /api/v1/documents/:p/translation/lookup",
+        "GET /api/v1/documents/:p/translation/pages",
+        "GET /api/v1/documents/:p/translation/pages/:p",
+        "GET /api/v1/documents/:p/translation/progress",
+        "GET /api/v1/documents/:p/translation/summary",
+        "GET /api/v1/translation/overview"
+      ],
+      "tool": "reading",
+      "action": "translation",
+      "effect": "read",
+      "risk": "low",
+      "phase": "P1",
+      "caps": [
+        "read"
+      ]
+    },
+    {
+      "id": "reading.write",
+      "routes": [
+        "DELETE /api/v1/corpus-sessions/:p",
+        "DELETE /api/v1/documents/:p/chat-sessions/:p",
+        "DELETE /api/v1/documents/:p/messages/:p",
+        "PATCH /api/v1/documents/:p/chat-sessions/:p",
+        "PATCH /api/v1/documents/:p/messages/:p",
+        "POST /api/v1/corpus-sessions",
+        "POST /api/v1/documents/:p/chat-sessions",
+        "POST /api/v1/documents/:p/messages",
+        "POST /api/v1/documents/:p/messages/rewind",
+        "PUT /api/v1/documents/:p/chat-sessions"
+      ],
+      "tool": "reading",
+      "action": "write",
+      "effect": "write",
+      "risk": "medium",
+      "phase": "P3",
+      "caps": [
+        "write"
+      ]
+    },
+    {
+      "id": "reading.zoteroAnnotations",
+      "routes": [
+        "POST /api/v1/documents/:p/zotero-annotations/preview"
+      ],
+      "tool": "reading",
+      "action": "zotero_annotations",
+      "effect": "read",
+      "risk": "low",
+      "phase": "P3",
+      "caps": [
+        "read"
+      ]
+    },
+    {
+      "id": "system.backups",
+      "routes": [
+        "GET /api/v1/backups",
+        "GET /api/v1/backups/jobs/:p"
+      ],
+      "tool": "system",
+      "action": "backups",
+      "effect": "read",
+      "risk": "low",
+      "phase": "P2",
+      "caps": [
+        "read"
+      ]
+    },
+    {
+      "id": "system.health",
+      "routes": [
+        "GET /api/v1/health",
+        "GET /api/v1/providers"
+      ],
+      "tool": "system",
+      "action": "health",
+      "effect": "read",
+      "risk": "low",
+      "phase": "P0",
+      "caps": [
+        "read"
+      ]
+    },
+    {
+      "id": "system.maintenance",
+      "routes": [
+        "GET /api/v1/diagnostics",
+        "GET /api/v1/maintenance/diagnostics",
+        "GET /api/v1/maintenance/file-health",
+        "GET /api/v1/maintenance/status",
+        "POST /api/v1/maintenance/diagnostics"
+      ],
+      "tool": "system",
+      "action": "maintenance",
+      "effect": "read",
+      "risk": "low",
+      "phase": "P0",
+      "caps": [
+        "read"
+      ]
+    },
+    {
+      "id": "system.noteAssets",
+      "routes": [
+        "GET /api/v1/note-assets/:p",
+        "GET /api/v1/note-assets/reindex/status",
+        "GET /api/v1/note-assets/usage",
+        "POST /api/v1/note-assets",
+        "POST /api/v1/note-assets/gc",
+        "POST /api/v1/note-assets/reindex",
+        "POST /api/v1/note-assets/reindex/start"
+      ],
+      "tool": "system",
+      "action": "note_assets",
+      "effect": "write",
+      "risk": "medium",
+      "phase": "P2",
+      "caps": [
+        "write"
+      ]
+    },
+    {
+      "id": "system.status",
+      "routes": [
+        "GET /api/v1/embeddings/status",
+        "GET /api/v1/parsing/ocr-languages",
+        "GET /api/v1/settings/tokenizer",
+        "GET /api/v1/speech/system",
+        "GET /api/v1/speech/voices",
+        "GET /api/v1/zotero/diagnose",
+        "GET /api/v1/zotero/items",
+        "POST /api/v1/documents/:p/retrieval/prewarm"
+      ],
+      "tool": "system",
+      "action": "status",
+      "effect": "read",
+      "risk": "low",
+      "phase": "P0",
+      "caps": [
+        "read"
+      ]
+    }
+  ],
+  "never": [
+    {
+      "id": "backup-restore",
+      "reason": "恢复会覆盖当前数据，不开放",
+      "routes": [
+        "POST /api/v1/backups/:p/restore"
+      ]
+    },
+    {
+      "id": "clear-user-data",
+      "reason": "清空数据只允许用户执行",
+      "routes": [
+        "POST /api/v1/maintenance/clear-user-data"
+      ]
+    },
+    {
+      "id": "migrate",
+      "reason": "旧版迁移只允许用户在界面执行",
+      "routes": [
+        "POST /api/v1/migrate/legacy"
+      ]
+    },
+    {
+      "id": "model-services",
+      "reason": "模型连接配置含端点与凭据形态，不开放",
+      "routes": [
+        "GET /api/v1/model-services",
+        "GET /api/v1/model-services/impact",
+        "POST /api/v1/model-services/models",
+        "PUT /api/v1/model-services"
+      ]
+    },
+    {
+      "id": "purge",
+      "reason": "彻底删除不可恢复，不开放",
+      "routes": [
+        "DELETE /api/v1/annotations/:p/purge",
+        "DELETE /api/v1/notes/:p/purge",
+        "POST /api/v1/documents/:p/purge"
+      ]
+    },
+    {
+      "id": "secrets",
+      "reason": "密钥不可读、不可写",
+      "routes": [
+        "DELETE /api/v1/secrets/:p",
+        "GET /api/v1/secrets/status",
+        "POST /api/v1/secrets"
+      ]
+    },
+    {
+      "id": "service-config",
+      "reason": "服务配置含地址/账号，不开放",
+      "routes": [
+        "GET /api/v1/parsing/config",
+        "GET /api/v1/speech/config",
+        "GET /api/v1/translation/config",
+        "GET /api/v1/web-search/config",
+        "GET /api/v1/zotero/config",
+        "PUT /api/v1/parsing/config",
+        "PUT /api/v1/speech/config",
+        "PUT /api/v1/translation/config",
+        "PUT /api/v1/web-search/config",
+        "PUT /api/v1/zotero/config"
+      ]
+    },
+    {
+      "id": "settings",
+      "reason": "设置明文不读、不可写",
+      "routes": [
+        "GET /api/v1/settings",
+        "POST /api/v1/settings/tokenizer",
+        "PUT /api/v1/settings"
+      ]
+    }
+  ]
+}

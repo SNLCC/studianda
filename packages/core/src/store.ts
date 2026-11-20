@@ -646,11 +646,20 @@ function compareMigrationBackupsNewestFirst(a: string, b: string): number {
  */
 const TRANSLATION_JOB_TASK_PREFIX = 'translation-job:';
 
+export interface StoreOptions {
+  /**
+   * 应用进程专用：打开数据库后持 SQLite 独占锁，阻止同账号下的第二个 SQLite 连接并发读写。
+   * 测试与离线脚本默认关闭（它们需要直接开库核对数据）；只有 Core 入口传 true。
+   */
+  exclusiveLock?: boolean;
+}
+
 export class Store {
   readonly dataDir: string;
   readonly papersDir: string;
   private readonly db: DatabaseSync;
   private readonly instanceLockPath: string;
+  private readonly exclusiveLock: boolean;
   private instanceLockDb: DatabaseSync | null = null;
   /**
    * 版面解析缓存（进程内 LRU，最多 8 篇）。
@@ -693,9 +702,18 @@ export class Store {
    * 本类不再持有；懒创建，构造它不会启动任何任务）。
    */
   private noteAssetReindexerInstance: NoteAssetReindexer | null = null;
+  /** 上一次非正常关闭后启动时 `quick_check` 的结果；仅用于诊断/测试。 */
+  private lastIntegrityCheckResult: string | null = null;
+  /** 最近一次数据库写入时间（由代理后的 db 自动更新）；看门狗据此判断"空闲"。 */
+  private lastWriteActivityAt = 0;
+  private watchdogTimer: NodeJS.Timeout | null = null;
+  private watchdogSnapshot: { size: number; mtimeMs: number; walSize: number; walMtimeMs: number } | null = null;
+  private tamperSuspected = false;
+  private lastWatchdogResult: string | null = null;
 
-  constructor(dataDir: string) {
+  constructor(dataDir: string, options: StoreOptions = {}) {
     this.dataDir = dataDir;
+    this.exclusiveLock = options.exclusiveLock === true;
     this.papersDir = path.join(dataDir, 'papers');
     this.instanceLockPath = path.join(dataDir, '.instance-lock.sqlite3');
     mkdirSync(this.papersDir, { recursive: true });
@@ -704,7 +722,7 @@ export class Store {
     let opened: DatabaseSync | null = null;
     try {
       opened = new DatabaseSync(path.join(dataDir, 'reader.sqlite3'));
-      this.db = opened;
+      this.db = this.instrumentDatabase(opened);
       // WAL 提升读写并发：读不被写阻塞、写仍串行；不支持时回退默认 journal（不阻断启动）。
       try {
         this.db.exec('PRAGMA journal_mode = WAL');
@@ -713,7 +731,18 @@ export class Store {
       }
       this.db.exec('PRAGMA busy_timeout = 5000');
       this.db.exec('PRAGMA foreign_keys = ON');
+      // 独占锁：应用进程运行期间不让第二个 SQLite 连接读/写数据库。
+      // 测试与离线脚本默认关闭；只有 Core 入口传 exclusiveLock=true。
+      if (this.exclusiveLock) {
+        try {
+          this.db.exec('PRAGMA locking_mode = EXCLUSIVE');
+        } catch {
+          // 某些文件系统/变体不支持独占锁
+        }
+      }
       this.migrate();
+      this.recordStartupIntegrity();
+      this.watchdogSnapshot = this.readDbFileStat();
     } catch (error) {
       try {
         opened?.close();
@@ -767,11 +796,192 @@ export class Store {
   }
 
   close(): void {
+    this.stopIntegrityWatch();
     try {
+      // 先落"正常关闭"标记，再 checkpoint/关闭；写标记失败不阻断关闭。
+      try {
+        this.writeSchemaMeta('clean_shutdown', '1');
+      } catch {
+        // 数据库可能已不可写
+      }
+      try {
+        this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+      } catch {
+        // checkpoint 失败由 SQLite 自行恢复
+      }
       this.db.close();
     } finally {
       this.releaseInstanceLock();
     }
+  }
+
+  /** 上一次非正常关闭后启动时的 `quick_check` 结果；`null` 表示上次正常关闭或首次启动。 */
+  integrityOnStartup(): string | null {
+    return this.lastIntegrityCheckResult;
+  }
+
+  /** 启动/停止运行期看门狗：空闲时比对数据库文件变化并跑 quick_check。 */
+  startIntegrityWatch(options: { intervalMs?: number; idleMs?: number } = {}): void {
+    if (this.watchdogTimer) return;
+    const intervalMs = options.intervalMs ?? 5000;
+    const idleMs = options.idleMs ?? 15000;
+    this.watchdogSnapshot = this.readDbFileStat();
+    this.watchdogTimer = setInterval(() => this.watchdogTick(idleMs), intervalMs);
+    // 不阻止进程退出（Electron/Core 退出不应被定时器拖住）。
+    this.watchdogTimer.unref?.();
+  }
+
+  stopIntegrityWatch(): void {
+    if (!this.watchdogTimer) return;
+    clearInterval(this.watchdogTimer);
+    this.watchdogTimer = null;
+  }
+
+  /** 主动跑一次完整性检查（测试/诊断用）；文件在空闲期变化或 quick_check 失败都会标记篡改可疑。 */
+  checkIntegrityNow(): string {
+    const current = this.readDbFileStat();
+    const previous = this.watchdogSnapshot;
+    this.watchdogSnapshot = current;
+    if (previous && this.dbFileChanged(previous, current)) this.tamperSuspected = true;
+    const result = this.safeQuickCheck();
+    this.lastWatchdogResult = result;
+    if (result !== 'ok') this.tamperSuspected = true;
+    return result;
+  }
+
+  integrityStatus(): { tamperSuspected: boolean; lastWatchdogResult: string | null } {
+    return { tamperSuspected: this.tamperSuspected, lastWatchdogResult: this.lastWatchdogResult };
+  }
+
+  private safeQuickCheck(): string {
+    try {
+      return this.quickCheck();
+    } catch (error) {
+      return `quick_check_failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  private readDbFileStat(): { size: number; mtimeMs: number; walSize: number; walMtimeMs: number } {
+    const dbPath = path.join(this.dataDir, 'reader.sqlite3');
+    const walPath = `${dbPath}-wal`;
+    const dbStat = existsSync(dbPath) ? statSync(dbPath) : null;
+    const walStat = existsSync(walPath) ? statSync(walPath) : null;
+    return {
+      size: dbStat?.size ?? 0,
+      mtimeMs: dbStat?.mtimeMs ?? 0,
+      walSize: walStat?.size ?? 0,
+      walMtimeMs: walStat?.mtimeMs ?? 0
+    };
+  }
+
+  private watchdogTick(idleMs: number): void {
+    // 有写入活动时视为正常；只在空闲窗口比对文件。活动期先把快照追到最新，避免把自己的写当成篡改。
+    if (Date.now() - this.lastWriteActivityAt < idleMs) {
+      this.watchdogSnapshot = this.readDbFileStat();
+      return;
+    }
+    const current = this.readDbFileStat();
+    const previous = this.watchdogSnapshot;
+    if (previous && !this.dbFileChanged(previous, current)) return;
+    this.watchdogSnapshot = current;
+    if (previous) this.tamperSuspected = true;
+    const result = this.safeQuickCheck();
+    this.lastWatchdogResult = result;
+    if (result !== 'ok') {
+      this.tamperSuspected = true;
+      console.error('[studianda] 看门狗：数据库完整性异常：', result);
+    }
+  }
+
+  private dbFileChanged(
+    previous: { size: number; mtimeMs: number; walSize: number; walMtimeMs: number },
+    current: { size: number; mtimeMs: number; walSize: number; walMtimeMs: number }
+  ): boolean {
+    return (
+      previous.size !== current.size ||
+      previous.mtimeMs !== current.mtimeMs ||
+      previous.walSize !== current.walSize ||
+      previous.walMtimeMs !== current.walMtimeMs
+    );
+  }
+
+  /**
+   * 给数据库连接套一层写活动代理：
+   * - 写语句（INSERT/UPDATE/DELETE/...）在 `run()` 或 `exec()` 后更新 `lastWriteActivityAt`；
+   * - 读语句不更新，避免把查询噪声当成写入。
+   * 看门狗据此区分"Core 自己在写"和"空闲时文件被外部改动"。
+   */
+  private instrumentDatabase(db: DatabaseSync): DatabaseSync {
+    const touch = (): void => {
+      this.lastWriteActivityAt = Date.now();
+    };
+    const wrapStatement = (statement: ReturnType<DatabaseSync['prepare']>, sql: string) => {
+      const isWrite = /^\s*(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP|VACUUM|ATTACH|DETACH)\b/i.test(
+        sql
+      );
+      if (!isWrite) return statement;
+      return new Proxy(statement, {
+        get: (target, property) => {
+          const value = Reflect.get(target, property, target);
+          if (property === 'run' && typeof value === 'function') {
+            return (...args: unknown[]) => {
+              const result = value.apply(target, args);
+              touch();
+              return result;
+            };
+          }
+          return typeof value === 'function' ? value.bind(target) : value;
+        }
+      });
+    };
+    return new Proxy(db, {
+      get: (target, property) => {
+        const value = Reflect.get(target, property, target);
+        if (property === 'exec' && typeof value === 'function') {
+          return (sql: string) => {
+            const result = value.call(target, sql);
+            touch();
+            return result;
+          };
+        }
+        if (property === 'prepare' && typeof value === 'function') {
+          return (sql: string) => wrapStatement(value.call(target, sql), sql);
+        }
+        return typeof value === 'function' ? value.bind(target) : value;
+      }
+    }) as unknown as DatabaseSync;
+  }
+
+  private readSchemaMeta(key: string): string | null {
+    try {
+      const row = this.db
+        .prepare('SELECT value FROM schema_meta WHERE key = ?')
+        .get(key) as { value?: string } | undefined;
+      return row?.value ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private writeSchemaMeta(key: string, value: string): void {
+    this.db
+      .prepare('INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)')
+      .run(key, value);
+  }
+
+  /**
+   * 启动完整性门禁：上次关闭标记为 '0'（崩溃/强杀）时跑一次 `quick_check`。
+   * 只记录结果，不自动修复，也不阻断启动（修复入口由 verify/repair 提供）。
+   */
+  private recordStartupIntegrity(): void {
+    if (this.readSchemaMeta('clean_shutdown') === '0') {
+      const result = this.quickCheck();
+      this.lastIntegrityCheckResult = result;
+      if (result !== 'ok') {
+        console.error('[studianda] 数据库完整性检查未通过：', result);
+      }
+    }
+    this.writeSchemaMeta('clean_shutdown', '0');
   }
 
   backupDatabase(target: string): void {

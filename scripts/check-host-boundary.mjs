@@ -16,7 +16,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const allowlistFile = path.join(root, 'scripts', 'host-boundary-allowlist.json');
 
 /** 宿主专用实现：不允许被共享包导入，也不作为共享包扫描。 */
-const HOST_SPECIFIC_PACKAGES = new Set(['core', 'host-dsh']);
+const HOST_SPECIFIC_PACKAGES = new Set(['core', 'agent-bridge', 'host-dsh']);
 
 /** 共享包：自动发现 packages/*，避免新包漏检。 */
 const SOURCE_DIRS = readdirSync(path.join(root, 'packages'), { withFileTypes: true })
