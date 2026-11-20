@@ -73,6 +73,7 @@ const inputSchema = {
   question: z.string().optional().describe('compute ask 的问题'),
   selection: z.string().optional().describe('问题关联的选文'),
   chat_session_id: z.string().optional().describe('阅读会话 id（可选）'),
+  scale: z.number().min(1).max(3).optional().describe('OCR 渲染倍率（默认 2）'),
   page: z.number().int().min(0).optional().describe('页码（写笔记可为 0 表示整篇）'),
   from: z.number().int().min(1).optional().describe('起始页（含）'),
   to: z.number().int().min(1).optional().describe('结束页（含）'),
@@ -103,9 +104,25 @@ for (const spec of toolSpecs()) {
           agentName,
           jobs: askJobs
         });
-        return {
-          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]
-        };
+        type ToolContent =
+          | { type: 'text'; text: string }
+          | { type: 'resource_link'; uri: string; name: string; mimeType: string };
+        const content: ToolContent[] = [
+          { type: 'text', text: JSON.stringify(result, null, 2) }
+        ];
+        // 工具结果附资源链接：客户端可直接打开对应 MCP Resource，而不是重新拼 URI。
+        if (spec.name === 'library' && args && (args as { action?: unknown }).action === 'get') {
+          const documentId = (args as { document_id?: unknown }).document_id;
+          if (typeof documentId === 'string' && documentId) {
+            content.push({
+              type: 'resource_link',
+              uri: `studianda://document/${documentId}`,
+              name: `文献 ${documentId}`,
+              mimeType: 'application/json'
+            });
+          }
+        }
+        return { content };
       } catch (error) {
         if (error instanceof ScopeError) {
           return { isError: true, content: [{ type: 'text', text: `${error.code}: ${error.message}` }] };

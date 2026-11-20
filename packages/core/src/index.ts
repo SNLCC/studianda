@@ -148,6 +148,7 @@ try {
   process.exit(1);
 }
 const store = new Store(dataDir, { exclusiveLock: true });
+store.markAgentJobsInterrupted();
 const startupIntegrity = store.integrityOnStartup();
 if (startupIntegrity && startupIntegrity !== 'ok') {
   console.error('STUDIANDA_DB_INTEGRITY', startupIntegrity);

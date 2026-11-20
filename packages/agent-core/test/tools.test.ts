@@ -259,10 +259,23 @@ describe('compute 异步任务', () => {
   });
 
   it('ask 走异步 job：start 后可用 job_id 查结果', async () => {
-    const manager = new AskJobManager();
-    const { api } = routedApi({
-      'POST /chat/ask': { answer: '回答', sources: [] }
-    });
+    const { api } = routedApi({});
+    const jobs = {
+      start: async () => ({
+        id: 'j1',
+        state: 'running',
+        createdAt: 'c',
+        updatedAt: 'c'
+      }),
+      get: async () => ({
+        id: 'j1',
+        state: 'succeeded',
+        createdAt: 'c',
+        updatedAt: 'c',
+        result: { answer: '回答' }
+      }),
+      cancel: async () => ({ id: 'j1', state: 'cancelled', createdAt: 'c', updatedAt: 'c' })
+    } as unknown as AskJobManager;
     const started = (await executeTool(
       'compute',
       { action: 'start', kind: 'ask', document_id: 'doc-1', question: '这篇文章说什么？' },
@@ -270,11 +283,10 @@ describe('compute 异步任务', () => {
         scope: { kind: 'documents', documentIds: ['doc-1'], caps: ['read'] },
         api,
         agentName: 'dsh',
-        jobs: manager
+        jobs
       }
     )) as { id: string; state: string };
     expect(started.state).toBe('running');
-    await new Promise((resolve) => setTimeout(resolve, 0));
     const status = (await executeTool(
       'compute',
       { action: 'status', kind: 'ask', document_id: 'doc-1', job_id: started.id },
@@ -282,10 +294,45 @@ describe('compute 异步任务', () => {
         scope: { kind: 'documents', documentIds: ['doc-1'], caps: ['read'] },
         api,
         agentName: 'dsh',
-        jobs: manager
+        jobs
       }
     )) as { state: string; result?: { answer?: string } };
     expect(status.state).toBe('succeeded');
     expect(status.result?.answer).toBe('回答');
+  });
+
+  it('OCR 任务要求 write，并传 documentId/pages', async () => {
+    const { api } = routedApi({});
+    let startedWith: unknown = null;
+    const jobs = {
+      startOcr: async (_api: unknown, input: unknown) => {
+        startedWith = input;
+        return { id: 'j2', state: 'running', createdAt: 'c', updatedAt: 'c' };
+      }
+    } as unknown as AskJobManager;
+    const result = (await executeTool(
+      'compute',
+      { action: 'start', kind: 'ocr', document_id: 'doc-1', pages: [1, 2] },
+      {
+        scope: { kind: 'documents', documentIds: ['doc-1'], caps: ['read', 'write'] },
+        api,
+        agentName: 'dsh',
+        jobs
+      }
+    )) as { id: string };
+    expect(result.id).toBe('j2');
+    expect(startedWith).toMatchObject({ documentId: 'doc-1', pages: [1, 2] });
+
+    await expect(
+      executeTool(
+        'compute',
+        { action: 'start', kind: 'ocr', document_id: 'doc-1' },
+        {
+          scope: { kind: 'documents', documentIds: ['doc-1'], caps: ['read'] },
+          api,
+          jobs
+        }
+      )
+    ).rejects.toBeInstanceOf(ScopeError);
   });
 });

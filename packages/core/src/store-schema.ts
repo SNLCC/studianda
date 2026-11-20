@@ -469,6 +469,22 @@ export const SCHEMA_SQL = `      CREATE TABLE IF NOT EXISTS schema_meta(
       CREATE INDEX IF NOT EXISTS agent_grants_expiry ON agent_grants(expires_at);
       CREATE INDEX IF NOT EXISTS agent_operations_created ON agent_operations(created DESC);
 
+      -- schema 28（预发布扩展）：MCP 侧 ask 等长任务持久化。
+      CREATE TABLE IF NOT EXISTS agent_jobs(
+        id TEXT PRIMARY KEY,
+        agent_name TEXT NOT NULL DEFAULT '',
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        request_json TEXT NOT NULL DEFAULT '{}',
+        result_json TEXT,
+        error TEXT,
+        created TEXT NOT NULL,
+        updated TEXT NOT NULL,
+        finished_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS agent_jobs_agent ON agent_jobs(agent_name, created DESC);
+      CREATE INDEX IF NOT EXISTS agent_jobs_status ON agent_jobs(status);
+
       -- 视觉读页缓存：按 (文献, 页, 模型, 文档版本) 命中；页面图像转录/解读是派生资料，
       -- 缓存只用于避免重复调用视觉模型，不能当作逐字原文证据。
       CREATE TABLE IF NOT EXISTS visual_cache(

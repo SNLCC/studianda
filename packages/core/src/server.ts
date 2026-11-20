@@ -46,6 +46,7 @@ import { registerReferenceGraphRoutes } from './server/reference-graph-routes.js
 import { registerModelServiceRoutes, registerModelTestRoute } from './server/model-service-routes.js';
 import { registerAgentRoutes } from './server/agent-routes.js';
 import { registerAgentChangesRoutes } from './server/agent-changes-routes.js';
+import { registerAgentJobsRoutes } from './server/agent-jobs-routes.js';
 import { registerSettingsRoutes, registerSettingsUpdateRoutes } from './server/settings-routes.js';
 import { registerSpeechRoutes } from './server/speech-routes.js';
 import { registerWebSearchRoutes } from './server/web-search-routes.js';
@@ -1496,6 +1497,9 @@ export function buildServer(options: ServerOptions): FastifyInstance {
 
   // Agent 可撤销写操作：preview / apply / undo（审计落 agent_operations）。
   registerAgentChangesRoutes(app, { store: options.store });
+
+  // Agent 长任务持久化（bridge 执行、Core 落状态）。
+  registerAgentJobsRoutes(app, { store: options.store });
 
   return app;
 }

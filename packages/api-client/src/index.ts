@@ -3,6 +3,7 @@ import type {
   AgentChangePreview,
   AgentChangeRequest,
   AgentChangeUndoResult,
+  AgentJobRecord,
   AgentOperationRecord,
   AgentScope,
   AnnotationRecord,
@@ -641,6 +642,31 @@ export interface ApiClient {
   undoAgentChanges(operationId: string): Promise<AgentChangeUndoResult>;
   /** 应用侧审阅：最近的 agent 变更记录。 */
   listAgentOperations(limit?: number): Promise<AgentOperationRecord[]>;
+  /** 创建 MCP 长任务记录（当前 kind=ask；执行在 bridge，Core 只持久化状态）。 */
+  createAgentJob(input: {
+    kind: 'ask' | 'ocr';
+    agentName: string;
+    documentId: string;
+    question?: string;
+    page?: number;
+    selection?: string;
+    chat_session_id?: string;
+    pages?: number[];
+    force?: boolean;
+    scale?: number;
+  }): Promise<AgentJobRecord>;
+  getAgentJob(id: string, agentName: string): Promise<AgentJobRecord>;
+  listAgentJobs(agentName: string, limit?: number): Promise<AgentJobRecord[]>;
+  finishAgentJob(
+    id: string,
+    input: {
+      agentName: string;
+      status: 'succeeded' | 'failed' | 'cancelled' | 'needs_confirmation';
+      result?: unknown;
+      error?: string;
+    }
+  ): Promise<AgentJobRecord>;
+  cancelAgentJob(id: string, agentName: string): Promise<AgentJobRecord>;
   /** 提示词分层 P1-2：只读列出 `<dataDir>/flows` 下的 L1 用户阅读流程（含启用状态与跳过原因）。 */
   listFlows(): Promise<FlowListResponse>;
   /** 读取单个流程的完整正文（编辑用；只返回通过服务端校验的流程）。 */
@@ -2001,6 +2027,29 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       }),
     listAgentOperations: (limit = 20) =>
       request<AgentOperationRecord[]>(`/agent/operations?limit=${encodeURIComponent(limit)}`),
+    createAgentJob: (input) =>
+      request<AgentJobRecord>('/agent/jobs', {
+        method: 'POST',
+        body: JSON.stringify(input)
+      }),
+    getAgentJob: (id, agentName) =>
+      request<AgentJobRecord>(
+        `/agent/jobs/${encodeURIComponent(id)}?agent=${encodeURIComponent(agentName)}`
+      ),
+    listAgentJobs: (agentName, limit = 20) =>
+      request<AgentJobRecord[]>(
+        `/agent/jobs?agent=${encodeURIComponent(agentName)}&limit=${encodeURIComponent(limit)}`
+      ),
+    finishAgentJob: (id, input) =>
+      request<AgentJobRecord>(`/agent/jobs/${encodeURIComponent(id)}/finish`, {
+        method: 'POST',
+        body: JSON.stringify(input)
+      }),
+    cancelAgentJob: (id, agentName) =>
+      request<AgentJobRecord>(`/agent/jobs/${encodeURIComponent(id)}/cancel`, {
+        method: 'POST',
+        body: JSON.stringify({ agentName })
+      }),
     listFlows: () => request<FlowListResponse>('/flows'),
     getFlow: (id) => request<FlowDetailRecord>(`/flows/${encodeURIComponent(id)}`),
     createFlow: (input) =>

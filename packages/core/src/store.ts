@@ -7849,6 +7849,140 @@ export class Store {
       .run(agentName.trim().slice(0, 80));
   }
 
+  createAgentJob(row: {
+    id: string;
+    agentName: string;
+    kind: string;
+    requestJson: string;
+    created: string;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT INTO agent_jobs(id, agent_name, kind, status, request_json, created, updated)
+         VALUES (?, ?, ?, 'running', ?, ?, ?)`
+      )
+      .run(row.id, row.agentName, row.kind, row.requestJson, row.created, row.created);
+  }
+
+  getAgentJob(id: string): {
+    id: string;
+    agentName: string;
+    kind: string;
+    status: string;
+    result: unknown;
+    error: string | null;
+    created: string;
+    updated: string;
+    finishedAt: string | null;
+  } | null {
+    const row = this.db
+      .prepare(
+        `SELECT id, agent_name, kind, status, result_json, error, created, updated, finished_at
+         FROM agent_jobs WHERE id = ?`
+      )
+      .get(id) as
+      | {
+          id: string;
+          agent_name: string;
+          kind: string;
+          status: string;
+          result_json: string | null;
+          error: string | null;
+          created: string;
+          updated: string;
+          finished_at: string | null;
+        }
+      | undefined;
+    if (!row) return null;
+    let result: unknown;
+    try {
+      result = row.result_json ? JSON.parse(row.result_json) : undefined;
+    } catch {
+      result = undefined;
+    }
+    return {
+      id: row.id,
+      agentName: row.agent_name,
+      kind: row.kind,
+      status: row.status,
+      result,
+      error: row.error,
+      created: row.created,
+      updated: row.updated,
+      finishedAt: row.finished_at
+    };
+  }
+
+  updateAgentJob(
+    id: string,
+    update: { status: string; resultJson?: string; error?: string | null; updated: string }
+  ): void {
+    const terminal = update.status !== 'running';
+    this.db
+      .prepare(
+        `UPDATE agent_jobs SET status = ?, result_json = ?, error = ?, updated = ?, finished_at = ?
+         WHERE id = ?`
+      )
+      .run(
+        update.status,
+        update.resultJson ?? null,
+        update.error ?? null,
+        update.updated,
+        terminal ? update.updated : null,
+        id
+      );
+  }
+
+  listAgentJobs(agentName: string, limit = 20): Array<{
+    id: string;
+    agentName: string;
+    kind: string;
+    status: string;
+    created: string;
+    updated: string;
+    finishedAt: string | null;
+  }> {
+    const rows = this.db
+      .prepare(
+        `SELECT id, agent_name, kind, status, created, updated, finished_at
+         FROM agent_jobs WHERE agent_name = ? ORDER BY created DESC LIMIT ?`
+      )
+      .all(agentName, Math.max(1, Math.min(50, Math.trunc(limit)))) as unknown as Array<{
+      id: string;
+      agent_name: string;
+      kind: string;
+      status: string;
+      created: string;
+      updated: string;
+      finished_at: string | null;
+    }>;
+    return rows.map((row) => ({
+      id: row.id,
+      agentName: row.agent_name,
+      kind: row.kind,
+      status: row.status,
+      created: row.created,
+      updated: row.updated,
+      finishedAt: row.finished_at
+    }));
+  }
+
+  countRunningAgentJobs(agentName: string): number {
+    const row = this.db
+      .prepare("SELECT COUNT(*) AS n FROM agent_jobs WHERE agent_name = ? AND status = 'running'")
+      .get(agentName) as { n: number } | undefined;
+    return Number(row?.n ?? 0);
+  }
+
+  /** Core 启动时把上次未收尾的 job 标成 interrupted，避免永久 running。 */
+  markAgentJobsInterrupted(now = new Date().toISOString()): void {
+    this.db
+      .prepare(
+        "UPDATE agent_jobs SET status = 'interrupted', updated = ?, finished_at = ? WHERE status = 'running'"
+      )
+      .run(now, now);
+  }
+
   markAgentOperationUndone(id: string, when: string): void {
     this.db
       .prepare("UPDATE agent_operations SET status = 'undone', undone_at = ? WHERE id = ?")

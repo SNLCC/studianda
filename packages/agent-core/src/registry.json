@@ -1078,6 +1078,17 @@
       "routes": [
         "GET /api/v1/agent/operations"
       ]
+    },
+    {
+      "id": "agent-jobs-internal",
+      "reason": "MCP 长任务的持久化内部路由；agent 只通过 compute 工具访问，不直接调用",
+      "routes": [
+        "POST /api/v1/agent/jobs",
+        "GET /api/v1/agent/jobs",
+        "GET /api/v1/agent/jobs/:p",
+        "POST /api/v1/agent/jobs/:p/finish",
+        "POST /api/v1/agent/jobs/:p/cancel"
+      ]
     }
   ]
 }

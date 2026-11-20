@@ -3123,6 +3123,27 @@ export interface AgentOperationRecord {
   undoneAt: string | null;
 }
 
+/** MCP 长任务（当前 ask）的持久化记录。 */
+export type AgentJobStatus =
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'needs_confirmation'
+  | 'interrupted';
+
+export interface AgentJobRecord {
+  id: string;
+  agentName: string;
+  kind: string;
+  status: AgentJobStatus;
+  created: string;
+  updated: string;
+  finishedAt: string | null;
+  result?: unknown;
+  error?: string;
+}
+
 /** 生成一个配置型 DSH bundle（Plugins → Add plugin 可安装的本地目录）。 */
 export interface AgentBridgeBundleInput {
   command: string;

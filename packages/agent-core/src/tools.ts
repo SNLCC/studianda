@@ -106,7 +106,7 @@ export interface ToolSpec {
 const IMPLEMENTED_ACTIONS: Record<string, string[]> = {
   scope: ['get'],
   capabilities: ['list'],
-  library: ['list', 'get', 'search', 'pages', 'outline', 'references'],
+  library: ['list', 'get', 'search', 'pages', 'ocr', 'outline', 'references'],
   notes: ['list', 'list_for_document', 'create', 'update', 'set_tags', 'delete', 'restore'],
   annotations: ['list_for_document', 'create', 'update', 'delete', 'restore'],
   organize: [
@@ -137,11 +137,11 @@ export function toolSpecs(): ToolSpec[] {
   const defs: Array<[string, string]> = [
     ['scope', '查看当前共享范围（只读）。'],
     ['capabilities', '列出当前可用的只读能力（op / action / 说明）。'],
-    ['library', '文献、检索与结构：list / get / search / pages / outline / references。'],
+    ['library', '文献、检索与结构：list / get / search / pages / ocr（读已有 OCR 结果）/ outline / references。'],
     ['notes', '笔记全生命周期：list / list_for_document / create / update / set_tags / delete / restore（写入需允许整理）。'],
     ['annotations', '批注：list_for_document / create / update / delete / restore（写入需允许整理）。'],
     ['organize', '整理与撤销：preview / apply / undo（标签/题录/文件夹）+ folders / projects / 排序 / 回收站；写操作需允许整理。'],
-    ['compute', '长任务：start / status / cancel；kind=summary（全书摘要）/ translate（整篇翻译）/ ask（问答，异步 job）。'],
+    ['compute', '长任务：start / status / cancel；kind=summary（全书摘要）/ translate（整篇翻译）/ ask（问答）/ ocr（补扫描页 OCR）。'],
     ['reading', '阅读会话：sessions / tasks / summary。'],
     ['system', '系统状态：health。']
   ];
@@ -188,6 +188,7 @@ interface ToolArgs {
   question?: unknown;
   selection?: unknown;
   chat_session_id?: unknown;
+  scale?: unknown;
 }
 
 const MAX_PAGES = 8;
@@ -317,6 +318,37 @@ export async function executeTool(
           `/documents/${encodeURIComponent(documentId)}/pages/${page}/text`
         );
         pages.push({ page: row.page, text: row.text, origin: row.origin });
+      }
+      return { document_id: documentId, pages };
+    }
+    if (action === 'ocr') {
+      const from = optionalInt(args.from, 'from', 1, 100000);
+      const to = optionalInt(args.to, 'to', 1, 100000);
+      if (from == null) throw new Error('ocr 需要 from');
+      const end = to ?? from;
+      if (end < from) throw new Error('to 不能小于 from');
+      if (end - from + 1 > MAX_PAGES) throw new Error(`单次最多 ${MAX_PAGES} 页`);
+      const pages: Array<{
+        page: number;
+        origin: string;
+        hasOcr: boolean;
+        text: string;
+        boxes: string;
+      }> = [];
+      for (let page = from; page <= end; page += 1) {
+        const row = await api.request<{
+          page: number;
+          text: string;
+          origin?: string;
+          boxes?: string;
+        }>('GET', `/documents/${encodeURIComponent(documentId)}/pages/${page}/text`);
+        pages.push({
+          page: row.page,
+          origin: row.origin ?? 'native',
+          hasOcr: row.origin === 'ocr',
+          text: row.text,
+          boxes: row.boxes ?? ''
+        });
       }
       return { document_id: documentId, pages };
     }
@@ -610,8 +642,8 @@ export async function executeTool(
 
   if (name === 'compute') {
     const kind = args.kind;
-    if (kind !== 'summary' && kind !== 'translate' && kind !== 'ask') {
-      throw new Error('compute.kind 必须是 summary / translate / ask');
+    if (kind !== 'summary' && kind !== 'translate' && kind !== 'ask' && kind !== 'ocr') {
+      throw new Error('compute.kind 必须是 summary / translate / ask / ocr');
     }
     const documentId = requireString(args.document_id, 'document_id');
     assertDocumentAllowed(scope, documentId);
@@ -625,7 +657,7 @@ export async function executeTool(
         const question = requireString(args.question, 'question');
         if (question.length > 4000) throw new Error('question 最多 4000 字');
         const page = optionalInt(args.page, 'page', 1, 100000);
-        return jobs.start(
+        return await jobs.start(
           api,
           {
             documentId,
@@ -651,10 +683,43 @@ export async function executeTool(
         throw new Error(`compute(ask) 不支持 action=${action}`);
       }
       const jobId = requireString(args.job_id, 'job_id');
-      const snapshot =
-        action === 'status' ? jobs.get(jobId, owner) : jobs.cancel(jobId, owner);
-      if (!snapshot) throw new Error('任务不存在或不属于当前 agent');
-      return snapshot;
+      return await (action === 'status'
+        ? jobs.get(api, jobId, owner)
+        : jobs.cancel(api, jobId, owner));
+    }
+
+    if (kind === 'ocr') {
+      const jobs = context.jobs;
+      if (!jobs) throw new Error('当前运行环境没有任务管理器');
+      const owner = context.agentName ?? 'agent';
+      if (action === 'start') {
+        assertWriteAllowed(scope, 'OCR 会写回页面正文，需要在共享范围里勾选「允许整理」。');
+        let pages: number[] | undefined;
+        if (args.pages !== undefined) {
+          if (!Array.isArray(args.pages) || !args.pages.every((page) => Number.isInteger(page))) {
+            throw new Error('pages 必须是整数数组');
+          }
+          pages = args.pages as number[];
+        }
+        const scale = optionalInt(args.scale, 'scale', 1, 3);
+        return await jobs.startOcr(
+          api,
+          {
+            documentId,
+            ...(pages ? { pages } : {}),
+            ...(args.force === true ? { force: true } : {}),
+            ...(scale !== undefined ? { scale } : {})
+          },
+          owner
+        );
+      }
+      if (action !== 'status' && action !== 'cancel') {
+        throw new Error(`compute(ocr) 不支持 action=${action}`);
+      }
+      const jobId = requireString(args.job_id, 'job_id');
+      return await (action === 'status'
+        ? jobs.get(api, jobId, owner)
+        : jobs.cancel(api, jobId, owner));
     }
 
     if (action === 'status') {
