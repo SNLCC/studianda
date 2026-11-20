@@ -8,6 +8,7 @@ import type {
   NoteRecord
 } from '@studianda/shared';
 import { Backlinks, type BacklinkTarget } from './Backlinks.js';
+import { IdentityBadge } from './IdentityBadge.js';
 import { confirmPurgeAnnotation } from './note-purge.js';
 import type { ConfirmAction } from './dialog-utils.js';
 import { MarkdownContent } from './MarkdownContent.js';
@@ -433,6 +434,7 @@ export function AnnotationPanel({
                   <span className="kr-annotation__kind">
                     {STYLES[annotation.style] ?? annotation.style ?? '批注'}
                   </span>
+                  {annotation.origin === 'ai' ? <IdentityBadge kind="agent" /> : null}
                 </div>
                 {annotation.content.trim() ? (
                   <MarkdownContent

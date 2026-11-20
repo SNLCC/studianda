@@ -119,6 +119,7 @@ export {
   type MarkdownTreeNode
 } from './markdown-tree.js';
 export { Backlinks, type BacklinkTarget, type BacklinksProps } from './Backlinks.js';
+export { IdentityBadge } from './IdentityBadge.js';
 export {
   PURGE_ANNOTATION_CONFIRM_TEXT,
   PURGE_NOTE_CONFIRM_TEXT,

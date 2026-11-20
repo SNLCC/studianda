@@ -8,6 +8,7 @@ import type {
   NoteRecord
 } from '@studianda/shared';
 import { Backlinks, type BacklinkTarget } from './Backlinks.js';
+import { IdentityBadge } from './IdentityBadge.js';
 import { MarkdownContent } from './MarkdownContent.js';
 import { MarkdownEditor, type MarkdownImageUpload } from './MarkdownEditor.js';
 import { confirmPurgeNote } from './note-purge.js';
@@ -180,6 +181,7 @@ export function NotesPanel({
                 <li key={note.id} className="kr-note kr-note--trash">
                   <div className="kr-note__head">
                     <span>{note.page === 0 ? '整篇文献' : `第 ${note.page} 页`}</span>
+                    {note.origin === 'ai' ? <IdentityBadge kind="agent" /> : null}
                     <span className="kr-muted">
                       {new Date(note.created).toLocaleDateString()}
                     </span>
@@ -256,6 +258,7 @@ export function NotesPanel({
                 <>
                   <div className="kr-note__head">
                     <span>{note.page === 0 ? '整篇文献' : `第 ${note.page} 页`}</span>
+                    {note.origin === 'ai' ? <IdentityBadge kind="agent" /> : null}
                     <span className="kr-muted">
                       {new Date(note.created).toLocaleDateString()}
                     </span>

@@ -13010,3 +13010,35 @@ details.kr-outline2__card > summary::-webkit-details-marker {
   background: var(--kr-paper-sunk);
   font-family: var(--kr-font-mono);
 }
+
+/* 身份徽标：用户 / Agent，颜色 + 图标 + 文字三重编码。 */
+.kr-identity {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--kr-line);
+  background: var(--kr-paper);
+  color: var(--kr-ink-soft);
+  font-size: 11px;
+  line-height: 1.7;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.kr-identity--agent {
+  border-color: var(--kr-celadon-deep);
+  background: var(--kr-celadon-soft);
+  color: var(--kr-celadon-deep);
+}
+.kr-identity--md {
+  font-size: 12px;
+  padding: 2px 9px;
+}
+.kr-identity__mark {
+  font-size: 10px;
+  line-height: 1;
+}
+.kr-identity__label {
+  font-weight: 600;
+}
