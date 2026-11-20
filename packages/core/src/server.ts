@@ -44,6 +44,7 @@ import { registerLibraryRoutes } from './server/library-routes.js';
 import { registerMarkdownRoutes } from './server/markdown-routes.js';
 import { registerReferenceGraphRoutes } from './server/reference-graph-routes.js';
 import { registerModelServiceRoutes, registerModelTestRoute } from './server/model-service-routes.js';
+import { registerAgentRoutes } from './server/agent-routes.js';
 import { registerSettingsRoutes, registerSettingsUpdateRoutes } from './server/settings-routes.js';
 import { registerSpeechRoutes } from './server/speech-routes.js';
 import { registerWebSearchRoutes } from './server/web-search-routes.js';
@@ -1486,6 +1487,9 @@ export function buildServer(options: ServerOptions): FastifyInstance {
 
   // 设置写入路由见 server/settings-routes.ts（注册位置保持在 chat 之后不变）。
   registerSettingsUpdateRoutes(app, { store: options.store, secrets: options.secrets });
+
+  // Agent 共享范围：单一活跃 scope，存 settings；只允许应用/用户写（agent 工具只读）。
+  registerAgentRoutes(app, { store: options.store });
 
   return app;
 }

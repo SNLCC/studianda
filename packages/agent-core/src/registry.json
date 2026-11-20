@@ -931,6 +931,20 @@
       "caps": [
         "read"
       ]
+    },
+    {
+      "id": "scope.get",
+      "tool": "scope",
+      "action": "get",
+      "effect": "read",
+      "risk": "low",
+      "phase": "P0",
+      "caps": [
+        "read"
+      ],
+      "routes": [
+        "GET /api/v1/agent/scope"
+      ]
     }
   ],
   "never": [
@@ -1006,6 +1020,14 @@
         "GET /api/v1/settings",
         "POST /api/v1/settings/tokenizer",
         "PUT /api/v1/settings"
+      ]
+    },
+    {
+      "id": "agent-scope-write",
+      "reason": "共享范围只能由应用/用户设置；agent 工具只读",
+      "routes": [
+        "PUT /api/v1/agent/scope",
+        "DELETE /api/v1/agent/scope"
       ]
     }
   ]

@@ -17,8 +17,15 @@ import { CoreHttpApi, CoreUnavailableError, resolveDataDir } from './core-client
  */
 
 const dataDir = resolveDataDir();
-const scope = scopeFromEnv(process.env.STUDIANDA_AGENT_SCOPE);
+const envScope =
+  process.env.STUDIANDA_AGENT_SCOPE === undefined
+    ? null
+    : scopeFromEnv(process.env.STUDIANDA_AGENT_SCOPE);
 const api = new CoreHttpApi(dataDir);
+
+async function currentScope() {
+  return envScope ?? (await api.getScope());
+}
 
 const server = new McpServer(
   { name: 'studianda', version: '0.1.3' },
@@ -47,7 +54,7 @@ for (const spec of toolSpecs()) {
     },
     async (args) => {
       try {
-        const result = await executeTool(spec.name, args, { scope, api });
+        const result = await executeTool(spec.name, args, { scope: await currentScope(), api });
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]
         };

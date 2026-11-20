@@ -53,6 +53,7 @@ import {
 } from './asset-index-notice.js';
 import { ProjectsView } from './ProjectsView.js';
 import { FlowsView } from './FlowsView.js';
+import { AgentWorkbench } from './AgentWorkbench.js';
 import { CorpusSessionsView } from './CorpusSessionsView.js';
 import { ZoteroBrowser } from './ZoteroBrowser.js';
 import {
@@ -162,10 +163,19 @@ function BooksIcon({ collapsed }: { collapsed: boolean }): JSX.Element {
 function SidebarNavIcon({
   name
 }: {
-  name: 'library' | 'trash' | 'zotero' | 'notes' | 'graph' | 'project' | 'corpus' | 'flows';
+  name: 'library' | 'trash' | 'zotero' | 'notes' | 'graph' | 'project' | 'corpus' | 'flows' | 'agent';
 }): JSX.Element {
   // 侧栏导航图标：16×16、1.3 描边、currentColor，与 reader-icons 同一画法。
   // 全部为手绘基础图元（矩形/圆/直线），未复制任何第三方图标库 path 数据。
+  if (name === 'agent') {
+    // Agent：四角星 + 读取光环，表示"外部能力接进来"。
+    return (
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <circle cx="8" cy="8" r="5.2" fill="none" stroke="currentColor" strokeWidth="1.2" strokeDasharray="2.2 2.2" />
+        <path d="M8 3.6l1.1 3.3 3.3 1.1-3.3 1.1L8 12.4 6.9 9.1 3.6 8l3.3-1.1z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+      </svg>
+    );
+  }
   if (name === 'library') {
     return (
       <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -302,6 +312,7 @@ function LibrarySidebar({
   showReferenceGraph,
   showProjects,
   showFlows,
+  showAgent,
   showCorpus,
   importing,
   folders,
@@ -321,6 +332,7 @@ function LibrarySidebar({
   onReferenceGraph,
   onProjects,
   onFlows,
+  onAgent,
   onCorpus,
   onImport,
   onSettings
@@ -334,6 +346,7 @@ function LibrarySidebar({
   showReferenceGraph: boolean;
   showProjects: boolean;
   showFlows: boolean;
+  showAgent: boolean;
   showCorpus: boolean;
   importing: boolean;
   folders: FolderSummary[];
@@ -353,6 +366,7 @@ function LibrarySidebar({
   onReferenceGraph(): void;
   onProjects(): void;
   onFlows(): void;
+  onAgent(): void;
   onCorpus(): void;
   onImport(): void;
   onSettings(): void;
@@ -378,6 +392,7 @@ function LibrarySidebar({
           !showReferenceGraph &&
           !showProjects &&
           !showFlows &&
+          !showAgent &&
           !showCorpus &&
           selectedFolderId === null
             ? ' is-active'
@@ -458,6 +473,19 @@ function LibrarySidebar({
             <SidebarNavIcon name="project" />
           </span>
           <span className="kr-app-sidebar__nav-label">项目</span>
+        </span>
+      </button>
+      <button
+        type="button"
+        className={`kr-app-sidebar__nav${showAgent ? ' is-active' : ''}`}
+        onClick={onAgent}
+        title="Agent 工作台：把当前文献 / 项目共享给外部 agent（只读），并生成任务说明"
+      >
+        <span className="kr-app-sidebar__nav-main">
+          <span className="kr-app-sidebar__nav-icon">
+            <SidebarNavIcon name="agent" />
+          </span>
+          <span className="kr-app-sidebar__nav-label">Agent</span>
         </span>
       </button>
       <button
@@ -840,6 +868,9 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
   const [showProjects, setShowProjects] = useState(false);
   // 阅读流程工作区（文件系统里的 L1 用户读法；与其它工作区互斥）。
   const [showFlows, setShowFlows] = useState(false);
+  const [showAgent, setShowAgent] = useState(false);
+  /** 打开 Agent 工作台前记录的当前阅读位置：工作台需要它作为默认文献/页码。 */
+  const [agentPreset, setAgentPreset] = useState<{ documentId?: string; page?: number }>({});
   // 跨篇会话工作区（多篇文献共用一个会话范围快照）。
   const [showCorpus, setShowCorpus] = useState(false);
   // 从文献库进入跨篇会话时，一次性请求打开「新建会话（多选文献）」弹窗。
@@ -866,6 +897,12 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     !showReferenceGraph &&
     !showProjects &&
     !showCorpus;
+  // Agent 工作台只独占一种视图：其它视图被打开时自动让位，避免两层页面叠着。
+  useEffect(() => {
+    if (showTrash || showZotero || showStandaloneNotes || showReferenceGraph || showProjects || flowsViewActive || showCorpus) {
+      setShowAgent(false);
+    }
+  }, [showTrash, showZotero, showStandaloneNotes, showReferenceGraph, showProjects, flowsViewActive, showCorpus]);
   // 文件夹：null = 全部文献；'' = 未分类；其它 = 真实文件夹 id。
   const [folderId, setFolderId] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<LibraryCategoryFilter>('all');
@@ -908,6 +945,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     showReferenceGraph ? '1' : '0',
     showProjects ? '1' : '0',
     flowsViewActive ? '1' : '0',
+    showAgent ? '1' : '0',
     showCorpus ? '1' : '0',
     folderId ?? '',
     selected?.document.id ?? '',
@@ -2507,6 +2545,20 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setLibraryNotice('');
   };
 
+  const openAgentView = (): void => {
+    setAgentPreset({ documentId: selected?.document.id, page: selected?.page });
+    setSelected(null);
+    setShowTrash(false);
+    setShowZotero(false);
+    setShowStandaloneNotes(false);
+    setShowReferenceGraph(false);
+    setShowProjects(false);
+    setShowFlows(false);
+    setShowCorpus(false);
+    setShowAgent(true);
+    setLibraryNotice('');
+  };
+
   /** 阅读流程工作区：清掉当前文献与其它视图/文件夹/筛选，避免标题与筛选条件残留。 */
   const openFlowsView = (): void => {
     setSelected(null);
@@ -3104,6 +3156,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
             showReferenceGraph={false}
             showProjects={false}
             showFlows={false}
+            showAgent={false}
             showCorpus={false}
             importing={importActive}
             folders={folders}
@@ -3123,6 +3176,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
             onReferenceGraph={openReferenceGraphView}
             onProjects={openProjectsView}
             onFlows={openFlowsView}
+            onAgent={openAgentView}
             onCorpus={openCorpusView}
             onImport={() => void startImport()}
             onSettings={() => setShowSettings(true)}
@@ -3242,7 +3296,9 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
       ? '独立笔记'
       : showProjects
         ? '项目'
-        : showCorpus
+        : showAgent
+          ? 'Agent'
+          : showCorpus
           ? '跨篇会话'
           : showZotero
             ? '从 Zotero 导入'
@@ -3260,6 +3316,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     !showReferenceGraph &&
     !showProjects &&
     !flowsViewActive &&
+    !showAgent &&
     !showCorpus &&
     !showTrash;
 
@@ -3286,6 +3343,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
           showReferenceGraph={showReferenceGraph}
           showProjects={showProjects}
           showFlows={flowsViewActive}
+          showAgent={showAgent}
           showCorpus={showCorpus}
           importing={importActive}
           folders={folders}
@@ -3319,6 +3377,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
           onReferenceGraph={openReferenceGraphView}
           onProjects={openProjectsView}
           onFlows={openFlowsView}
+          onAgent={openAgentView}
           onCorpus={openCorpusView}
           onImport={() => void startImport()}
           onSettings={() => setShowSettings(true)}
@@ -3394,7 +3453,9 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
                     ? '给精读请求加一段自己的读法（L1，仅作方法参考）；停用后不再注入，本版不支持脚本流程。'
                     : showProjects
                       ? '把文献按课题或论文分组；项目只保存关联，不移动、不删除文献。'
-                      : showCorpus
+                      : showAgent
+                        ? '把当前范围共享给外部 agent（只读），并生成可直接粘贴的任务说明。'
+                        : showCorpus
                         ? '选几篇文献一起提问；范围在建立会话时冻结，之后新增文献不自动加入。'
                         : !showZotero && !showTrash && folderId !== null
                         ? `共 ${folderScopeCounts.total} 篇 · 著作 ${folderScopeCounts.book} · 论文 ${folderScopeCounts.paper} · 其他 ${folderScopeCounts.other + folderScopeCounts.unknown}`
@@ -3458,6 +3519,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
           showReferenceGraph ||
           showProjects ||
           flowsViewActive ||
+          showAgent ||
           showCorpus
             ? ' is-hidden'
             : ''
@@ -3809,6 +3871,13 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
             setShowZotero(false);
             setSelected({ document });
           }}
+        />
+      ) : showAgent ? (
+        <AgentWorkbench
+          api={api}
+          documents={documentsQuery.data ?? []}
+          currentDocumentId={agentPreset.documentId}
+          currentPage={agentPreset.page}
         />
       ) : flowsViewActive ? (
         <FlowsView api={api} />

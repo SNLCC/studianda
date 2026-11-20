@@ -3,14 +3,15 @@
   "apiVersion": 1,
   "note": "由 scripts/check-contract.mjs 生成；不要手工编辑。",
   "counts": {
-    "serverRoutes": 228,
-    "clientRoutes": 223,
+    "serverRoutes": 231,
+    "clientRoutes": 226,
     "missingFromClient": 0,
     "clientOnly": 0,
     "allowlistedMissing": 0,
     "exemptFromClient": 5
   },
   "serverRoutes": [
+    "DELETE /api/v1/agent/scope",
     "DELETE /api/v1/annotations/:p",
     "DELETE /api/v1/annotations/:p/purge",
     "DELETE /api/v1/corpus-sessions/:p",
@@ -29,6 +30,7 @@
     "DELETE /api/v1/projects/:p",
     "DELETE /api/v1/projects/:p/documents/:p",
     "DELETE /api/v1/secrets/:p",
+    "GET /api/v1/agent/scope",
     "GET /api/v1/backlinks",
     "GET /api/v1/backups",
     "GET /api/v1/backups/jobs/:p",
@@ -223,6 +225,7 @@
     "POST /api/v1/zotero/collections/:p/sync",
     "POST /api/v1/zotero/items/:p/open",
     "POST /api/v1/zotero/test",
+    "PUT /api/v1/agent/scope",
     "PUT /api/v1/documents/:p/author",
     "PUT /api/v1/documents/:p/chat-sessions",
     "PUT /api/v1/documents/:p/navigation",

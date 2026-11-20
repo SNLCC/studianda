@@ -3027,3 +3027,33 @@ export {
   type ParagraphResult,
   type ParagraphGroup
 } from './paragraph.js';
+
+/** Agent 共享范围（P0 存在 settings 的 `agent.scope`，单活跃 scope；P1 再迁到表）。 */
+export type AgentScopeKind = 'none' | 'library' | 'documents';
+
+export interface AgentScope {
+  kind: AgentScopeKind;
+  /** 项目级任务的项目 id；单篇/选区为 null。 */
+  projectId: string | null;
+  /** kind='documents' 时允许读取的文献。 */
+  documentIds: string[];
+  /** 阅读位置（只共享页码，不共享整页文本）。 */
+  page: number | null;
+  /** 用户显式共享的选文（≤2000 字）。 */
+  selection: string;
+  caps: string[];
+  /** ISO 时间；null 表示不自动过期（P0 默认 2 小时，由 UI 写入）。 */
+  expiresAt: string | null;
+}
+
+export function defaultAgentScope(): AgentScope {
+  return {
+    kind: 'none',
+    projectId: null,
+    documentIds: [],
+    page: null,
+    selection: '',
+    caps: [],
+    expiresAt: null
+  };
+}

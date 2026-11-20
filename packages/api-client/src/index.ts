@@ -1,4 +1,5 @@
 import type {
+  AgentScope,
   AnnotationRecord,
   ApiErrorBody,
   BacklinkRecord,
@@ -623,6 +624,10 @@ export interface ApiClient {
   /** 页遮罩重建索引的进度/状态（改规则后进度条与失败原因）。 */
   getMaskIndexStatus(documentId: string): Promise<MaskIndexStatus>;
   getSettings(): Promise<SettingsMap>;
+  /** Agent 共享范围（单一活跃 scope；只允许应用/用户写，agent 工具只读）。 */
+  getAgentScope(): Promise<AgentScope>;
+  setAgentScope(scope: AgentScope): Promise<AgentScope>;
+  clearAgentScope(): Promise<AgentScope>;
   /** 提示词分层 P1-2：只读列出 `<dataDir>/flows` 下的 L1 用户阅读流程（含启用状态与跳过原因）。 */
   listFlows(): Promise<FlowListResponse>;
   /** 读取单个流程的完整正文（编辑用；只返回通过服务端校验的流程）。 */
@@ -1959,6 +1964,13 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       ),
 
     getSettings: () => request<SettingsMap>('/settings'),
+    getAgentScope: () => request<AgentScope>('/agent/scope'),
+    setAgentScope: (scope) =>
+      request<AgentScope>('/agent/scope', {
+        method: 'PUT',
+        body: JSON.stringify(scope)
+      }),
+    clearAgentScope: () => request<AgentScope>('/agent/scope', { method: 'DELETE' }),
     listFlows: () => request<FlowListResponse>('/flows'),
     getFlow: (id) => request<FlowDetailRecord>(`/flows/${encodeURIComponent(id)}`),
     createFlow: (input) =>

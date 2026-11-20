@@ -12870,3 +12870,143 @@ details.kr-outline2__card > summary::-webkit-details-marker {
   text-align: left;
   font-size: 13px;
 }
+
+/* Agent 工作台（P0）：只做共享范围与交接说明，不画聊天框。 */
+.kr-agent {
+  padding: 20px 24px 32px;
+  max-width: 1080px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.kr-agent__head {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.kr-agent__head h1 {
+  margin: 0 0 4px;
+  font-size: 20px;
+}
+.kr-agent__head p {
+  margin: 0;
+  max-width: 620px;
+}
+.kr-agent__scope {
+  min-width: 220px;
+  padding: 10px 14px;
+  border: 1px solid var(--kr-line);
+  border-left: 3px solid var(--kr-celadon-deep);
+  border-radius: 8px;
+  background: var(--kr-celadon-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kr-agent__scope.is-none {
+  border-left-color: var(--kr-vermilion);
+  background: var(--kr-vermilion-soft);
+}
+.kr-agent__scope-label {
+  font-size: 12px;
+  color: var(--kr-ink-soft);
+}
+.kr-agent__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+}
+@media (max-width: 1000px) {
+  .kr-agent__grid { grid-template-columns: minmax(0, 1fr); }
+}
+.kr-agent__card {
+  border: 1px solid var(--kr-line);
+  border-radius: 10px;
+  background: var(--kr-paper-raised);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.kr-agent__card h2 {
+  margin: 0;
+  font-size: 15px;
+}
+.kr-agent__options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.kr-agent__option {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  border: 1px solid var(--kr-line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  background: var(--kr-paper);
+}
+.kr-agent__option.is-active {
+  border-color: var(--kr-celadon-deep);
+  box-shadow: inset 0 0 0 1px var(--kr-celadon-deep);
+}
+.kr-agent__option span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kr-agent__option small {
+  color: var(--kr-ink-soft);
+  font-size: 12px;
+}
+.kr-agent__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--kr-ink-soft);
+}
+.kr-agent__field select {
+  padding: 6px 8px;
+  border: 1px solid var(--kr-line);
+  border-radius: 6px;
+  background: var(--kr-paper);
+  color: var(--kr-ink);
+  font: inherit;
+}
+.kr-agent__brief {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--kr-line);
+  border-radius: 8px;
+  background: var(--kr-paper);
+  color: var(--kr-ink);
+  font-family: var(--kr-font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  resize: vertical;
+}
+.kr-agent__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.kr-agent__notice {
+  margin: 0;
+  color: var(--kr-celadon-deep);
+  font-size: 13px;
+}
+.kr-agent__hint {
+  color: var(--kr-ink-soft);
+  font-size: 12px;
+}
+.kr-agent__hint code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--kr-paper-sunk);
+  font-family: var(--kr-font-mono);
+}

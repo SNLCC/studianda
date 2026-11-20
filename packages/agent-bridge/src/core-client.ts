@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import type { CoreApi } from '@studianda/agent-core';
+import type { AgentScope, CoreApi } from '@studianda/agent-core';
 
 /** 只做 MCP ↔ Core HTTP 的协议翻译；不复制业务、不直接开数据库。 */
 
@@ -67,5 +67,25 @@ export class CoreHttpApi implements CoreApi {
       throw new Error(`Core ${response.status}: ${text.slice(0, 300)}`);
     }
     return (await response.json()) as T;
+  }
+
+  /** 读取应用写入的共享范围；Core 未运行或读取失败时退回 none。 */
+  async getScope(): Promise<AgentScope> {
+    try {
+      const row = await this.request<{
+        kind?: string;
+        documentIds?: unknown;
+      }>('GET', '/agent/scope');
+      if (row.kind === 'library') return { kind: 'library' };
+      if (row.kind === 'documents') {
+        const ids = Array.isArray(row.documentIds)
+          ? row.documentIds.filter((id): id is string => typeof id === 'string')
+          : [];
+        return ids.length > 0 ? { kind: 'documents', documentIds: ids } : { kind: 'none' };
+      }
+      return { kind: 'none' };
+    } catch {
+      return { kind: 'none' };
+    }
   }
 }
