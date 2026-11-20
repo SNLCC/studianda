@@ -12,6 +12,7 @@
     "dev:core": "pnpm --filter @studianda/core dev",
     "typecheck": "pnpm -r --if-present typecheck",
     "verify": "pnpm typecheck && pnpm test && pnpm check:contract && pnpm check:agent-coverage && pnpm check:host && pnpm check:ui && pnpm check:telemetry && pnpm check:governance && pnpm check:legal && pnpm build",
+    "verify:agent-bridge": "node scripts/verify-agent-bridge.mjs",
     "check:telemetry": "node scripts/check-telemetry.mjs",
     "check:governance": "node scripts/check-governance.mjs",
     "check:host": "node scripts/check-host-boundary.mjs",

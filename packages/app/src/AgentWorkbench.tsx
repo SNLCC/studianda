@@ -6,6 +6,7 @@ import {
   type DocumentSummary,
   type ProjectSummary
 } from '@studianda/shared';
+import type { RuntimeAdapter } from './runtime.js';
 
 type Target = 'none' | 'document' | 'project' | 'library';
 
@@ -34,16 +35,19 @@ function describe(scope: AgentScope, documents: DocumentSummary[], projects: Pro
  */
 export function AgentWorkbench({
   api,
+  adapter,
   documents,
   currentDocumentId,
   currentPage
 }: {
   api: ApiClient;
+  adapter: RuntimeAdapter;
   documents: DocumentSummary[];
   currentDocumentId?: string;
   currentPage?: number;
 }): React.JSX.Element {
   const [scope, setScope] = useState<AgentScope>(() => defaultAgentScope());
+  const [dataDir, setDataDir] = useState('');
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [target, setTarget] = useState<Target>('none');
   const [documentId, setDocumentId] = useState(currentDocumentId ?? '');
@@ -77,6 +81,20 @@ export function AgentWorkbench({
   }, [api, currentDocumentId]);
 
   useEffect(() => {
+    let disposed = false;
+    if (!adapter.getDataLocation) return undefined;
+    void adapter
+      .getDataLocation()
+      .then((value) => {
+        if (!disposed) setDataDir(value);
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+    };
+  }, [adapter]);
+
+  useEffect(() => {
     if (!documentId && currentDocumentId) setDocumentId(currentDocumentId);
   }, [currentDocumentId, documentId]);
 
@@ -100,6 +118,28 @@ export function AgentWorkbench({
   useEffect(() => {
     setBrief(briefText);
   }, [briefText]);
+
+  const dshConfig = useMemo(() => {
+    const install = '<安装目录，例如 C:\\Users\\你\\AppData\\Local\\Programs\\Studianda>';
+    const data = dataDir || '<资料目录>';
+    return [
+      '- id: mcp-studianda',
+      "  name: '@deepseek-ai/dsh-mcp-client'",
+      '  config:',
+      '    serverName: studianda',
+      '    transport: stdio',
+      `    command: '${install}\\Studianda.exe'`,
+      '    args:',
+      `      - '${install}\\resources\\agent-bridge.mjs'`,
+      "      - '--data-dir'",
+      `      - '${data}'`,
+      '    env:',
+      "      ELECTRON_RUN_AS_NODE: '1'",
+      `      STUDIANDA_DATA_DIR: '${data}'`,
+      '    failOnStartupError: true',
+      '    toolCallTimeoutMs: 120000'
+    ].join('\n');
+  }, [dataDir]);
 
   const save = async (): Promise<void> => {
     setBusy(true);
@@ -152,6 +192,15 @@ export function AgentWorkbench({
       setNotice('任务说明已复制，粘贴给 DSH 即可。');
     } catch {
       setNotice('复制失败：请手动选中任务说明复制。');
+    }
+  };
+
+  const copyConfig = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(dshConfig);
+      setNotice('DSH 配置已复制；粘到 profile 的 cordis.patch.yml 后重启 DSH。');
+    } catch {
+      setNotice('复制失败：请展开配置手动复制。');
     }
   };
 
@@ -269,6 +318,15 @@ export function AgentWorkbench({
             接入方式：设置 → 外部 Agent（下一步）。当前 P0 可用环境变量
             <code> STUDIANDA_AGENT_SCOPE </code>临时验证。
           </div>
+          <div className="kr-agent__actions">
+            <button type="button" className="kr-ghost" onClick={() => void copyConfig()}>
+              复制 DSH 接入配置
+            </button>
+          </div>
+          <details className="kr-agent__config-details">
+            <summary>查看 YAML（安装目录与资料目录需替换）</summary>
+            <pre className="kr-agent__config">{dshConfig}</pre>
+          </details>
         </div>
       </div>
     </section>

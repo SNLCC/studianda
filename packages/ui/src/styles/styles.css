@@ -13010,6 +13010,26 @@ details.kr-outline2__card > summary::-webkit-details-marker {
   background: var(--kr-paper-sunk);
   font-family: var(--kr-font-mono);
 }
+.kr-agent__config-details summary {
+  cursor: pointer;
+  color: var(--kr-ink-soft);
+  font-size: 12px;
+}
+.kr-agent__config {
+  margin: 8px 0 0;
+  padding: 10px;
+  border: 1px solid var(--kr-line);
+  border-radius: 8px;
+  background: var(--kr-paper);
+  color: var(--kr-ink);
+  font-family: var(--kr-font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 320px;
+  overflow: auto;
+}
 
 /* 身份徽标：用户 / Agent，颜色 + 图标 + 文字三重编码。 */
 .kr-identity {

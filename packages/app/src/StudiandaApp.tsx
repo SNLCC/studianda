@@ -3875,6 +3875,7 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
       ) : showAgent ? (
         <AgentWorkbench
           api={api}
+          adapter={adapter}
           documents={documentsQuery.data ?? []}
           currentDocumentId={agentPreset.documentId}
           currentPage={agentPreset.page}
