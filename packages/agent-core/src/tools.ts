@@ -125,6 +125,7 @@ const IMPLEMENTED_ACTIONS: Record<string, string[]> = {
     'trash_document',
     'restore_document'
   ],
+  compute: ['start', 'status', 'cancel'],
   reading: ['sessions', 'tasks', 'summary'],
   system: ['health']
 };
@@ -137,6 +138,7 @@ export function toolSpecs(): ToolSpec[] {
     ['notes', '笔记全生命周期：list / list_for_document / create / update / set_tags / delete / restore（写入需允许整理）。'],
     ['annotations', '批注：list_for_document / create / update / delete / restore（写入需允许整理）。'],
     ['organize', '整理与撤销：preview / apply / undo（标签/题录/文件夹）+ folders / projects / 排序 / 回收站；写操作需允许整理。'],
+    ['compute', '长任务：start / status / cancel；kind=summary（全书摘要）或 translate（整篇翻译）。'],
     ['reading', '阅读会话：sessions / tasks / summary。'],
     ['system', '系统状态：health。']
   ];
@@ -176,6 +178,10 @@ interface ToolArgs {
   after_id?: unknown;
   document_ids?: unknown;
   archived?: unknown;
+  pages?: unknown;
+  language?: unknown;
+  force?: unknown;
+  job_id?: unknown;
 }
 
 const MAX_PAGES = 8;
@@ -589,6 +595,49 @@ export async function executeTool(
       items,
       agentName: context.agentName ?? 'agent'
     });
+  }
+
+  if (name === 'compute') {
+    const kind = args.kind;
+    if (kind !== 'summary' && kind !== 'translate') {
+      throw new Error('compute.kind 必须是 summary / translate');
+    }
+    const documentId = requireString(args.document_id, 'document_id');
+    assertDocumentAllowed(scope, documentId);
+    const encoded = encodeURIComponent(documentId);
+    if (action === 'status') {
+      if (kind === 'summary') {
+        return api.request('GET', `/documents/${encoded}/book-summary`);
+      }
+      return api.request('GET', `/documents/${encoded}/translation/progress`);
+    }
+    if (action !== 'start' && action !== 'cancel') {
+      throw new Error(`compute 不支持 action=${action}`);
+    }
+    assertWriteAllowed(scope, '启动/取消生成任务需要在共享范围里勾选「允许整理」。');
+    if (kind === 'summary') {
+      if (action === 'start') {
+        return api.request('POST', `/documents/${encoded}/book-summary/start`, {});
+      }
+      return api.request('POST', `/documents/${encoded}/book-summary/cancel`, {});
+    }
+    if (action === 'start') {
+      let pages: number[] | undefined;
+      if (args.pages !== undefined) {
+        if (!Array.isArray(args.pages) || !args.pages.every((page) => Number.isInteger(page))) {
+          throw new Error('pages 必须是整数数组');
+        }
+        pages = args.pages as number[];
+      }
+      return api.request('POST', `/documents/${encoded}/translation`, {
+        ...(pages ? { pages } : {}),
+        ...(args.language !== undefined
+          ? { language: optionalString(args.language, 'language', 20) }
+          : {}),
+        force: args.force === true
+      });
+    }
+    return api.request('POST', `/documents/${encoded}/translation/stop`, {});
   }
 
   if (name === 'reading') {

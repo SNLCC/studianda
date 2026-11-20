@@ -219,3 +219,42 @@ describe('organize 扩展：文件夹 / 项目 / 排序 / 回收站', () => {
     expect(trash.calls[0]?.method).toBe('DELETE');
   });
 });
+
+describe('compute 异步任务', () => {
+  it('启动全书摘要（write）与查询翻译进度（read）', async () => {
+    const summary = routedApi({
+      'POST /documents/doc-1/book-summary/start': { job: { status: 'running' } }
+    });
+    await executeTool(
+      'compute',
+      { action: 'start', kind: 'summary', document_id: 'doc-1' },
+      {
+        scope: { kind: 'documents', documentIds: ['doc-1'], caps: ['read', 'write'] },
+        api: summary.api
+      }
+    );
+    expect(summary.calls[0]?.path).toBe('/documents/doc-1/book-summary/start');
+
+    const progress = routedApi({
+      'GET /documents/doc-1/translation/progress': { done: 1, total: 8 }
+    });
+    const result = (await executeTool(
+      'compute',
+      { action: 'status', kind: 'translate', document_id: 'doc-1' },
+      { scope: { kind: 'documents', documentIds: ['doc-1'], caps: ['read'] }, api: progress.api }
+    )) as { done: number };
+    expect(result.done).toBe(1);
+  });
+
+  it('只读范围不能启动生成任务', async () => {
+    const { api, calls } = routedApi({});
+    await expect(
+      executeTool(
+        'compute',
+        { action: 'start', kind: 'summary', document_id: 'doc-1' },
+        { scope: { kind: 'documents', documentIds: ['doc-1'], caps: ['read'] }, api }
+      )
+    ).rejects.toBeInstanceOf(ScopeError);
+    expect(calls).toHaveLength(0);
+  });
+});
