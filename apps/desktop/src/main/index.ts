@@ -930,6 +930,21 @@ function openTranslationWindow(input: {
   return { ok: true };
 }
 
+/**
+ * Windows 上 SIGTERM 是强制终止，Core 的退出钩子不一定能执行。
+ * 主进程在 Core 退出后按 pid 清理它写的 runtime.json，避免 bridge 读到陈旧握手。
+ */
+function removeCoreRuntimeFile(expectedPid?: number): void {
+  if (!dataDir) return;
+  const file = path.join(dataDir, RUNTIME_FILE_NAME);
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as { pid?: number };
+    if (expectedPid == null || parsed.pid === expectedPid) rmSync(file, { force: true });
+  } catch {
+    // 文件不存在/损坏：忽略。
+  }
+}
+
 function stopCore(): void {
   shuttingDown = true;
   if (coreRestartTimer) {
@@ -937,8 +952,14 @@ function stopCore(): void {
     coreRestartTimer = null;
   }
   if (core) {
+    const child = core;
+    const pid = child.pid;
+    // before-quit 不等待 Core 的 exit 事件：Electron 可能先退出，异步回调来不及跑。
+    // 因此这里同步按 pid 删除握手文件，再发终止信号。
+    removeCoreRuntimeFile(pid);
+    child.once('exit', () => removeCoreRuntimeFile(pid));
     try {
-      core.kill('SIGTERM');
+      child.kill('SIGTERM');
     } catch {
       // 忽略退出阶段的错误
     }
@@ -947,11 +968,13 @@ function stopCore(): void {
   // attach 到外部启动的 Core：当前桌面端退出时仍停止它（单客户端语义）；
   // 将来多宿主共享时需要改成引用计数/所有权协议，不能在这里直接杀。
   if (attachedCorePid != null) {
+    const pid = attachedCorePid;
     try {
-      process.kill(attachedCorePid, 'SIGTERM');
+      process.kill(pid, 'SIGTERM');
     } catch {
       // 进程已退出时忽略
     }
+    removeCoreRuntimeFile(pid);
     attachedCorePid = null;
   }
 }
@@ -970,6 +993,7 @@ async function stopCoreForUpdate(timeoutMs = 6000): Promise<void> {
   }
   shuttingDown = true;
   const child = core;
+  const childPid = child?.pid;
   core = null;
   const attached = attachedCorePid;
   attachedCorePid = null;
@@ -996,6 +1020,7 @@ async function stopCoreForUpdate(timeoutMs = 6000): Promise<void> {
       }
     });
   }
+  removeCoreRuntimeFile(childPid);
 
   if (attached != null) {
     try {
@@ -1014,6 +1039,7 @@ async function stopCoreForUpdate(timeoutMs = 6000): Promise<void> {
         // 已被系统回收
       }
     }
+    removeCoreRuntimeFile(attached);
   }
 }
 

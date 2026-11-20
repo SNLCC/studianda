@@ -48,6 +48,12 @@ const server = new McpServer(
 const inputSchema = {
   action: z.string().describe('动作名；见工具描述里的 actions'),
   document_id: z.string().optional().describe('文献 id'),
+  note_id: z.string().optional().describe('笔记 id'),
+  annotation_id: z.string().optional().describe('批注 id'),
+  query: z.string().optional().describe('检索词'),
+  types: z.string().optional().describe('检索类型，逗号分隔：document,tag,annotation,note,chunk'),
+  tags: z.array(z.string()).optional().describe('笔记标签'),
+  folder_path: z.string().optional().describe('笔记文件夹路径'),
   page: z.number().int().min(0).optional().describe('页码（写笔记可为 0 表示整篇）'),
   from: z.number().int().min(1).optional().describe('起始页（含）'),
   to: z.number().int().min(1).optional().describe('结束页（含）'),

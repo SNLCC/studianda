@@ -12,6 +12,19 @@ function fakeApi() {
   return { api, calls };
 }
 
+function routedApi(routes: Record<string, unknown>) {
+  const calls: Array<{ method: string; path: string; body?: unknown }> = [];
+  const api = {
+    request: async (method: string, path: string, body?: unknown) => {
+      calls.push({ method, path, body });
+      const key = `${method} ${path}`;
+      if (!(key in routes)) throw new Error(`unexpected request: ${key}`);
+      return routes[key];
+    }
+  } as unknown as CoreApi;
+  return { api, calls };
+}
+
 describe('Agent 写工具（notes / annotations create）', () => {
   it('写笔记：origin=ai、agentName 与 documentId 一并传给 Core', async () => {
     const { api, calls } = fakeApi();
@@ -73,5 +86,76 @@ describe('Agent 写工具（notes / annotations create）', () => {
         { scope: { kind: 'documents', documentIds: ['doc-1'], caps: ['read', 'write'] }, api }
       )
     ).rejects.toBeInstanceOf(ScopeError);
+  });
+});
+
+describe('Agent MCP-only 扩展：search 与笔记/批注生命周期', () => {
+  it('检索结果按 documents scope 过滤', async () => {
+    const { api, calls } = routedApi({
+      'GET /library-search?q=web': [
+        { kind: 'document', id: 'doc-1', documentId: 'doc-1', title: 'A' },
+        { kind: 'document', id: 'doc-2', documentId: 'doc-2', title: 'B' }
+      ]
+    });
+    const result = (await executeTool(
+      'library',
+      { action: 'search', query: 'web', limit: 10 },
+      { scope: { kind: 'documents', documentIds: ['doc-1'] }, api }
+    )) as { hits: Array<{ documentId: string }> };
+    expect(calls[0]?.path).toBe('/library-search?q=web');
+    expect(result.hits.map((hit) => hit.documentId)).toEqual(['doc-1']);
+  });
+
+  it('更新笔记：先校验归属，再 PATCH 内容', async () => {
+    const { api, calls } = routedApi({
+      'GET /documents/doc-1/notes': [{ id: 'n1' }],
+      'PATCH /notes/n1': { id: 'n1', content: '新正文' }
+    });
+    await executeTool(
+      'notes',
+      { action: 'update', document_id: 'doc-1', note_id: 'n1', content: '新正文' },
+      { scope: { kind: 'library', caps: ['read', 'write'] }, api, agentName: 'DSH' }
+    );
+    expect(calls.map((call) => `${call.method} ${call.path}`)).toEqual([
+      'GET /documents/doc-1/notes',
+      'PATCH /notes/n1'
+    ]);
+    expect(calls[1]?.body).toEqual({ content: '新正文' });
+  });
+
+  it('删除笔记走软删除；恢复批注查回收站', async () => {
+    const notes = routedApi({
+      'GET /documents/doc-1/notes': [{ id: 'n1' }],
+      'DELETE /notes/n1': undefined
+    });
+    const deleted = (await executeTool(
+      'notes',
+      { action: 'delete', document_id: 'doc-1', note_id: 'n1' },
+      { scope: { kind: 'library', caps: ['read', 'write'] }, api: notes.api }
+    )) as { deleted: boolean };
+    expect(deleted.deleted).toBe(true);
+
+    const annotations = routedApi({
+      'GET /documents/doc-1/annotations?trash=true': [{ id: 'a1' }],
+      'POST /annotations/a1/restore': { ok: true }
+    });
+    await executeTool(
+      'annotations',
+      { action: 'restore', document_id: 'doc-1', annotation_id: 'a1' },
+      { scope: { kind: 'library', caps: ['read', 'write'] }, api: annotations.api }
+    );
+    expect(annotations.calls[1]?.method).toBe('POST');
+  });
+
+  it('只读范围不能更新笔记，且不发任何请求', async () => {
+    const { api, calls } = routedApi({});
+    await expect(
+      executeTool(
+        'notes',
+        { action: 'update', document_id: 'doc-1', note_id: 'n1', content: 'x' },
+        { scope: { kind: 'library', caps: ['read'] }, api }
+      )
+    ).rejects.toBeInstanceOf(ScopeError);
+    expect(calls).toHaveLength(0);
   });
 });

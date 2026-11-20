@@ -7,6 +7,10 @@
  * 4. 关闭 Core、清理临时目录。
  *
  * 用法：node scripts/verify-agent-bridge.mjs
+ *       node scripts/verify-agent-bridge.mjs --bridge <打包后的 agent-bridge.mjs>
+ *
+ * 默认验证 `packages/agent-bridge/dist/agent-bridge.mjs`；传 `--bridge` 可验证安装包
+ * `resources/agent-bridge.mjs` 这个真正随包分发的文件。
  */
 import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
@@ -16,7 +20,11 @@ import { pathToFileURL } from 'node:url';
 
 const root = path.resolve(import.meta.dirname, '..');
 const coreEntry = path.join(root, 'packages', 'core', 'dist', 'index.js');
-const bridgeEntry = path.join(root, 'packages', 'agent-bridge', 'dist', 'agent-bridge.mjs');
+const bridgeFlag = process.argv.indexOf('--bridge');
+const bridgeEntry =
+  bridgeFlag >= 0
+    ? path.resolve(process.argv[bridgeFlag + 1] ?? '')
+    : path.join(root, 'packages', 'agent-bridge', 'dist', 'agent-bridge.mjs');
 const sdkClient = path.join(
   root,
   'packages',

@@ -1,6 +1,6 @@
 # 许可证来源与哈希
 
-生成时间：2026-11-19T18:23:36.785Z
+生成时间：2026-11-20T17:17:40.369Z
 
 “官方仓库”列取自各包 `package.json` 的 repository/homepage；许可证文件哈希取自安装包内实际文件。
 
@@ -139,6 +139,7 @@
 | MPL-2.0 组件源码归档（cssparser / cssparser-macros / dtoa-short / selectors） | cssparser 0.38.0、cssparser-macros 0.7.0、dtoa-short 0.3.5、selectors 0.41.0 | 随包源码归档 | https://crates.io/api/v1/crates/cssparser/0.38.0/download | — | 已核对 | 5 |
 | tesseract.js-core WASM（内嵌 Tesseract / Leptonica / libjpeg-turbo / libpng / libtiff / libwebp / giflib / openlibm / zlib） | tesseract.js-core 7.0.0 | 内嵌 WASM | https://github.com/naptha/tesseract.js-core/tree/v7.0.0 | — | 已核对 | 6 |
 | PDF.js WASM 解码器（JBIG2 / OpenJPEG / QCMS） | 6.4.299（pdfjs-dist） | 内嵌 WASM | https://www.npmjs.com/package/pdfjs-dist/v/6.4.299 | — | 已核对 | 3 |
+| Agent MCP bridge bundle（agent-bridge.mjs，内嵌 MCP SDK / zod 等 8 个 npm 包） | 0.1.3 | mcp-bridge-bundle | https://github.com/SNLCC/studianda | — | 未核对 | 2 |
 
 **来源哈希核对说明**
 
@@ -153,12 +154,13 @@
 - MPL-2.0 组件源码归档（cssparser / cssparser-macros / dtoa-short / selectors）：**已核对** —— 四个 .crate 为 crates.io 官方发布包（未修改的 Source Code Form），下载 URL 与 SHA-256 记录于 mpl-sources/README.md，随安装包 resources/legal/ 一并分发；artifacts 中的哈希由生成器现算，可与该 README 对照。
 - tesseract.js-core WASM（内嵌 Tesseract / Leptonica / libjpeg-turbo / libpng / libtiff / libwebp / giflib / openlibm / zlib）：**已核对** —— 随包（app.asar.unpacked）的六个 WASM 与 pnpm 安装的 tesseract.js-core@7.0.0 官方 npm 发行物逐字节一致；九个内嵌组件的许可证原文 URL 与 SHA-256 记录于 upstream/official/tesseract-core/SOURCES.json，artifacts 哈希可与仓库文件对照。Tesseract 为上游为 WebAssembly 适配而修改的分支，本项目未修改该 WASM。
 - PDF.js WASM 解码器（JBIG2 / OpenJPEG / QCMS）：**已核对** —— 三个 WASM 是 pdfjs-dist@6.4.299 官方 npm 包内的资源，随包位于 app.asar 的 /node_modules/pdfjs-dist/wasm/ 与 /out/core/node_modules/pdfjs-dist/wasm/，生成器从实际 app.asar 解出后算哈希；九份许可证/版权文本的 URL 与 SHA-256 记录于 upstream/official/pdfjs-wasm/SOURCES.json。
+- Agent MCP bridge bundle（agent-bridge.mjs，内嵌 MCP SDK / zod 等 8 个 npm 包）：**未核对** —— 由本仓库用 esbuild 从 pnpm-lock 锁定版本的依赖打包生成，无独立上游发布物可对照哈希；实际输入清单见 agent-bridge.mjs.meta.json，第三方许可证原文与逐包声明见 upstream/agent-bridge/。
 
 ### 随包实物逐文件哈希
 
 以下哈希由生成器从仓库工作区内的实际文件现算（asar 内资源从真实 `app.asar` 解出后计算）：
 
-安装器容器：`apps/desktop/release/Studianda-Setup-0.1.3.exe`（247913306 B，SHA-256 `3156766e92db7a377535abcdc5991ea6fdded05b0c35d2d073b1a03e56d9174d`）；随其分发的组件：NSIS 安装器 stub、nsis7z.dll、StdUtils.dll、UAC.dll、elevate.exe。
+安装器容器：`apps/desktop/release/Studianda-Setup-0.1.3.exe`（248449784 B，SHA-256 `42dcfb93f749bd1d7aa502c42b3bc6d1b31a4875576426a4c360e6011342e8dd`）；随其分发的组件：NSIS 安装器 stub、nsis7z.dll、StdUtils.dll、UAC.dll、elevate.exe。
 
 - **Electron 运行时二进制（第三方 DLL / ICU / Pak / V8 快照）**（44.5.1）
   - `apps/desktop/node_modules/electron/dist/d3dcompiler_47.dll` — 4741488 B — SHA-256 `a05f99734f7c4822fefc12b367af21fd0976ed6608752fb1e1e80b6ece7ecbbb`
@@ -211,6 +213,9 @@
   - `/node_modules/pdfjs-dist/wasm/jbig2.wasm`（容器 `apps/desktop/release/win-unpacked/resources/app.asar`） — 103671 B — SHA-256 `466f45c2a61a698152fb5400c27e56ff2ceb73dcb71fde3fc366a502308eaab0`
   - `/node_modules/pdfjs-dist/wasm/openjpeg.wasm`（容器 `apps/desktop/release/win-unpacked/resources/app.asar`） — 251131 B — SHA-256 `95e5002597af0824004aa57b1900fe019715db389e37640b1e58395e42f00cc5`
   - `/node_modules/pdfjs-dist/wasm/qcms_bg.wasm`（容器 `apps/desktop/release/win-unpacked/resources/app.asar`） — 96589 B — SHA-256 `663d86126d5f5fcb1c61490f94353e2a8375660b8c5498ab3ebab5a34b08800e`
+- **Agent MCP bridge bundle（agent-bridge.mjs，内嵌 MCP SDK / zod 等 8 个 npm 包）**（0.1.3）
+  - `packages/agent-bridge/dist/agent-bridge.mjs` — 1414893 B — SHA-256 `944ce7d2dd5d94ee22b8bdb7ad764c31c70c8d922f6e1e054b166b3838d97715`
+  - `packages/agent-bridge/dist/agent-bridge.mjs.meta.json` — 196801 B — SHA-256 `82ef409c112f0abccf33eeef327ddf9be7f776e52ded461dd890eea165e8a463`
 - **Noto Serif CJK SC**（2.003）
   - `packages/ui/src/styles/assets/fonts/StudiandaSerifSC-Regular.woff2` — 11168936 B — SHA-256 `5329e86415b45a98eb4fb9c78e4c053f79e4728f985feabab8b26f92328635be`
   - `packages/ui/src/styles/assets/fonts/StudiandaSerifSC-SemiBold.woff2` — 11266872 B — SHA-256 `8cfe445056c835196c448b30df24e65aedfb80e589791f12a77c23c5e71ee6a7`

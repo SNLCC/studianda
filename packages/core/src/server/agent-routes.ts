@@ -8,7 +8,6 @@ import {
 import type { Store } from '../store.js';
 import { badRequest } from './http.js';
 
-const SETTING_KEY = 'agent.scope';
 const ALLOWED_CAPS = new Set(['read', 'write', 'costly', 'files']);
 const MAX_SELECTION = 2000;
 const MAX_DOCUMENTS = 200;
@@ -16,10 +15,17 @@ const MAX_TTL_MS = 8 * 60 * 60 * 1000;
 
 function readScope(store: Store): AgentScope {
   try {
-    const raw = store.getSettings()[SETTING_KEY];
-    if (!raw) return defaultAgentScope();
-    const parsed = JSON.parse(raw) as AgentScope;
-    return normalizeScope(parsed, { allowPastExpiry: true });
+    const grant = store.getActiveAgentGrant();
+    if (!grant) return defaultAgentScope();
+    return {
+      kind: grant.kind as AgentScopeKind,
+      projectId: grant.projectId,
+      documentIds: grant.documentIds,
+      page: grant.page,
+      selection: grant.selection,
+      caps: grant.caps,
+      expiresAt: grant.expiresAt
+    };
   } catch {
     return defaultAgentScope();
   }
@@ -68,7 +74,7 @@ function normalizeScope(
     throw new Error('caps 只能包含 read / write / costly / files');
   }
   const caps = [...new Set(rawCaps.map(String))];
-  const expiresAt =
+  let expiresAt =
     body.expiresAt == null
       ? null
       : typeof body.expiresAt === 'string'
@@ -81,6 +87,8 @@ function normalizeScope(
     if (!Number.isFinite(time)) throw new Error('expiresAt 不是合法时间');
     if (!options.allowPastExpiry && time <= Date.now()) throw new Error('expiresAt 必须晚于当前时间');
     if (time - Date.now() > MAX_TTL_MS) throw new Error('expiresAt 最多 8 小时');
+    // 统一存 UTC ISO，保证 agent_grants 里按字符串比较过期时间可靠。
+    expiresAt = new Date(time).toISOString();
   }
   return {
     kind: kind as AgentScopeKind,
@@ -100,7 +108,18 @@ export function registerAgentRoutes(app: FastifyInstance, options: { store: Stor
   app.put(`${API_PREFIX}/agent/scope`, async (request, reply) => {
     try {
       const scope = normalizeScope(request.body);
-      options.store.updateSettings({ [SETTING_KEY]: JSON.stringify(scope) });
+      const body = (request.body ?? {}) as { agentName?: unknown };
+      options.store.replaceAgentGrant({
+        agentName:
+          typeof body.agentName === 'string' ? body.agentName.trim().slice(0, 80) : '',
+        kind: scope.kind,
+        projectId: scope.projectId,
+        documentIds: scope.documentIds,
+        page: scope.page,
+        selection: scope.selection,
+        caps: scope.caps,
+        expiresAt: scope.expiresAt
+      });
       return scope;
     } catch (error) {
       return badRequest(reply, error instanceof Error ? error.message : '保存共享范围失败');
@@ -108,7 +127,7 @@ export function registerAgentRoutes(app: FastifyInstance, options: { store: Stor
   });
 
   app.delete(`${API_PREFIX}/agent/scope`, async () => {
-    options.store.deleteSettings([SETTING_KEY]);
+    options.store.clearAgentGrants();
     return defaultAgentScope();
   });
 }

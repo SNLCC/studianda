@@ -83,4 +83,52 @@ describe('Agent 共享范围（settings 单一活跃 scope）', () => {
       expect(response.statusCode, JSON.stringify(payload)).toBe(400);
     }
   });
+
+  it('scope 写 agent_grants 表，不再写 settings', async () => {
+    const put = await server.inject({
+      method: 'PUT',
+      url: '/api/v1/agent/scope',
+      headers: headers(),
+      payload: { kind: 'library', caps: ['read', 'write'] }
+    });
+    expect(put.statusCode).toBe(200);
+    const grant = store.getActiveAgentGrant();
+    expect(grant).toMatchObject({ kind: 'library', caps: ['read', 'write'] });
+    expect(store.getSettings()['agent.scope']).toBeUndefined();
+    await server.inject({ method: 'DELETE', url: '/api/v1/agent/scope', headers: headers() });
+    expect(store.getActiveAgentGrant()).toBeNull();
+  });
+
+  it('旧 settings.agent.scope 下次启动迁入表并删除旧键', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'studianda-agent-scope-migrate-'));
+    try {
+      const first = new Store(dir);
+      first.updateSettings({
+        'agent.scope': JSON.stringify({
+          kind: 'documents',
+          documentIds: ['doc-1'],
+          page: 3,
+          selection: '原文',
+          caps: ['read'],
+          expiresAt: null
+        })
+      });
+      first.close();
+      const second = new Store(dir);
+      try {
+        expect(second.getActiveAgentGrant()).toMatchObject({
+          kind: 'documents',
+          documentIds: ['doc-1'],
+          page: 3,
+          selection: '原文',
+          caps: ['read']
+        });
+        expect(second.getSettings()['agent.scope']).toBeUndefined();
+      } finally {
+        second.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

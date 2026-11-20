@@ -79,6 +79,38 @@ function run(command, args, cwd = root) {
   }
 }
 
+/**
+ * electron-builder 只在 NSIS target 的 finalize 阶段把 elevate.exe 注入 resources，
+ * `--dir` / `--prepackaged` 路径都不会有它；而 legal 清单要求记录这个随包文件。
+ * 从 electron-builder 的 NSIS 工具缓存复制到 resources，保持 legal 审计可用。
+ */
+function stageNsisElevate() {
+  const target = path.join(resourcesDir, 'elevate.exe');
+  if (existsSync(target)) return;
+  const cacheRoot = path.join(
+    process.env.ELECTRON_BUILDER_CACHE ??
+      path.join(process.env.LOCALAPPDATA ?? process.env.APPDATA ?? '', 'electron-builder', 'Cache')
+  );
+  const find = (dir, depth) => {
+    if (depth > 3 || !existsSync(dir)) return null;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isFile() && entry.name.toLowerCase() === 'elevate.exe') return full;
+      if (entry.isDirectory()) {
+        const found = find(full, depth + 1);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+  const source = find(cacheRoot, 0);
+  if (!source) {
+    fail(`缺少 resources/elevate.exe，且 electron-builder 缓存里找不到：${cacheRoot}`);
+  }
+  copyFileSync(source, target);
+  console.log(`[package] 已从 NSIS 缓存 staging elevate.exe：${path.relative(root, target)}`);
+}
+
 function sha256(file) {
   const hash = createHash('sha256');
   hash.update(readFileSync(file));
@@ -244,10 +276,12 @@ console.log(
     `${builderConfig.publish.releaseType ? `（${builderConfig.publish.releaseType}）` : ''}`
 );
 
-// 1) 构建 shared + core + desktop（shared 是 core 的运行时依赖，必须先构建）。
+// 1) 构建 shared + core + agent-bridge + desktop（shared 是 core 的运行时依赖，必须先构建）。
 if (!skipBuild) {
   run(pnpm, ['--filter', '@studianda/shared', 'build']);
   run(pnpm, ['--filter', '@studianda/core', 'build']);
+  run(pnpm, ['--filter', '@studianda/agent-bridge', 'build']);
+  run('node', [path.join(root, 'scripts', 'sync-agent-bridge-legal.mjs')]);
   run(pnpm, ['--filter', '@studianda/desktop', 'build']);
 } else {
   console.log('[package] --skip-build：跳过构建步骤');
@@ -314,6 +348,15 @@ run(
   ['exec', 'electron-builder', '--dir', '--publish', 'never', '--config', 'electron-builder.yml'],
   desktopDir
 );
+stageNsisElevate();
+// 先移除同版本旧安装器：legal 在 NSIS 构建之前生成，若目录里残留上一次的安装包，
+// inventory.installer 会记录旧哈希，随后 --installer 构建出新文件时必然不一致。
+for (const name of [
+  `Studianda-Setup-${version}.exe`,
+  `Studianda-Setup-${version}.exe.blockmap`
+]) {
+  rmSync(path.join(releaseDir, name), { force: true });
+}
 run('node', [path.join(root, 'scripts', 'audit-packaged-legal.mjs')]);
 const packagedLegalDir = path.join(resourcesDir, 'legal');
 rmSync(packagedLegalDir, { recursive: true, force: true });

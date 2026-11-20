@@ -1,7 +1,11 @@
 /** 只读工具的执行层：一个实现，两个适配器（MCP bridge / DSH Host）共用。 */
 
 export interface CoreApi {
-  request<T>(method: 'GET' | 'POST', pathname: string, body?: unknown): Promise<T>;
+  request<T>(
+    method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
+    pathname: string,
+    body?: unknown
+  ): Promise<T>;
 }
 
 export type AgentScope =
@@ -53,6 +57,32 @@ export function assertWriteAllowed(scope: AgentScope, message: string): void {
   }
 }
 
+async function assertNoteBelongs(
+  api: CoreApi,
+  documentId: string,
+  noteId: string,
+  trash: boolean
+): Promise<void> {
+  const path = `/documents/${encodeURIComponent(documentId)}/notes${trash ? '?trash=true' : ''}`;
+  const rows = await api.request<Array<{ id?: unknown }>>('GET', path);
+  if (!Array.isArray(rows) || !rows.some((row) => row.id === noteId)) {
+    throw new Error(trash ? '回收站里没有这条笔记' : '这条笔记不在该文献下');
+  }
+}
+
+async function assertAnnotationBelongs(
+  api: CoreApi,
+  documentId: string,
+  annotationId: string,
+  trash: boolean
+): Promise<void> {
+  const path = `/documents/${encodeURIComponent(documentId)}/annotations${trash ? '?trash=true' : ''}`;
+  const rows = await api.request<Array<{ id?: unknown }>>('GET', path);
+  if (!Array.isArray(rows) || !rows.some((row) => row.id === annotationId)) {
+    throw new Error(trash ? '回收站里没有这条批注' : '这条批注不在该文献下');
+  }
+}
+
 export interface ToolSpec {
   name: string;
   description: string;
@@ -62,9 +92,9 @@ export interface ToolSpec {
 const IMPLEMENTED_ACTIONS: Record<string, string[]> = {
   scope: ['get'],
   capabilities: ['list'],
-  library: ['list', 'get', 'pages', 'outline', 'references'],
-  notes: ['list', 'list_for_document', 'create'],
-  annotations: ['list_for_document', 'create'],
+  library: ['list', 'get', 'search', 'pages', 'outline', 'references'],
+  notes: ['list', 'list_for_document', 'create', 'update', 'set_tags', 'delete', 'restore'],
+  annotations: ['list_for_document', 'create', 'update', 'delete', 'restore'],
   organize: ['preview', 'apply', 'undo'],
   reading: ['sessions', 'tasks', 'summary'],
   system: ['health']
@@ -74,9 +104,9 @@ export function toolSpecs(): ToolSpec[] {
   const defs: Array<[string, string]> = [
     ['scope', '查看当前共享范围（只读）。'],
     ['capabilities', '列出当前可用的只读能力（op / action / 说明）。'],
-    ['library', '文献与结构：list / get / pages / outline / references。'],
-    ['notes', '笔记：list（独立笔记）/ list_for_document / create（写 AI 笔记，需要写入范围）。'],
-    ['annotations', '批注：list_for_document / create（写 AI 批注，需要写入范围）。'],
+    ['library', '文献、检索与结构：list / get / search / pages / outline / references。'],
+    ['notes', '笔记全生命周期：list / list_for_document / create / update / set_tags / delete / restore（写入需允许整理）。'],
+    ['annotations', '批注：list_for_document / create / update / delete / restore（写入需允许整理）。'],
     ['organize', '整理（可撤销）：preview（dry-run）/ apply / undo；需要允许写入的共享范围。'],
     ['reading', '阅读会话：sessions / tasks / summary。'],
     ['system', '系统状态：health。']
@@ -102,6 +132,12 @@ interface ToolArgs {
   content?: unknown;
   color?: unknown;
   style?: unknown;
+  note_id?: unknown;
+  annotation_id?: unknown;
+  query?: unknown;
+  types?: unknown;
+  tags?: unknown;
+  folder_path?: unknown;
 }
 
 const MAX_PAGES = 8;
@@ -177,6 +213,30 @@ export async function executeTool(
         ...(scope.kind === 'none' ? { note: '未共享范围，只返回标题；共享后可读正文与元数据。' } : {})
       };
     }
+    if (action === 'search') {
+      if (scope.kind === 'none') {
+        throw new ScopeError('scope_denied', '检索需要先共享文献或全库范围。');
+      }
+      const query = requireString(args.query, 'query');
+      const limit = optionalInt(args.limit, 'limit', 1, MAX_LIST) ?? 20;
+      const types = optionalString(args.types, 'types', 100);
+      const pathname = `/library-search?q=${encodeURIComponent(query)}${
+        types ? `&types=${encodeURIComponent(types)}` : ''
+      }`;
+      const rows = await api.request<Array<Record<string, unknown>>>('GET', pathname);
+      const allowed =
+        scope.kind === 'documents' ? new Set(scope.documentIds) : null;
+      const hits = (Array.isArray(rows) ? rows : []).filter((hit) => {
+        if (!allowed) return true;
+        const documentId = typeof hit.documentId === 'string' ? hit.documentId : '';
+        return allowed.has(documentId);
+      });
+      return {
+        query,
+        hits: hits.slice(0, limit),
+        ...(hits.length > limit ? { truncation: `共 ${hits.length} 条，本次返回 ${limit} 条` } : {})
+      };
+    }
     if (!documentId) throw new Error('该 action 需要 document_id');
     assertDocumentAllowed(scope, documentId);
     if (action === 'get') {
@@ -233,6 +293,52 @@ export async function executeTool(
         agentName: context.agentName ?? 'agent'
       });
     }
+    if (action === 'update') {
+      assertWriteAllowed(scope, '更新笔记需要在共享范围里勾选「允许整理」。');
+      const documentId = requireString(args.document_id, 'document_id');
+      assertDocumentAllowed(scope, documentId);
+      const noteId = requireString(args.note_id, 'note_id');
+      await assertNoteBelongs(api, documentId, noteId, false);
+      const patch: Record<string, unknown> = {};
+      if (args.content !== undefined) patch.content = requireString(args.content, 'content');
+      if (args.quote !== undefined) patch.quote = optionalString(args.quote, 'quote', 2000) ?? '';
+      if (args.page !== undefined) patch.page = optionalInt(args.page, 'page', 0, 100000);
+      if (args.folder_path !== undefined) {
+        patch.folderPath = optionalString(args.folder_path, 'folder_path', 240) ?? '';
+      }
+      if (Object.keys(patch).length === 0) throw new Error('update 至少需要一个字段');
+      return api.request('PATCH', `/notes/${encodeURIComponent(noteId)}`, patch);
+    }
+    if (action === 'set_tags') {
+      assertWriteAllowed(scope, '改笔记标签需要在共享范围里勾选「允许整理」。');
+      const documentId = requireString(args.document_id, 'document_id');
+      assertDocumentAllowed(scope, documentId);
+      const noteId = requireString(args.note_id, 'note_id');
+      await assertNoteBelongs(api, documentId, noteId, false);
+      if (!Array.isArray(args.tags) || !args.tags.every((tag) => typeof tag === 'string')) {
+        throw new Error('tags 必须是字符串数组');
+      }
+      return api.request('PUT', `/notes/${encodeURIComponent(noteId)}/tags`, {
+        tags: args.tags
+      });
+    }
+    if (action === 'delete') {
+      assertWriteAllowed(scope, '删除笔记需要在共享范围里勾选「允许整理」。');
+      const documentId = requireString(args.document_id, 'document_id');
+      assertDocumentAllowed(scope, documentId);
+      const noteId = requireString(args.note_id, 'note_id');
+      await assertNoteBelongs(api, documentId, noteId, false);
+      await api.request('DELETE', `/notes/${encodeURIComponent(noteId)}`);
+      return { ok: true, noteId, deleted: true };
+    }
+    if (action === 'restore') {
+      assertWriteAllowed(scope, '恢复笔记需要在共享范围里勾选「允许整理」。');
+      const documentId = requireString(args.document_id, 'document_id');
+      assertDocumentAllowed(scope, documentId);
+      const noteId = requireString(args.note_id, 'note_id');
+      await assertNoteBelongs(api, documentId, noteId, true);
+      return api.request('POST', `/notes/${encodeURIComponent(noteId)}/restore`);
+    }
     throw new Error(`notes 不支持 action=${action}`);
   }
 
@@ -259,6 +365,36 @@ export async function executeTool(
         origin: 'ai',
         agentName: context.agentName ?? 'agent'
       });
+    }
+    if (action === 'update') {
+      assertWriteAllowed(scope, '更新批注需要在共享范围里勾选「允许整理」。');
+      const documentId = requireString(args.document_id, 'document_id');
+      assertDocumentAllowed(scope, documentId);
+      const annotationId = requireString(args.annotation_id, 'annotation_id');
+      await assertAnnotationBelongs(api, documentId, annotationId, false);
+      const patch: Record<string, unknown> = {};
+      if (args.content !== undefined) patch.content = requireString(args.content, 'content');
+      if (args.color !== undefined) patch.color = optionalString(args.color, 'color', 20);
+      if (args.style !== undefined) patch.style = optionalString(args.style, 'style', 20);
+      if (Object.keys(patch).length === 0) throw new Error('update 至少需要一个字段');
+      return api.request('PATCH', `/annotations/${encodeURIComponent(annotationId)}`, patch);
+    }
+    if (action === 'delete') {
+      assertWriteAllowed(scope, '删除批注需要在共享范围里勾选「允许整理」。');
+      const documentId = requireString(args.document_id, 'document_id');
+      assertDocumentAllowed(scope, documentId);
+      const annotationId = requireString(args.annotation_id, 'annotation_id');
+      await assertAnnotationBelongs(api, documentId, annotationId, false);
+      await api.request('DELETE', `/annotations/${encodeURIComponent(annotationId)}`);
+      return { ok: true, annotationId, deleted: true };
+    }
+    if (action === 'restore') {
+      assertWriteAllowed(scope, '恢复批注需要在共享范围里勾选「允许整理」。');
+      const documentId = requireString(args.document_id, 'document_id');
+      assertDocumentAllowed(scope, documentId);
+      const annotationId = requireString(args.annotation_id, 'annotation_id');
+      await assertAnnotationBelongs(api, documentId, annotationId, true);
+      return api.request('POST', `/annotations/${encodeURIComponent(annotationId)}/restore`);
     }
     throw new Error(`annotations 不支持 action=${action}`);
   }

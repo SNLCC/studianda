@@ -2260,6 +2260,51 @@ export class Store {
     // “版本号已是 27 但表里仍有旧行”的半迁移库；表不存在时 SCHEMA_SQL 已先建出来。
     this.db.exec('DELETE FROM platform_connections');
 
+    // schema 28 存储迁移：旧版把单一 scope 存在 settings('agent.scope')，现在迁入 agent_grants。
+    // 幂等：表里已有 grant 时不覆盖；迁移成功/失败都清掉旧 settings 键，避免两份真相。
+    const legacyScopeRow = this.db
+      .prepare("SELECT value FROM settings WHERE key = 'agent.scope'")
+      .get() as { value?: string } | undefined;
+    if (legacyScopeRow?.value) {
+      try {
+        const grantCount = this.db
+          .prepare('SELECT COUNT(*) AS n FROM agent_grants')
+          .get() as { n: number };
+        if (Number(grantCount?.n ?? 0) === 0) {
+          const parsed = JSON.parse(legacyScopeRow.value) as Record<string, unknown>;
+          const kind = typeof parsed.kind === 'string' ? parsed.kind : 'none';
+          if (kind === 'library' || kind === 'documents') {
+            const documentIds = Array.isArray(parsed.documentIds)
+              ? parsed.documentIds.filter((id): id is string => typeof id === 'string')
+              : [];
+            const caps = Array.isArray(parsed.caps)
+              ? parsed.caps.filter((cap): cap is string => typeof cap === 'string')
+              : [];
+            this.db
+              .prepare(
+                `INSERT INTO agent_grants
+                 (id, agent_name, kind, project_id, document_ids, page, selection, caps, created, expires_at)
+                 VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?)`
+              )
+              .run(
+                randomUUID(),
+                kind,
+                typeof parsed.projectId === 'string' ? parsed.projectId : null,
+                JSON.stringify(documentIds),
+                Number.isInteger(parsed.page) ? Number(parsed.page) : null,
+                typeof parsed.selection === 'string' ? parsed.selection : '',
+                JSON.stringify(caps),
+                new Date().toISOString(),
+                typeof parsed.expiresAt === 'string' ? parsed.expiresAt : null
+              );
+          }
+        }
+      } catch {
+        // 旧 scope 无法解析时丢弃；不能阻断启动。
+      }
+      this.db.prepare("DELETE FROM settings WHERE key = 'agent.scope'").run();
+    }
+
     // 独立会话与 Agent 已移除：一次性删除旧会话表与历史备份（不可恢复）。
     const qaRemoved = this.db
       .prepare("SELECT value FROM schema_meta WHERE key = 'standalone_qa_removed'")
@@ -7696,6 +7741,103 @@ export class Store {
       appliedAt: row.applied_at,
       undoneAt: row.undone_at
     }));
+  }
+
+  /** 当前生效的 Agent 共享范围（agent_grants 表；过期即视为没有）。 */
+  getActiveAgentGrant(now = new Date().toISOString()): {
+    id: string;
+    agentName: string;
+    kind: string;
+    projectId: string | null;
+    documentIds: string[];
+    page: number | null;
+    selection: string;
+    caps: string[];
+    created: string;
+    expiresAt: string | null;
+  } | null {
+    const row = this.db
+      .prepare(
+        `SELECT id, agent_name, kind, project_id, document_ids, page, selection, caps, created, expires_at
+         FROM agent_grants
+         WHERE expires_at IS NULL OR expires_at > ?
+         ORDER BY created DESC LIMIT 1`
+      )
+      .get(now) as
+      | {
+          id: string;
+          agent_name: string;
+          kind: string;
+          project_id: string | null;
+          document_ids: string;
+          page: number | null;
+          selection: string;
+          caps: string;
+          created: string;
+          expires_at: string | null;
+        }
+      | undefined;
+    if (!row) return null;
+    const parseArray = (value: string): string[] => {
+      try {
+        const parsed = JSON.parse(value) as unknown;
+        return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+      } catch {
+        return [];
+      }
+    };
+    return {
+      id: row.id,
+      agentName: row.agent_name,
+      kind: row.kind,
+      projectId: row.project_id,
+      documentIds: parseArray(row.document_ids),
+      page: row.page,
+      selection: row.selection,
+      caps: parseArray(row.caps),
+      created: row.created,
+      expiresAt: row.expires_at
+    };
+  }
+
+  /** 替换当前共享范围：当前只保留一条活跃 grant（多 agent 隔离留给 P2）。 */
+  replaceAgentGrant(input: {
+    agentName?: string;
+    kind: string;
+    projectId: string | null;
+    documentIds: string[];
+    page: number | null;
+    selection: string;
+    caps: string[];
+    expiresAt: string | null;
+  }): void {
+    const id = randomUUID();
+    const created = new Date().toISOString();
+    this.withTransaction(() => {
+      this.db.exec('DELETE FROM agent_grants');
+      this.db
+        .prepare(
+          `INSERT INTO agent_grants
+           (id, agent_name, kind, project_id, document_ids, page, selection, caps, created, expires_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          id,
+          input.agentName ?? '',
+          input.kind,
+          input.projectId,
+          JSON.stringify(input.documentIds),
+          input.page,
+          input.selection,
+          JSON.stringify(input.caps),
+          created,
+          input.expiresAt
+        );
+    });
+  }
+
+  clearAgentGrants(): void {
+    this.db.exec('DELETE FROM agent_grants');
   }
 
   markAgentOperationUndone(id: string, when: string): void {

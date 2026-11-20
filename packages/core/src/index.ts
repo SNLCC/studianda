@@ -8,6 +8,7 @@ import { applyPendingRestore } from './backup.js';
 import { hydrateMarkdownJobs } from './markdown-import.js';
 import { SecretStore } from './secrets.js';
 import { Store } from './store.js';
+import { removeOwnRuntimeFile } from './runtime-file.js';
 
 const VERSION = process.env.STUDIANDA_VERSION ?? '0.1.0';
 const DEFAULT_DATA_DIR = path.join(homedir(), '.studianda');
@@ -194,9 +195,13 @@ async function shutdown(): Promise<void> {
     await app.close();
     store.close();
   } finally {
+    removeOwnRuntimeFile(runtimePath, process.pid);
     process.exit(0);
   }
 }
+
+// 兜底：任何路径调用 process.exit 时也清掉自己的握手文件（同步、幂等）。
+process.once('exit', () => removeOwnRuntimeFile(runtimePath, process.pid));
 
 process.on('SIGINT', () => void shutdown());
 process.on('SIGTERM', () => void shutdown());

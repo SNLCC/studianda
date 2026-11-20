@@ -69,6 +69,20 @@ describe('agent-bridge（MCP stdio）', () => {
     await client.close();
   });
 
+  it('runtime.json 陈旧（端口无人监听）时返回 core_unavailable', async () => {
+    const dataDir = tempDir();
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(
+      path.join(dataDir, 'runtime.json'),
+      JSON.stringify({ port: 1, token: 'stale', pid: 0, version: 'test', startedAt: '' })
+    );
+    const client = await connect(dataDir);
+    const result = await client.callTool({ name: 'system', arguments: { action: 'health' } });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('core_unavailable');
+    await client.close();
+  });
+
   it('无共享范围时读正文与整理都返回 scope_denied', async () => {
     const dataDir = tempDir();
     const client = await connect(dataDir);

@@ -14,7 +14,9 @@
         "verified": false,
         "reason": "Electron 官方每个版本发布 SHASUMS256.txt，但本仓库未保存该发行物清单，生成器也不联网；下列哈希取自 electron@44.5.1 官方 npm 发行包内的文件（安装器逐字节复制）。要升级为来源已核对，需把对应版本的 SHASUMS256.txt 固化到 legal/upstream/official/ 后再对照。"
       },
-      "licenseFiles": ["electron/LICENSES.chromium.html"],
+      "licenseFiles": [
+        "electron/LICENSES.chromium.html"
+      ],
       "artifacts": [
         "apps/desktop/node_modules/electron/dist/d3dcompiler_47.dll",
         "apps/desktop/node_modules/electron/dist/dxcompiler.dll",
@@ -47,7 +49,9 @@
         "upstream/official/ffmpeg-LGPL-2.1.txt",
         "upstream/official/ffmpeg-SOURCE-OFFER.md"
       ],
-      "artifacts": ["apps/desktop/node_modules/electron/dist/ffmpeg.dll"]
+      "artifacts": [
+        "apps/desktop/node_modules/electron/dist/ffmpeg.dll"
+      ]
     },
     {
       "class": "bundled",
@@ -63,8 +67,12 @@
         "verified": false,
         "reason": "stub 由 electron-builder 从官方 NSIS 3.0.4.1 发行包（工具缓存，不在仓库工作区内）编译进 Studianda-Setup-*.exe；NSIS 官方未发布发行包 SHA-256，仓库内没有 stub 二进制副本，只能核对版本、许可原文与安装器容器。"
       },
-      "licenseFiles": ["upstream/official/nsis-COPYING.txt"],
-      "artifacts": ["legal/upstream/official/nsis-COPYING.txt"]
+      "licenseFiles": [
+        "upstream/official/nsis-COPYING.txt"
+      ],
+      "artifacts": [
+        "legal/upstream/official/nsis-COPYING.txt"
+      ]
     },
     {
       "class": "bundled",
@@ -148,7 +156,9 @@
           "sha256": "2F7F8FC05DC4FD0D5CDA501B47E4433357E887BBFED7292C028D99C73B52DC08"
         }
       ],
-      "licenseFiles": ["upstream/official/nsis-plugins/uac/LICENSE.txt"],
+      "licenseFiles": [
+        "upstream/official/nsis-plugins/uac/LICENSE.txt"
+      ],
       "artifacts": [
         "legal/upstream/official/nsis-plugins/uac/source/Plugins/x86-unicode/UAC.dll",
         "legal/upstream/official/nsis-plugins/uac/source/uac.cpp"
@@ -168,7 +178,9 @@
         "verified": false,
         "reason": "elevate.exe 是 NSIS 发行包附带的提权辅助程序（上游版权 2007 Johannes Passing，MIT）；上游未发布 SHA-256。随包 resources/elevate.exe 的哈希由生成器现算，并已与 electron-builder NSIS 3.0.4.1 缓存中的同名文件人工核对一致，但无法与官方发布物交叉核对。"
       },
-      "licenseFiles": ["upstream/official/elevate-MIT.txt"],
+      "licenseFiles": [
+        "upstream/official/elevate-MIT.txt"
+      ],
       "artifacts": [
         "apps/desktop/release/win-unpacked/resources/elevate.exe",
         "legal/upstream/official/elevate-MIT.txt"
@@ -214,7 +226,9 @@
         "verified": true,
         "reason": "四个 .crate 为 crates.io 官方发布包（未修改的 Source Code Form），下载 URL 与 SHA-256 记录于 mpl-sources/README.md，随安装包 resources/legal/ 一并分发；artifacts 中的哈希由生成器现算，可与该 README 对照。"
       },
-      "licenseFiles": ["upstream/official/napi-canvas/MPL-2.0.txt"],
+      "licenseFiles": [
+        "upstream/official/napi-canvas/MPL-2.0.txt"
+      ],
       "artifacts": [
         "legal/upstream/official/napi-canvas/mpl-sources/cssparser-0.38.0.crate",
         "legal/upstream/official/napi-canvas/mpl-sources/cssparser-macros-0.7.0.crate",
@@ -281,9 +295,40 @@
         "upstream/official/pdfjs-wasm/LICENSE_PDFJS_QCMS"
       ],
       "artifacts": [
-        { "path": "/node_modules/pdfjs-dist/wasm/jbig2.wasm", "container": "asar" },
-        { "path": "/node_modules/pdfjs-dist/wasm/openjpeg.wasm", "container": "asar" },
-        { "path": "/node_modules/pdfjs-dist/wasm/qcms_bg.wasm", "container": "asar" }
+        {
+          "path": "/node_modules/pdfjs-dist/wasm/jbig2.wasm",
+          "container": "asar"
+        },
+        {
+          "path": "/node_modules/pdfjs-dist/wasm/openjpeg.wasm",
+          "container": "asar"
+        },
+        {
+          "path": "/node_modules/pdfjs-dist/wasm/qcms_bg.wasm",
+          "container": "asar"
+        }
+      ]
+    },
+    {
+      "class": "bundled",
+      "kind": "mcp-bridge-bundle",
+      "name": "Agent MCP bridge bundle（agent-bridge.mjs，内嵌 MCP SDK / zod 等 8 个 npm 包）",
+      "version": "0.1.3",
+      "license": "MIT / BSD-3-Clause / ISC（逐包见 upstream/agent-bridge/THIRD-PARTY.md）",
+      "ecosystem": "bundled",
+      "source": {
+        "url": "https://github.com/SNLCC/studianda",
+        "sha256": null,
+        "verified": false,
+        "reason": "由本仓库用 esbuild 从 pnpm-lock 锁定版本的依赖打包生成，无独立上游发布物可对照哈希；实际输入清单见 agent-bridge.mjs.meta.json，第三方许可证原文与逐包声明见 upstream/agent-bridge/。"
+      },
+      "licenseFiles": [
+        "upstream/agent-bridge/THIRD-PARTY.md",
+        "upstream/agent-bridge/deps.json"
+      ],
+      "artifacts": [
+        "packages/agent-bridge/dist/agent-bridge.mjs",
+        "packages/agent-bridge/dist/agent-bridge.mjs.meta.json"
       ]
     }
   ]

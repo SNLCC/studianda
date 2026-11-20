@@ -46,7 +46,11 @@ export function readRuntime(dataDir: string): RuntimeInfo | null {
 export class CoreHttpApi implements CoreApi {
   constructor(private readonly dataDir: string) {}
 
-  async request<T>(method: 'GET' | 'POST', pathname: string, body?: unknown): Promise<T> {
+  async request<T>(
+    method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
+    pathname: string,
+    body?: unknown
+  ): Promise<T> {
     const runtime = readRuntime(this.dataDir);
     if (!runtime) {
       throw new CoreUnavailableError(
@@ -61,11 +65,19 @@ export class CoreHttpApi implements CoreApi {
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       signal: AbortSignal.timeout(60_000)
+    }).catch((cause: unknown) => {
+      // runtime.json 可能是上次进程留下的陈旧文件：连接失败统一归为「Core 未运行」，
+      // 让 MCP 客户端看到可执行的 core_unavailable，而不是笼统的 fetch failed。
+      throw new CoreUnavailableError(
+        `无法连接本地 Core（${pathname}）：请先打开勘读。${cause instanceof Error ? ` ${cause.message}` : ''}`
+      );
     });
     if (!response.ok) {
       const text = await response.text().catch(() => '');
       throw new Error(`Core ${response.status}: ${text.slice(0, 300)}`);
     }
+    // 204（软删除等）没有 JSON 体，不能调用 response.json()。
+    if (response.status === 204) return undefined as T;
     return (await response.json()) as T;
   }
 

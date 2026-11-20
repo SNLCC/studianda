@@ -1,6 +1,6 @@
 # 第三方组件与许可证声明
 
-生成时间：2026-11-19T18:23:36.785Z
+生成时间：2026-11-20T17:17:40.369Z
 
 本清单从**实际安装包** `resources/app.asar` 的依赖树生成，覆盖渲染器、Core 和生产依赖；不是仅根据源码清单推测。
 
@@ -130,8 +130,9 @@
 | MPL-2.0 组件源码归档（cssparser / cssparser-macros / dtoa-short / selectors） | cssparser 0.38.0、cssparser-macros 0.7.0、dtoa-short 0.3.5、selectors 0.41.0 | 随包源码归档 | MPL-2.0 | 来源哈希已核对 |
 | tesseract.js-core WASM（内嵌 Tesseract / Leptonica / libjpeg-turbo / libpng / libtiff / libwebp / giflib / openlibm / zlib） | tesseract.js-core 7.0.0 | 内嵌 WASM | Apache-2.0（tesseract.js-core）及内嵌组件各自许可证 | 来源哈希已核对 |
 | PDF.js WASM 解码器（JBIG2 / OpenJPEG / QCMS） | 6.4.299（pdfjs-dist） | 内嵌 WASM | Apache-2.0 / BSD-3-Clause / MIT 等（逐组件见 PDFJS-WASM-THIRD-PARTY.md） | 来源哈希已核对 |
+| Agent MCP bridge bundle（agent-bridge.mjs，内嵌 MCP SDK / zod 等 8 个 npm 包） | 0.1.3 | mcp-bridge-bundle | MIT / BSD-3-Clause / ISC（逐包见 upstream/agent-bridge/THIRD-PARTY.md） | 来源哈希未核对（原因见 inventory.json 的 source.reason） |
 
-安装器容器：`apps/desktop/release/Studianda-Setup-0.1.3.exe`（247913306 B，SHA-256 `3156766e92db7a377535abcdc5991ea6fdded05b0c35d2d073b1a03e56d9174d`）；随其分发的组件：NSIS 安装器 stub、nsis7z.dll、StdUtils.dll、UAC.dll、elevate.exe。
+安装器容器：`apps/desktop/release/Studianda-Setup-0.1.3.exe`（248449784 B，SHA-256 `42dcfb93f749bd1d7aa502c42b3bc6d1b31a4875576426a4c360e6011342e8dd`）；随其分发的组件：NSIS 安装器 stub、nsis7z.dll、StdUtils.dll、UAC.dll、elevate.exe。
 
 ## 随包字体
 
