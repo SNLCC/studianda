@@ -6,7 +6,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { afterEach, describe, expect, it } from 'vitest';
 
 const pkgDir = path.resolve(import.meta.dirname, '..');
-const entry = path.join(pkgDir, 'dist', 'index.js');
+const entry = path.join(pkgDir, 'dist', 'agent-bridge.mjs');
 const dirs: string[] = [];
 
 function tempDir(): string {

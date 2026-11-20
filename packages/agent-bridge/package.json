@@ -12,8 +12,8 @@
     ".": "./dist/index.js"
   },
   "scripts": {
-    "build": "node ../../scripts/build-lib.mjs .",
-    "test": "node ../../scripts/build-lib.mjs . && vitest run",
+    "build": "node ../../scripts/build-lib.mjs . && node ../../scripts/build-agent-bridge.mjs",
+    "test": "node ../../scripts/build-agent-bridge.mjs && vitest run",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
