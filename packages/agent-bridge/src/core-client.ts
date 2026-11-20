@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import type { AgentScope, CoreApi } from '@studianda/agent-core';
@@ -96,9 +96,65 @@ export class CoreHttpApi implements CoreApi {
     return (await response.json()) as T;
   }
 
+  /**
+   * 转写本机音频文件：只接受 Core 所在机器可读的本地路径（MCP 没有二进制入参），
+   * 大小上限 200MB，避免把任意大文件读进内存。
+   */
+  async uploadAudio<T>(
+    filePath: string,
+    options?: { signal?: AbortSignal; timeoutMs?: number }
+  ): Promise<T> {
+    const runtime = readRuntime(this.dataDir);
+    if (!runtime) {
+      throw new CoreUnavailableError(
+        `未找到 ${path.join(this.dataDir, 'runtime.json')}：请先打开勘读（本地 Core 未运行）。`
+      );
+    }
+    const info = statSync(filePath);
+    if (!info.isFile()) throw new Error('audio_path 不是文件');
+    if (info.size > 200 * 1024 * 1024) throw new Error('音频文件超过 200MB 上限');
+    const bytes = readFileSync(filePath);
+    const filename = path.basename(filePath);
+    const extension = path.extname(filename).toLowerCase();
+    const mimeType =
+      extension === '.wav'
+        ? 'audio/wav'
+        : extension === '.mp3'
+          ? 'audio/mpeg'
+          : extension === '.m4a'
+            ? 'audio/mp4'
+            : extension === '.ogg'
+              ? 'audio/ogg'
+              : extension === '.webm'
+                ? 'audio/webm'
+                : 'application/octet-stream';
+    const form = new FormData();
+    form.append('file', new Blob([new Uint8Array(bytes)], { type: mimeType }), filename);
+    const response = await fetch(
+      `http://127.0.0.1:${runtime.port}/api/v1/speech/transcribe`,
+      {
+        method: 'POST',
+        headers: { 'x-studianda-token': runtime.token },
+        body: form,
+        signal: options?.signal ?? AbortSignal.timeout(options?.timeoutMs ?? 10 * 60 * 1000)
+      }
+    ).catch((cause: unknown) => {
+      throw new CoreUnavailableError(
+        `无法连接本地 Core（/speech/transcribe）：请先打开勘读。${cause instanceof Error ? ` ${cause.message}` : ''}`
+      );
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new CoreHttpError(
+        response.status,
+        `Core ${response.status}: ${text.slice(0, 300)}`
+      );
+    }
+    return (await response.json()) as T;
+  }
+
   /** 读取指定 MCP client 的共享范围；该 client 没有 grant 时回退默认 grant。 */
-  async getScope(agentName = ''): Promise<AgentScope> {
-    try {
+  async getScope(agentName = ''): Promise<AgentScope> {    try {
       const suffix = agentName ? `?agent=${encodeURIComponent(agentName)}` : '';
       const row = await this.request<{
         kind?: string;

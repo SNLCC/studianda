@@ -174,8 +174,7 @@ describe('AskJobManager（Core 持久化）', () => {
     });
   });
 
-  it('embed 任务调用 /embeddings/index 并落结果', async () => {
-    const calls: Array<{ path: string; body?: unknown }> = [];
+  it('embed 任务调用 /embeddings/index 并落结果', async () => {    const calls: Array<{ path: string; body?: unknown }> = [];
     const api = {
       request: async (method: string, path: string, body?: unknown) => {
         calls.push({ path, body });
@@ -198,6 +197,32 @@ describe('AskJobManager（Core 持久化）', () => {
     expect(calls.find((call) => call.path === '/agent/jobs/j4/finish')?.body).toMatchObject({
       status: 'succeeded',
       result: { indexed: 12 }
+    });
+  });
+
+  it('speech 任务通过 uploadAudio 转写并落结果', async () => {
+    const calls: Array<{ path: string; body?: unknown }> = [];
+    const api = {
+      request: async (method: string, path: string, body?: unknown) => {
+        calls.push({ path, body });
+        if (method === 'POST' && path === '/agent/jobs') {
+          return { id: 'j5', status: 'running', created: 'c', updated: 'c' };
+        }
+        if (method === 'POST' && path === '/agent/jobs/j5/finish') return { id: 'j5' };
+        throw new Error(`unexpected request: ${method} ${path}`);
+      },
+      uploadAudio: async (filePath: string) => ({ text: `转写:${filePath}` })
+    } as unknown as CoreApi;
+    const manager = new AskJobManager();
+    await manager.startSpeech(api, { audioPath: 'C:\\audio\\a.wav' }, 'dsh');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls[0]?.body).toMatchObject({
+      kind: 'speech',
+      audio_path: 'C:\\audio\\a.wav'
+    });
+    expect(calls.find((call) => call.path === '/agent/jobs/j5/finish')?.body).toMatchObject({
+      status: 'succeeded',
+      result: { text: '转写:C:\\audio\\a.wav' }
     });
   });
 });

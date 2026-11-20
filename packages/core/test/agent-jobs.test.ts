@@ -113,10 +113,19 @@ describe('Agent 长任务持久化', () => {
       method: 'POST',
       url: '/api/v1/agent/jobs',
       headers: headers(),
-      payload: { kind: 'embed', agentName: 'dsh' }
+      payload: { kind: 'embed', agentName: 'dsh-embed' }
     });
     expect(embed.statusCode).toBe(200);
     expect((embed.json() as AgentJobRecord).status).toBe('running');
+
+    const speech = await server.inject({
+      method: 'POST',
+      url: '/api/v1/agent/jobs',
+      headers: headers(),
+      payload: { kind: 'speech', agentName: 'dsh-speech', audio_path: 'C:\\audio\\a.wav' }
+    });
+    expect(speech.statusCode).toBe(200);
+    expect((speech.json() as AgentJobRecord).status).toBe('running');
 
     const created = await server.inject({
       method: 'POST',

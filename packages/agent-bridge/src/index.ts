@@ -89,6 +89,7 @@ const COMMON_INPUT = {
   path: z.string().optional().describe('parse 导入的本机 PDF 路径'),
   confirm_large: z.boolean().optional().describe('parse 确认大文件导入'),
   confirm_duplicate: z.boolean().optional().describe('parse 确认重复导入'),
+  audio_path: z.string().optional().describe('speech 本机音频路径（≤200MB）'),
   page: z.number().int().min(0).optional().describe('页码（写笔记可为 0 表示整篇）'),
   from: z.number().int().min(1).optional().describe('起始页（含）'),
   to: z.number().int().min(1).optional().describe('结束页（含）'),

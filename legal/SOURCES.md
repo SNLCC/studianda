@@ -1,6 +1,6 @@
 # 许可证来源与哈希
 
-生成时间：2026-11-20T19:20:57.046Z
+生成时间：2026-11-20T19:39:45.500Z
 
 “官方仓库”列取自各包 `package.json` 的 repository/homepage；许可证文件哈希取自安装包内实际文件。
 
@@ -160,7 +160,7 @@
 
 以下哈希由生成器从仓库工作区内的实际文件现算（asar 内资源从真实 `app.asar` 解出后计算）：
 
-安装器容器：`apps/desktop/release/Studianda-Setup-0.1.3.exe`（248449784 B，SHA-256 `42dcfb93f749bd1d7aa502c42b3bc6d1b31a4875576426a4c360e6011342e8dd`）；随其分发的组件：NSIS 安装器 stub、nsis7z.dll、StdUtils.dll、UAC.dll、elevate.exe。
+本次未找到当前版本的安装器（只构建 --dir 时正常），安装器容器实物未登记。
 
 - **Electron 运行时二进制（第三方 DLL / ICU / Pak / V8 快照）**（44.5.1）
   - `apps/desktop/node_modules/electron/dist/d3dcompiler_47.dll` — 4741488 B — SHA-256 `a05f99734f7c4822fefc12b367af21fd0976ed6608752fb1e1e80b6ece7ecbbb`
@@ -214,8 +214,8 @@
   - `/node_modules/pdfjs-dist/wasm/openjpeg.wasm`（容器 `apps/desktop/release/win-unpacked/resources/app.asar`） — 251131 B — SHA-256 `95e5002597af0824004aa57b1900fe019715db389e37640b1e58395e42f00cc5`
   - `/node_modules/pdfjs-dist/wasm/qcms_bg.wasm`（容器 `apps/desktop/release/win-unpacked/resources/app.asar`） — 96589 B — SHA-256 `663d86126d5f5fcb1c61490f94353e2a8375660b8c5498ab3ebab5a34b08800e`
 - **Agent MCP bridge bundle（agent-bridge.mjs，内嵌 MCP SDK / zod 等 8 个 npm 包）**（0.1.3）
-  - `packages/agent-bridge/dist/agent-bridge.mjs` — 1473626 B — SHA-256 `d063f9c6b09887bd0a11a23f5b5e8e6ef60d4db35d82360f02f11b0ce61f5d28`
-  - `packages/agent-bridge/dist/agent-bridge.mjs.meta.json` — 196991 B — SHA-256 `d79df9640a1f91a3f90e014d4da0b23f90bb00316c72ca787e019fe4e4ece448`
+  - `packages/agent-bridge/dist/agent-bridge.mjs` — 1478437 B — SHA-256 `2dd29853b6644fcdea3e13d093961051c6c1c1376e9c2306578ec63763e948ac`
+  - `packages/agent-bridge/dist/agent-bridge.mjs.meta.json` — 196991 B — SHA-256 `9af9a7351b123d97ef4170db12c8f6953a76958087152f712bb128245374df23`
 - **Noto Serif CJK SC**（2.003）
   - `packages/ui/src/styles/assets/fonts/StudiandaSerifSC-Regular.woff2` — 11168936 B — SHA-256 `5329e86415b45a98eb4fb9c78e4c053f79e4728f985feabab8b26f92328635be`
   - `packages/ui/src/styles/assets/fonts/StudiandaSerifSC-SemiBold.woff2` — 11266872 B — SHA-256 `8cfe445056c835196c448b30df24e65aedfb80e589791f12a77c23c5e71ee6a7`

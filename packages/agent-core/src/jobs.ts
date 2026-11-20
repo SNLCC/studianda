@@ -52,6 +52,10 @@ export interface EmbedJobInput {
   documentId?: string;
 }
 
+export interface SpeechJobInput {
+  audioPath: string;
+}
+
 interface RemoteJob {
   id?: unknown;
   status?: unknown;
@@ -139,6 +143,23 @@ export class AskJobManager {
     return snapshot;
   }
 
+  async startSpeech(
+    api: CoreApi,
+    input: SpeechJobInput,
+    owner: string
+  ): Promise<AskJobSnapshot> {
+    const created = await api.request('POST', '/agent/jobs', {
+      kind: 'speech',
+      agentName: owner,
+      audio_path: input.audioPath
+    });
+    const snapshot = toSnapshot(created);
+    const controller = new AbortController();
+    this.controllers.set(snapshot.id, controller);
+    void this.runSpeech(api, snapshot.id, owner, input, controller);
+    return snapshot;
+  }
+
   async startOcr(api: CoreApi, input: OcrJobInput, owner: string): Promise<AskJobSnapshot> {    const created = await api.request('POST', '/agent/jobs', {
       kind: 'ocr',
       agentName: owner,
@@ -176,6 +197,54 @@ export class AskJobManager {
       agentName: owner
     });
     return toSnapshot(row);
+  }
+
+  private async runSpeech(
+    api: CoreApi,
+    jobId: string,
+    owner: string,
+    input: SpeechJobInput,
+    controller: AbortController
+  ): Promise<void> {
+    const finish = async (
+      status: 'succeeded' | 'failed' | 'cancelled',
+      result?: unknown,
+      error?: string
+    ): Promise<void> => {
+      try {
+        await api.request('POST', `/agent/jobs/${encodeURIComponent(jobId)}/finish`, {
+          agentName: owner,
+          status,
+          ...(result !== undefined ? { result } : {}),
+          ...(error !== undefined ? { error } : {})
+        });
+      } catch {
+        // Core 已退出：下次启动会标 interrupted。
+      }
+    };
+    try {
+      if (!api.uploadAudio) throw new Error('当前运行环境不支持音频上传');
+      const result = await api.uploadAudio(input.audioPath, {
+        signal: controller.signal
+      });
+      if (controller.signal.aborted) {
+        await finish('cancelled');
+        return;
+      }
+      await finish('succeeded', result);
+    } catch (error) {
+      if (controller.signal.aborted) {
+        await finish('cancelled');
+        return;
+      }
+      await finish(
+        'failed',
+        undefined,
+        error instanceof Error ? error.message : String(error)
+      );
+    } finally {
+      this.controllers.delete(jobId);
+    }
   }
 
   private async runEmbed(

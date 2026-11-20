@@ -565,8 +565,7 @@ describe('重任务：parse / embed', () => {
     ).rejects.toBeInstanceOf(ScopeError);
   });
 
-  it('embed 启动持久化 job；全库索引需 library + write', async () => {
-    const { api } = routedApi({});
+  it('embed 启动持久化 job；全库索引需 library + write', async () => {    const { api } = routedApi({});
     let startedWith: unknown = null;
     const jobs = {
       startEmbed: async (_api: unknown, input: unknown) => {
@@ -601,5 +600,31 @@ describe('重任务：parse / embed', () => {
     )) as { id: string };
     expect(scoped.id).toBe('emb1');
     expect(startedWith).toEqual({ documentId: 'doc-1' });
+  });
+
+  it('speech 启动需非 none scope，并把 audio_path 交给 job', async () => {
+    const { api } = routedApi({});
+    let startedWith: unknown = null;
+    const jobs = {
+      startSpeech: async (_api: unknown, input: unknown) => {
+        startedWith = input;
+        return { id: 'sp1', state: 'running', createdAt: 'c', updatedAt: 'c' };
+      }
+    } as unknown as AskJobManager;
+    const result = (await executeTool(
+      'compute',
+      { action: 'start', kind: 'speech', audio_path: 'C:\\audio\\a.wav' },
+      { scope: { kind: 'library', caps: ['read'] }, api, jobs }
+    )) as { id: string };
+    expect(result.id).toBe('sp1');
+    expect(startedWith).toEqual({ audioPath: 'C:\\audio\\a.wav' });
+
+    await expect(
+      executeTool(
+        'compute',
+        { action: 'start', kind: 'speech', audio_path: 'a.wav' },
+        { scope: { kind: 'none' }, api, jobs }
+      )
+    ).rejects.toBeInstanceOf(ScopeError);
   });
 });

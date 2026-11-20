@@ -9,6 +9,11 @@ export interface CoreApi {
     body?: unknown,
     options?: { signal?: AbortSignal; timeoutMs?: number }
   ): Promise<T>;
+  /** 可选：把本机音频文件转写为文本（MCP 宿主用；进程内宿主可不实现）。 */
+  uploadAudio?<T>(
+    filePath: string,
+    options?: { signal?: AbortSignal; timeoutMs?: number }
+  ): Promise<T>;
 }
 
 export type AgentScope =
@@ -176,7 +181,7 @@ export function toolSpecs(): ToolSpec[] {
     ['notes', 'AI 笔记：list（独立笔记）/ list_for_document / create（省略 document_id 即独立笔记）/ update / set_tags / delete / restore。'],
     ['annotations', '批注：list_for_document / create / update / delete / restore（写入需允许整理）。'],
     ['organize', '整理与撤销：preview / apply / undo（标签/题录/文件夹）+ folders / projects / 排序 / 回收站 / 参考文献。'],
-    ['compute', '长任务：start / status / cancel；kind=summary / translate / ask / corpus_ask / parse（导入本机 PDF）/ embed（建索引）/ ocr；另有 web_search。'],
+    ['compute', '长任务：start / status / cancel；kind=summary / translate / ask / corpus_ask / parse（导入本机 PDF）/ embed（建索引）/ speech（本机音频转文字）/ ocr；另有 web_search。'],
     ['reading', '阅读：sessions / tasks / summary / navigation / navigation_status / translation / translation_pages / flows / flow。'],
     ['system', '系统：health / backups / maintenance / file_health / diagnostics（后四项只读，需全库范围）。']
   ];
@@ -232,6 +237,7 @@ interface ToolArgs {
   path?: unknown;
   confirm_large?: unknown;
   confirm_duplicate?: unknown;
+  audio_path?: unknown;
 }
 
 const MAX_PAGES = 8;
@@ -742,10 +748,11 @@ export async function executeTool(
       kind !== 'corpus_ask' &&
       kind !== 'parse' &&
       kind !== 'embed' &&
+      kind !== 'speech' &&
       kind !== 'web_search'
     ) {
       throw new Error(
-        'compute.kind 必须是 summary / translate / ask / corpus_ask / parse / embed / ocr / web_search'
+        'compute.kind 必须是 summary / translate / ask / corpus_ask / parse / embed / speech / ocr / web_search'
       );
     }
     if (kind === 'parse') {
@@ -804,6 +811,29 @@ export async function executeTool(
       }
       if (action !== 'status' && action !== 'cancel') {
         throw new Error(`compute(embed) 不支持 action=${action}`);
+      }
+      const jobId = requireString(args.job_id, 'job_id');
+      return await (action === 'status'
+        ? jobs.get(api, jobId, owner)
+        : jobs.cancel(api, jobId, owner));
+    }
+
+    if (kind === 'speech') {
+      const jobs = context.jobs;
+      if (!jobs) throw new Error('当前运行环境没有任务管理器');
+      const owner = context.agentName ?? 'agent';
+      if (action === 'start') {
+        if (scope.kind === 'none') {
+          throw new ScopeError('scope_denied', '语音转写需要先在勘读共享至少一项内容。');
+        }
+        return await jobs.startSpeech(
+          api,
+          { audioPath: requireString(args.audio_path, 'audio_path') },
+          owner
+        );
+      }
+      if (action !== 'status' && action !== 'cancel') {
+        throw new Error(`compute(speech) 不支持 action=${action}`);
       }
       const jobId = requireString(args.job_id, 'job_id');
       return await (action === 'status'

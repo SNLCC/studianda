@@ -52,18 +52,21 @@ export function registerAgentJobsRoutes(
       project_id?: unknown;
       document_ids?: unknown;
       include_memory?: unknown;
+      audio_path?: unknown;
       agentName?: unknown;
     };
     if (
       body.kind !== 'ask' &&
       body.kind !== 'ocr' &&
       body.kind !== 'corpus_ask' &&
-      body.kind !== 'embed'
+      body.kind !== 'embed' &&
+      body.kind !== 'speech'
     ) {
-      return badRequest(reply, '当前只支持 kind=ask / ocr / corpus_ask / embed');
+      return badRequest(reply, '当前只支持 kind=ask / ocr / corpus_ask / embed / speech');
     }
     if (
       body.kind !== 'embed' &&
+      body.kind !== 'speech' &&
       (typeof body.documentId !== 'string' || !body.documentId.trim())
     ) {
       return badRequest(reply, '需要 documentId');
@@ -99,6 +102,11 @@ export function registerAgentJobsRoutes(
         return badRequest(reply, 'pages 必须是正整数数组');
       }
     }
+    if (body.kind === 'speech') {
+      if (typeof body.audio_path !== 'string' || !body.audio_path.trim()) {
+        return badRequest(reply, '需要 audio_path');
+      }
+    }
     if (
       typeof body.question === 'string' &&
       body.question.length > 4000
@@ -107,6 +115,7 @@ export function registerAgentJobsRoutes(
     }
     if (
       body.kind !== 'embed' &&
+      body.kind !== 'speech' &&
       (typeof body.documentId !== 'string' || !options.store.getDocument(body.documentId))
     ) {
       return notFound(reply, '文档不存在');
@@ -133,7 +142,8 @@ export function registerAgentJobsRoutes(
         ...(typeof body.scale === 'number' ? { scale: body.scale } : {}),
         ...(typeof body.project_id === 'string' ? { project_id: body.project_id } : {}),
         ...(Array.isArray(body.document_ids) ? { document_ids: body.document_ids } : {}),
-        ...(body.include_memory === true ? { include_memory: true } : {})
+        ...(body.include_memory === true ? { include_memory: true } : {}),
+        ...(typeof body.audio_path === 'string' ? { audio_path: body.audio_path } : {})
       }),
       created: now
     });
