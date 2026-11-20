@@ -2,6 +2,7 @@ import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mc
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import {
+  AskJobManager,
   ScopeError,
   assertDocumentAllowed,
   executeTool,
@@ -23,6 +24,7 @@ const envScope =
     ? null
     : scopeFromEnv(process.env.STUDIANDA_AGENT_SCOPE);
 const api = new CoreHttpApi(dataDir);
+const askJobs = new AskJobManager();
 
 async function currentScope(agentName: string) {
   return envScope ?? (await api.getScope(agentName));
@@ -67,7 +69,10 @@ const inputSchema = {
   pages: z.array(z.number().int()).optional().describe('compute translate 指定页'),
   language: z.string().optional().describe('compute translate 目标语言'),
   force: z.boolean().optional().describe('compute 是否强制重算'),
-  job_id: z.string().optional().describe('compute 任务 id（Core 任务型接口可回传）'),
+  job_id: z.string().optional().describe('compute 任务 id（ask 必填）'),
+  question: z.string().optional().describe('compute ask 的问题'),
+  selection: z.string().optional().describe('问题关联的选文'),
+  chat_session_id: z.string().optional().describe('阅读会话 id（可选）'),
   page: z.number().int().min(0).optional().describe('页码（写笔记可为 0 表示整篇）'),
   from: z.number().int().min(1).optional().describe('起始页（含）'),
   to: z.number().int().min(1).optional().describe('结束页（含）'),
@@ -95,7 +100,8 @@ for (const spec of toolSpecs()) {
         const result = await executeTool(spec.name, args, {
           scope: await currentScope(agentName),
           api,
-          agentName
+          agentName,
+          jobs: askJobs
         });
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]

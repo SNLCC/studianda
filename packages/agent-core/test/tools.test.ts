@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ScopeError, executeTool, type CoreApi } from '../src/index.js';
+import { AskJobManager, ScopeError, executeTool, type CoreApi } from '../src/index.js';
 
 function fakeApi() {
   const calls: Array<{ method: string; path: string; body?: unknown }> = [];
@@ -256,5 +256,36 @@ describe('compute 异步任务', () => {
       )
     ).rejects.toBeInstanceOf(ScopeError);
     expect(calls).toHaveLength(0);
+  });
+
+  it('ask 走异步 job：start 后可用 job_id 查结果', async () => {
+    const manager = new AskJobManager();
+    const { api } = routedApi({
+      'POST /chat/ask': { answer: '回答', sources: [] }
+    });
+    const started = (await executeTool(
+      'compute',
+      { action: 'start', kind: 'ask', document_id: 'doc-1', question: '这篇文章说什么？' },
+      {
+        scope: { kind: 'documents', documentIds: ['doc-1'], caps: ['read'] },
+        api,
+        agentName: 'dsh',
+        jobs: manager
+      }
+    )) as { id: string; state: string };
+    expect(started.state).toBe('running');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const status = (await executeTool(
+      'compute',
+      { action: 'status', kind: 'ask', document_id: 'doc-1', job_id: started.id },
+      {
+        scope: { kind: 'documents', documentIds: ['doc-1'], caps: ['read'] },
+        api,
+        agentName: 'dsh',
+        jobs: manager
+      }
+    )) as { state: string; result?: { answer?: string } };
+    expect(status.state).toBe('succeeded');
+    expect(status.result?.answer).toBe('回答');
   });
 });

@@ -1,10 +1,13 @@
+import { AskJobManager } from './jobs.js';
+
 /** 只读工具的执行层：一个实现，两个适配器（MCP bridge / DSH Host）共用。 */
 
 export interface CoreApi {
   request<T>(
     method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
     pathname: string,
-    body?: unknown
+    body?: unknown,
+    options?: { signal?: AbortSignal; timeoutMs?: number }
   ): Promise<T>;
 }
 
@@ -138,7 +141,7 @@ export function toolSpecs(): ToolSpec[] {
     ['notes', '笔记全生命周期：list / list_for_document / create / update / set_tags / delete / restore（写入需允许整理）。'],
     ['annotations', '批注：list_for_document / create / update / delete / restore（写入需允许整理）。'],
     ['organize', '整理与撤销：preview / apply / undo（标签/题录/文件夹）+ folders / projects / 排序 / 回收站；写操作需允许整理。'],
-    ['compute', '长任务：start / status / cancel；kind=summary（全书摘要）或 translate（整篇翻译）。'],
+    ['compute', '长任务：start / status / cancel；kind=summary（全书摘要）/ translate（整篇翻译）/ ask（问答，异步 job）。'],
     ['reading', '阅读会话：sessions / tasks / summary。'],
     ['system', '系统状态：health。']
   ];
@@ -182,6 +185,9 @@ interface ToolArgs {
   language?: unknown;
   force?: unknown;
   job_id?: unknown;
+  question?: unknown;
+  selection?: unknown;
+  chat_session_id?: unknown;
 }
 
 const MAX_PAGES = 8;
@@ -214,7 +220,12 @@ function optionalString(value: unknown, field: string, max = 500): string | unde
 export async function executeTool(
   name: string,
   rawArgs: unknown,
-  context: { scope: AgentScope; api: CoreApi; agentName?: string }
+  context: {
+    scope: AgentScope;
+    api: CoreApi;
+    agentName?: string;
+    jobs?: AskJobManager;
+  }
 ): Promise<unknown> {
   const args = asRecord(rawArgs) as ToolArgs;
   const action = typeof args.action === 'string' ? args.action : '';
@@ -599,12 +610,53 @@ export async function executeTool(
 
   if (name === 'compute') {
     const kind = args.kind;
-    if (kind !== 'summary' && kind !== 'translate') {
-      throw new Error('compute.kind 必须是 summary / translate');
+    if (kind !== 'summary' && kind !== 'translate' && kind !== 'ask') {
+      throw new Error('compute.kind 必须是 summary / translate / ask');
     }
     const documentId = requireString(args.document_id, 'document_id');
     assertDocumentAllowed(scope, documentId);
     const encoded = encodeURIComponent(documentId);
+
+    if (kind === 'ask') {
+      const jobs = context.jobs;
+      if (!jobs) throw new Error('当前运行环境没有 ask 任务管理器');
+      const owner = context.agentName ?? 'agent';
+      if (action === 'start') {
+        const question = requireString(args.question, 'question');
+        if (question.length > 4000) throw new Error('question 最多 4000 字');
+        const page = optionalInt(args.page, 'page', 1, 100000);
+        return jobs.start(
+          api,
+          {
+            documentId,
+            question,
+            ...(page !== undefined ? { page } : {}),
+            ...(args.selection !== undefined
+              ? { selection: optionalString(args.selection, 'selection', 2000) }
+              : {}),
+            ...(args.chat_session_id !== undefined
+              ? {
+                  chatSessionId: optionalString(
+                    args.chat_session_id,
+                    'chat_session_id',
+                    200
+                  )
+                }
+              : {})
+          },
+          owner
+        );
+      }
+      if (action !== 'status' && action !== 'cancel') {
+        throw new Error(`compute(ask) 不支持 action=${action}`);
+      }
+      const jobId = requireString(args.job_id, 'job_id');
+      const snapshot =
+        action === 'status' ? jobs.get(jobId, owner) : jobs.cancel(jobId, owner);
+      if (!snapshot) throw new Error('任务不存在或不属于当前 agent');
+      return snapshot;
+    }
+
     if (action === 'status') {
       if (kind === 'summary') {
         return api.request('GET', `/documents/${encoded}/book-summary`);

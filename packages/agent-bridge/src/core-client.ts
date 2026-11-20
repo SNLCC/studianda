@@ -49,7 +49,8 @@ export class CoreHttpApi implements CoreApi {
   async request<T>(
     method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
     pathname: string,
-    body?: unknown
+    body?: unknown,
+    options?: { signal?: AbortSignal; timeoutMs?: number }
   ): Promise<T> {
     const runtime = readRuntime(this.dataDir);
     if (!runtime) {
@@ -64,7 +65,7 @@ export class CoreHttpApi implements CoreApi {
         ...(body !== undefined ? { 'content-type': 'application/json' } : {})
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      signal: AbortSignal.timeout(60_000)
+      signal: options?.signal ?? AbortSignal.timeout(options?.timeoutMs ?? 60_000)
     }).catch((cause: unknown) => {
       // runtime.json 可能是上次进程留下的陈旧文件：连接失败统一归为「Core 未运行」，
       // 让 MCP 客户端看到可执行的 core_unavailable，而不是笼统的 fetch failed。
