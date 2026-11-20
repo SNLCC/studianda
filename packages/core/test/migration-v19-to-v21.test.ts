@@ -543,7 +543,7 @@ describe.each([19, 20] as const)('schema_version %i → 24 迁移', (version) =>
 
       // ---- 迁移后：版本、表、列 ----
       const after = readState(dir);
-      expect(after.version).toBe('27');
+      expect(after.version).toBe('28');
       expect(tableNames(after)).toEqual(
         expect.arrayContaining([
           'book_summaries',
@@ -628,7 +628,7 @@ describe.each([19, 20] as const)('schema_version %i → 24 迁移', (version) =>
         }
       }
       const afterReopen = readState(dir);
-      expect(afterReopen.version).toBe('27');
+      expect(afterReopen.version).toBe('28');
       expect(afterReopen.schemaObjects).toEqual(schemaAfterFirstMigration);
       expect(afterReopen.rows).toEqual(after.rows);
       // 已是 23 的库不会再备份一次。

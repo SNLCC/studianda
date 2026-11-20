@@ -119,7 +119,7 @@ describe('schema_version 26 → 27 迁移：清空 platform_connections 历史�
       // 迁移后：表仍在（回滚兼容），但读到 0 行；版本升到 27。
       const afterDb = readOnlyDb(path.join(dir, 'reader.sqlite3'));
       try {
-        expect(readVersion(afterDb)).toBe('27');
+        expect(readVersion(afterDb)).toBe('28');
         expect(tableExists(afterDb, 'platform_connections')).toBe(true);
         expect(countRows(afterDb, 'platform_connections')).toBe(0);
       } finally {
@@ -147,7 +147,7 @@ describe('schema_version 26 → 27 迁移：清空 platform_connections 历史�
       writeFileSync(extracted, archive['reader.sqlite3']!);
       const backupDb = readOnlyDb(extracted);
       try {
-        expect(readVersion(backupDb)).toBe('27');
+        expect(readVersion(backupDb)).toBe('28');
         expect(countRows(backupDb, 'platform_connections')).toBe(0);
       } finally {
         backupDb.close();
@@ -176,7 +176,7 @@ describe('schema_version 26 → 27 迁移：清空 platform_connections 历史�
         store = new Store(dir);
         const db = readOnlyDb(path.join(dir, 'reader.sqlite3'));
         try {
-          expect(readVersion(db)).toBe('27');
+          expect(readVersion(db)).toBe('28');
           expect(countRows(db, 'platform_connections')).toBe(0);
         } finally {
           db.close();

@@ -26,6 +26,7 @@ import {
   NOTE_ASSET_MIME_BY_EXT
 } from './store/note-assets.js';
 import * as noteDomain from './store/notes.js';
+import { withTransaction as runWithTransaction } from './store/transactions.js';
 import * as annotationDomain from './store/annotations.js';
 import * as documentDomain from './store/documents.js';
 import {
@@ -2241,7 +2242,9 @@ export class Store {
     //     只标记不删本地文献）。都只是加列 + 一个索引，不重建表、不动旧行。
     // 27：清空历史遗留表 platform_connections（旧版本存过平台 API Key 的 DPAPI 密文）。
     //     当前代码零读零写；保留表结构以防旧版本回滚后报 "no such table"，只 DELETE 所有行。
-    const currentVersion = 27;
+    // 28：notes.agent_name / annotations.agent_name（谁写的：用户空串、agent 记 clientInfo.name）；
+    //     新增 agent_grants / agent_operations 两张表（P1 写操作与撤销快照；当前只建表）。
+    const currentVersion = 28;
     // 本次升级生成的快照路径；迁移成功后据此清理旧快照并保证这一份不被删。
     let migrationBackupPath: string | null = null;
     if (previousVersion > 0 && previousVersion < currentVersion) {
@@ -2370,6 +2373,10 @@ export class Store {
     if (!noteColumns.has('origin')) {
       this.db.exec("ALTER TABLE notes ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'");
     }
+    // schema_version 28：写入内容的 agent 名字（用户写入为空串）；旧行回填 ''。
+    if (!noteColumns.has('agent_name')) {
+      this.db.exec("ALTER TABLE notes ADD COLUMN agent_name TEXT NOT NULL DEFAULT ''");
+    }
     // annotations 同样补 origin：AI 译文/识别结果写入批注时由系统置 'ai'。
     // PRAGMA 单独查一次，避免和上面 notes 的列集合混用。
     const annotationColumns = new Set(
@@ -2379,6 +2386,10 @@ export class Store {
     );
     if (!annotationColumns.has('origin')) {
       this.db.exec("ALTER TABLE annotations ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'");
+    }
+    // schema_version 28：写入这条批注的 agent 名字（用户写入为空串）。
+    if (!annotationColumns.has('agent_name')) {
+      this.db.exec("ALTER TABLE annotations ADD COLUMN agent_name TEXT NOT NULL DEFAULT ''");
     }
     // schema_version 23 → 24：消息作用域显式化 + 审计摘要落库（都只是加列，不重建表）。
     // - scope_kind：跨篇消息此前靠 document_id='' 哨兵，语义不清；现在显式记 'corpus'，
@@ -2441,7 +2452,7 @@ export class Store {
     }
     this.db
       .prepare('INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)')
-      .run('schema_version', '27');
+      .run('schema_version', '28');
       this.db.exec('COMMIT');
     } catch (error) {
       // 整体回滚：schema、回填、schema_version 一起回到迁移前；迁移前快照仍保留在
@@ -7582,6 +7593,14 @@ export class Store {
       NOTE_IMAGE_DEFAULT_MAX_PIXELS
     );
     return { maxBytes: maxMb * 1024 * 1024, maxPixels };
+  }
+
+  /**
+   * 可嵌套事务：外层 BEGIN IMMEDIATE；已在事务里则内部降级为 SAVEPOINT。
+   * 变更集 apply 用它包多条领域写；领域函数自身也必须走 beginTransaction。
+   */
+  withTransaction<T>(fn: () => T): T {
+    return runWithTransaction(this.db, fn);
   }
 
   getSettings(): SettingsMap {

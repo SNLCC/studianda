@@ -399,6 +399,8 @@ export interface AnnotationRecord {
    * Store 读出的记录一定带该字段（老库迁移后为 `'user'`）；手工构造的测试夹具可省略。
    */
   origin?: ContentOrigin;
+  /** 写入这条批注的 agent 名字（MCP clientInfo.name）；用户写入为空。 */
+  agentName?: string;
   /** 批注摘引对应的译文（只读派生，不落库）；没有译文时为空数组。 */
   translation?: AnnotationTranslationItem[];
   translation_engine?: string;
@@ -464,6 +466,8 @@ export interface CreateAnnotationInput {
    * 用户手工新建（默认）不传，落库为 `'user'`。
    */
   origin?: ContentOrigin;
+  /** 写入这条批注的 agent 名字（MCP clientInfo.name）；用户写入不传。 */
+  agentName?: string;
 }
 
 export interface UpdateAnnotationInput {
@@ -485,6 +489,8 @@ export interface NoteRecord {
    * Store 读出的记录一定带该字段（老库迁移后为 `'user'`）；手工构造的测试夹具可省略。
    */
   origin?: ContentOrigin;
+  /** 写入这条内容的 agent 名字（MCP clientInfo.name）；用户写入为空。 */
+  agentName?: string;
   /** Markdown 导入时的来源文件夹层级（相对路径，'' = 根目录）。 */
   folderPath?: string;
   /** 笔记标签（规范化、去重后的字符串数组）。 */
@@ -510,6 +516,8 @@ export interface CreateNoteInput {
    * 用户手工新建（默认）不传，落库为 `'user'`。
    */
   origin?: ContentOrigin;
+  /** 写入这条批注的 agent 名字（MCP clientInfo.name）；用户写入为空。 */
+  agentName?: string;
 }
 
 export interface UpdateNoteInput {

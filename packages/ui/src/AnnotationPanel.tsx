@@ -434,7 +434,7 @@ export function AnnotationPanel({
                   <span className="kr-annotation__kind">
                     {STYLES[annotation.style] ?? annotation.style ?? '批注'}
                   </span>
-                  {annotation.origin === 'ai' ? <IdentityBadge kind="agent" /> : null}
+                  {annotation.origin === 'ai' ? <IdentityBadge kind="agent" name={annotation.agentName} /> : null}
                 </div>
                 {annotation.content.trim() ? (
                   <MarkdownContent

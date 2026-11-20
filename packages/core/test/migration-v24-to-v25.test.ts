@@ -333,7 +333,7 @@ describe('schema_version 24 → 25 迁移', () => {
       const afterDb = readOnlyDb(dir);
       let afterObjects: string[] = [];
       try {
-        expect(readVersion(afterDb)).toBe('27');
+        expect(readVersion(afterDb)).toBe('28');
         afterObjects = schemaObjectNames(afterDb);
         // 只加列不重建表：v24 已有的项目/语料会话两表与索引仍在。
         expect(afterObjects).toEqual(
@@ -461,7 +461,7 @@ describe('schema_version 24 → 25 迁移', () => {
       store = null;
       const reopenedDb = readOnlyDb(dir);
       try {
-        expect(readVersion(reopenedDb)).toBe('27');
+        expect(readVersion(reopenedDb)).toBe('28');
         expect(schemaObjectNames(reopenedDb)).toEqual(afterObjects);
       } finally {
         reopenedDb.close();

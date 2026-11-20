@@ -106,6 +106,8 @@ export const SCHEMA_SQL = `      CREATE TABLE IF NOT EXISTS schema_meta(
         external_key TEXT DEFAULT '',
         -- schema_version 21：内容来源（'ai' = 系统代写的 AI 生成内容，'user' = 用户内容）。
         origin TEXT NOT NULL DEFAULT 'user',
+        -- schema_version 28：写入这条内容的 agent 名字（MCP clientInfo.name）；用户写入为空串。
+        agent_name TEXT NOT NULL DEFAULT '',
         created TEXT DEFAULT CURRENT_TIMESTAMP
       );
 
@@ -162,7 +164,9 @@ export const SCHEMA_SQL = `      CREATE TABLE IF NOT EXISTS schema_meta(
         -- schema_version 19：手动排序位置（越小越靠前，只由拖拽排序改变）。
         manual_order REAL DEFAULT 0,
         -- schema_version 21：内容来源（'ai' = 系统代写的 AI 生成内容，'user' = 用户内容）。
-        origin TEXT NOT NULL DEFAULT 'user'
+        origin TEXT NOT NULL DEFAULT 'user',
+        -- schema_version 28：写入这条内容的 agent 名字（MCP clientInfo.name）；用户写入为空串。
+        agent_name TEXT NOT NULL DEFAULT ''
       );
 
       CREATE TABLE IF NOT EXISTS note_folders(
@@ -430,6 +434,40 @@ export const SCHEMA_SQL = `      CREATE TABLE IF NOT EXISTS schema_meta(
         id TEXT PRIMARY KEY,
         value TEXT NOT NULL
       );
+
+      -- schema_version 28：Agent 共享范围与写操作审计。当前 P0 scope 仍存 settings，
+      -- 表先建好供 P1 迁入；agent_operations 记录每次可撤销写操作的 before/after 快照。
+      CREATE TABLE IF NOT EXISTS agent_grants(
+        id TEXT PRIMARY KEY,
+        agent_name TEXT NOT NULL DEFAULT '',
+        kind TEXT NOT NULL DEFAULT 'none',
+        project_id TEXT,
+        document_ids TEXT NOT NULL DEFAULT '[]',
+        page INTEGER,
+        selection TEXT NOT NULL DEFAULT '',
+        caps TEXT NOT NULL DEFAULT '[]',
+        created TEXT NOT NULL,
+        expires_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS agent_operations(
+        id TEXT PRIMARY KEY,
+        agent_name TEXT NOT NULL DEFAULT '',
+        tool TEXT NOT NULL,
+        action TEXT NOT NULL,
+        status TEXT NOT NULL,
+        dry_run INTEGER NOT NULL DEFAULT 0,
+        request_json TEXT NOT NULL DEFAULT '{}',
+        result_json TEXT NOT NULL DEFAULT '{}',
+        before_json TEXT NOT NULL DEFAULT '{}',
+        after_json TEXT NOT NULL DEFAULT '{}',
+        created TEXT NOT NULL,
+        applied_at TEXT,
+        undone_at TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS agent_grants_expiry ON agent_grants(expires_at);
+      CREATE INDEX IF NOT EXISTS agent_operations_created ON agent_operations(created DESC);
 
       -- 视觉读页缓存：按 (文献, 页, 模型, 文档版本) 命中；页面图像转录/解读是派生资料，
       -- 缓存只用于避免重复调用视觉模型，不能当作逐字原文证据。

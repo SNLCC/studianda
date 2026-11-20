@@ -9,6 +9,7 @@ import type {
 // origin 口径只有一份：批注行映射与创建共用笔记域导出的 normalizeContentOrigin，
 // 不在这里复制第二份映射（notes.ts 已注明批注域复用该导出）。
 import { normalizeContentOrigin } from './notes.js';
+import { beginTransaction } from './transactions.js';
 
 /**
  * 批注域（annotations 表 + note_asset_refs 中 source_kind='annotation' 的引用）。
@@ -83,6 +84,7 @@ interface AnnotationRow {
   created: string;
   deleted: number;
   origin?: string | null;
+  agent_name?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -106,7 +108,8 @@ function toAnnotation(row: AnnotationRow): AnnotationRecord {
     color: row.color ?? 'yellow',
     style: row.style ?? 'highlight',
     created: row.created ?? '',
-    origin: normalizeContentOrigin(row.origin)
+    origin: normalizeContentOrigin(row.origin),
+    agentName: row.agent_name || undefined
   };
 }
 
@@ -183,7 +186,7 @@ export function listAnnotations(
 ): AnnotationRecord[] {
   const rows = db
     .prepare(
-      `SELECT id, document_id, page, quote, content, rects, color, style, created, deleted, origin
+      `SELECT id, document_id, page, quote, content, rects, color, style, created, deleted, origin, agent_name
        FROM annotations WHERE document_id = ? AND deleted = ? ORDER BY page, created`
     )
     .all(documentId, trash ? 1 : 0) as unknown as AnnotationRow[];
@@ -194,7 +197,7 @@ export function listAnnotations(
 export function getAnnotation(db: DatabaseSync, id: string): AnnotationRecord | null {
   const row = db
     .prepare(
-      `SELECT id, document_id, page, quote, content, rects, color, style, created, deleted, origin
+      `SELECT id, document_id, page, quote, content, rects, color, style, created, deleted, origin, agent_name
        FROM annotations WHERE id = ? AND deleted = 0`
     )
     .get(id) as unknown as AnnotationRow | undefined;
@@ -247,12 +250,13 @@ export function createAnnotation(
   // 内容来源：AI 译文/识别结果由系统写入批注时显式传 'ai'；用户手工新建为 'user'。
   // 与 toAnnotation 共用同一个 normalizeContentOrigin 导出，不复制第二份映射。
   const origin = normalizeContentOrigin(input.origin);
-  db.exec('BEGIN IMMEDIATE');
+  const agentName = String(input.agentName ?? '').trim().slice(0, 80);
+  const transaction = beginTransaction(db);
   try {
     db.prepare(
       `INSERT INTO annotations
-       (id, document_id, page, quote, content, rects, color, style, deleted, external_key, created, origin)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`
+       (id, document_id, page, quote, content, rects, color, style, deleted, external_key, created, origin, agent_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`
     ).run(
       id,
       input.documentId,
@@ -264,17 +268,18 @@ export function createAnnotation(
       input.style ?? 'highlight',
       input.externalKey ?? '',
       deps.now(),
-      origin
+      origin,
+      agentName
     );
     deps.syncNoteAssetRefs('annotation', id, input.content ?? '');
-    db.exec('COMMIT');
+    transaction.commit();
   } catch (error) {
-    db.exec('ROLLBACK');
+    transaction.rollback();
     throw error;
   }
   const row = db
     .prepare(
-      `SELECT id, document_id, page, quote, content, rects, color, style, created, deleted, origin
+      `SELECT id, document_id, page, quote, content, rects, color, style, created, deleted, origin, agent_name
        FROM annotations WHERE id = ?`
     )
     .get(id) as unknown as AnnotationRow;
@@ -314,7 +319,7 @@ export function updateAnnotation(
   }
   if (fields.length === 0) return getAnnotation(db, id);
   values.push(id);
-  db.exec('BEGIN IMMEDIATE');
+  const transaction = beginTransaction(db);
   try {
     db.prepare(`UPDATE annotations SET ${fields.join(', ')} WHERE id = ? AND deleted = 0`).run(
       ...values
@@ -323,9 +328,9 @@ export function updateAnnotation(
       .prepare('SELECT content FROM annotations WHERE id = ? AND deleted = 0')
       .get(id) as { content?: string | null } | undefined;
     if (current) deps.syncNoteAssetRefs('annotation', id, current.content ?? '');
-    db.exec('COMMIT');
+    transaction.commit();
   } catch (error) {
-    db.exec('ROLLBACK');
+    transaction.rollback();
     throw error;
   }
   const annotation = getAnnotation(db, id);
@@ -379,16 +384,16 @@ export function purgeAnnotation(
       .prepare('SELECT asset_id FROM note_asset_refs WHERE source_kind = ? AND source_id = ?')
       .all('annotation', id) as unknown as Array<{ asset_id: string }>
   ).map((ref) => ref.asset_id);
-  db.exec('BEGIN IMMEDIATE');
+  const transaction = beginTransaction(db);
   try {
     db.prepare('DELETE FROM note_asset_refs WHERE source_kind = ? AND source_id = ?').run(
       'annotation',
       id
     );
     db.prepare('DELETE FROM annotations WHERE id = ?').run(id);
-    db.exec('COMMIT');
+    transaction.commit();
   } catch (error) {
-    db.exec('ROLLBACK');
+    transaction.rollback();
     throw error;
   }
   deps.refreshAssetCounts(affected);

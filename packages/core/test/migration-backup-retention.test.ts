@@ -157,7 +157,7 @@ describe('迁移快照保留策略', () => {
       expect(after).not.toContain(HISTORY_SNAPSHOTS[2]);
       expect(readSchemaVersion(path.join(dir, 'migration-backups', created[0]!))).toBe('25');
 
-      expect(readSchemaVersion(path.join(dir, 'reader.sqlite3'))).toBe('27');
+      expect(readSchemaVersion(path.join(dir, 'reader.sqlite3'))).toBe('28');
       expectUserFilesUntouched(dir, userBackups);
     } finally {
       rmSync(dir, { recursive: true, force: true });

@@ -25,6 +25,7 @@ export function registerNotesRoutes(app: FastifyInstance, options: NotesRouteOpt
       content?: unknown;
       externalKey?: unknown;
       origin?: unknown;
+      agentName?: unknown;
     };
     if (body.documentId != null && typeof body.documentId !== 'string') {
       return badRequest(reply, 'documentId 必须是字符串');
@@ -51,7 +52,9 @@ export function registerNotesRoutes(app: FastifyInstance, options: NotesRouteOpt
         content: typeof body.content === 'string' ? body.content : '',
         // 外部稳定标识（例如「回答存为笔记」的 chat-answer:...）：同 key 重复保存返回已有笔记。
         externalKey: typeof body.externalKey === 'string' ? body.externalKey : undefined,
-        origin: body.origin as 'user' | 'ai' | undefined
+        origin: body.origin as 'user' | 'ai' | undefined,
+        agentName:
+          typeof body.agentName === 'string' ? body.agentName.slice(0, 80) : undefined
       });
     } catch (error) {
       return badRequest(reply, error instanceof Error ? error.message : '保存笔记失败');

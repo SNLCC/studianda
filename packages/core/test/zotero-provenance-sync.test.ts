@@ -380,7 +380,7 @@ describe('题录来源（metadata_source）', () => {
           .prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'")
           .get() as { value?: string }
       ).value;
-      expect(version).toBe('27');
+      expect(version).toBe('28');
       const migrated = reopened.getDocument(document.id);
       expect(migrated?.metadataSource).toBeNull();
       expect(migrated?.zoteroMissing).toBe(false);

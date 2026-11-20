@@ -895,6 +895,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           color?: unknown;
           style?: unknown;
           origin?: unknown;
+          agentName?: unknown;
         }
       | null;
     if (!body || typeof body.documentId !== 'string' || typeof body.page !== 'number') {
@@ -914,7 +915,8 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         rects: typeof body.rects === 'string' ? body.rects : '',
         color: typeof body.color === 'string' ? body.color : 'yellow',
         style: typeof body.style === 'string' ? body.style : 'highlight',
-        origin: body.origin as 'user' | 'ai' | undefined
+        origin: body.origin as 'user' | 'ai' | undefined,
+        agentName: typeof body.agentName === 'string' ? body.agentName.slice(0, 80) : undefined
       });
     } catch (error) {
       return badRequest(reply, error instanceof Error ? error.message : '保存批注失败');

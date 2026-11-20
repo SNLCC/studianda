@@ -334,7 +334,7 @@ describe('schema_version 23 → 24 迁移', () => {
         afterVersion = readVersion(afterDb) ?? '';
         afterObjects = schemaObjectNames(afterDb);
         afterMessageColumns = tableColumns(afterDb, 'messages');
-        expect(afterVersion).toBe('27');
+        expect(afterVersion).toBe('28');
         // 只加列不重建表：v23 已有的语料会话两表/索引仍在。
         expect(afterObjects).toEqual(
           expect.arrayContaining([
@@ -497,7 +497,7 @@ describe('schema_version 23 → 24 迁移', () => {
         store = null;
         const reopenedDb = readOnlyDb(dir);
         try {
-          expect(readVersion(reopenedDb)).toBe('27');
+          expect(readVersion(reopenedDb)).toBe('28');
           expect(schemaObjectNames(reopenedDb)).toEqual(afterObjects);
         } finally {
           reopenedDb.close();

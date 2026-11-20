@@ -10,6 +10,7 @@ import type {
   NoteRecord,
   UpdateNoteInput
 } from '@studianda/shared';
+import { beginTransaction } from './transactions.js';
 
 /**
  * 笔记域（notes 表 + note_folders + notes.folder_path / manual_order / 回收站）。
@@ -101,6 +102,7 @@ export interface NoteRow {
   folder_path?: string | null;
   tags?: string | null;
   origin?: string | null;
+  agent_name?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -178,6 +180,7 @@ function toNote(row: NoteRow): NoteRecord {
     content: row.content ?? '',
     created: row.created ?? '',
     origin: normalizeContentOrigin(row.origin),
+    agentName: row.agent_name || undefined,
     folderPath: row.folder_path ?? '',
     tags: parseNoteTags(row.tags)
   };
@@ -195,7 +198,7 @@ function escapeLike(value: string): string {
 export function listNotes(db: DatabaseSync, documentId: string, trash = false): NoteRecord[] {
   const rows = db
     .prepare(
-      `SELECT id, document_id, page, quote, content, created, folder_path, tags, origin
+      `SELECT id, document_id, page, quote, content, created, folder_path, tags, origin, agent_name
        FROM notes WHERE document_id = ? AND deleted = ? ORDER BY page, created`
     )
     .all(documentId, trash ? 1 : 0) as unknown as NoteRow[];
@@ -206,7 +209,7 @@ export function listNotes(db: DatabaseSync, documentId: string, trash = false): 
 export function listStandaloneNotes(db: DatabaseSync, trash = false): NoteRecord[] {
   const rows = db
     .prepare(
-      `SELECT id, document_id, page, quote, content, created, folder_path, tags, origin, rowid
+      `SELECT id, document_id, page, quote, content, created, folder_path, tags, origin, agent_name, rowid
        FROM notes WHERE (document_id = '' OR document_id IS NULL) AND deleted = ?
        ORDER BY folder_path ASC, manual_order ASC, created ASC`
     )
@@ -219,7 +222,7 @@ export function listAllNotes(db: DatabaseSync): NoteRecord[] {
   const rows = db
     .prepare(
       `SELECT n.id, n.document_id, n.page, n.quote, substr(n.content, 1, 400) AS content,
-              n.created, n.folder_path, n.tags, n.origin
+              n.created, n.folder_path, n.tags, n.origin, n.agent_name
        FROM notes n LEFT JOIN documents d ON d.id = n.document_id
        WHERE n.deleted = 0 AND (n.document_id IS NULL OR n.document_id = '' OR d.deleted = 0)
        ORDER BY n.created DESC LIMIT 2000`
@@ -232,7 +235,7 @@ export function listAllNotes(db: DatabaseSync): NoteRecord[] {
 export function getNote(db: DatabaseSync, id: string): NoteRecord | null {
   const row = db
     .prepare(
-      'SELECT id, document_id, page, quote, content, created, folder_path, tags, origin FROM notes WHERE id = ? AND deleted = 0'
+      'SELECT id, document_id, page, quote, content, created, folder_path, tags, origin, agent_name FROM notes WHERE id = ? AND deleted = 0'
     )
     .get(id) as unknown as NoteRow | undefined;
   return row ? toNote(row) : null;
@@ -373,12 +376,13 @@ export function createNote(
   // 内容来源：只有显式声明 'ai'（系统代写 AI 内容）才落 'ai'，其余（含旧调用方）为 'user'。
   // 与 toAnnotation 共用同一个 normalizeContentOrigin 导出，不复制第二份映射。
   const origin = normalizeContentOrigin(input.origin);
+  const agentName = String(input.agentName ?? '').trim().slice(0, 80);
   // 内容写入与资源引用同步必须同成同败：任何一步失败都回滚，避免内容有图但索引没登记。
-  db.exec('BEGIN IMMEDIATE');
+  const transaction = beginTransaction(db);
   try {
     db.prepare(
-      `INSERT INTO notes(id, document_id, page, quote, content, external_key, folder_path, tags, manual_order, origin)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO notes(id, document_id, page, quote, content, external_key, folder_path, tags, manual_order, origin, agent_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       id,
       documentId,
@@ -389,12 +393,13 @@ export function createNote(
       folderPath,
       JSON.stringify(normalizeTags(input.tags)),
       manualOrder,
-      origin
+      origin,
+      agentName
     );
     deps.syncNoteAssetRefs('note', id, input.content?.trim() ?? '');
-    db.exec('COMMIT');
+    transaction.commit();
   } catch (error) {
-    db.exec('ROLLBACK');
+    transaction.rollback();
     throw error;
   }
   deps.invalidateReferenceGraphCache();
@@ -418,7 +423,7 @@ export function updateNote(
 ): NoteRecord {
   const row = db
     .prepare(
-      'SELECT id, document_id, page, quote, content, created, folder_path, tags, origin FROM notes WHERE id = ? AND deleted = 0'
+      'SELECT id, document_id, page, quote, content, created, folder_path, tags, origin, agent_name FROM notes WHERE id = ? AND deleted = 0'
     )
     .get(id) as unknown as NoteRow | undefined;
   if (!row) throw new Error('笔记不存在');
@@ -440,7 +445,7 @@ export function updateNote(
   // 显式改文件夹时同样登记层级（Markdown 导入/移动后文件夹必须能重命名/删除）。
   if (input.folderPath !== undefined) ensureNoteFolderHierarchy(db, deps, folderPath);
   const tags = input.tags !== undefined ? normalizeTags(input.tags) : parseNoteTags(row.tags);
-  db.exec('BEGIN IMMEDIATE');
+  const transaction = beginTransaction(db);
   try {
     db.prepare(
       'UPDATE notes SET page = ?, quote = ?, content = ?, folder_path = ?, tags = ? WHERE id = ?'
@@ -453,9 +458,9 @@ export function updateNote(
       id
     );
     deps.syncNoteAssetRefs('note', id, input.content?.trim() ?? row.content ?? '');
-    db.exec('COMMIT');
+    transaction.commit();
   } catch (error) {
-    db.exec('ROLLBACK');
+    transaction.rollback();
     throw error;
   }
   deps.invalidateReferenceGraphCache();
@@ -520,16 +525,16 @@ export function purgeNote(
       .prepare('SELECT asset_id FROM note_asset_refs WHERE source_kind = ? AND source_id = ?')
       .all('note', id) as unknown as Array<{ asset_id: string }>
   ).map((ref) => ref.asset_id);
-  db.exec('BEGIN IMMEDIATE');
+  const transaction = beginTransaction(db);
   try {
     db.prepare('DELETE FROM note_asset_refs WHERE source_kind = ? AND source_id = ?').run(
       'note',
       id
     );
     db.prepare('DELETE FROM notes WHERE id = ?').run(id);
-    db.exec('COMMIT');
+    transaction.commit();
   } catch (error) {
-    db.exec('ROLLBACK');
+    transaction.rollback();
     throw error;
   }
   deps.refreshAssetCounts(affected);
