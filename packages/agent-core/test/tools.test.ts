@@ -335,4 +335,49 @@ describe('compute 异步任务', () => {
       )
     ).rejects.toBeInstanceOf(ScopeError);
   });
+
+  it('web_search 走 compute，不需要文档但需要 scope', async () => {
+    const { api, calls } = routedApi({
+      'POST /web-search/search': { results: [] }
+    });
+    await executeTool(
+      'compute',
+      { action: 'web_search', kind: 'web_search', query: '韦伯 责任伦理' },
+      {
+        scope: { kind: 'documents', documentIds: ['doc-1'], caps: ['read'] },
+        api
+      }
+    );
+    expect(calls[0]?.path).toBe('/web-search/search');
+    expect(calls[0]?.body).toEqual({ query: '韦伯 责任伦理' });
+  });
+});
+
+describe('reading 扩展', () => {
+  it('导航 / 译文摘要 / 流程列表', async () => {
+    const calls: Array<{ method: string; path: string }> = [];
+    const api = {
+      request: async (method: string, path: string) => {
+        calls.push({ method, path });
+        return { ok: true };
+      }
+    } as unknown as CoreApi;
+    const scope = { kind: 'library' as const, caps: ['read'] };
+    await executeTool(
+      'reading',
+      { action: 'navigation', document_id: 'doc-1' },
+      { scope, api }
+    );
+    await executeTool(
+      'reading',
+      { action: 'translation', document_id: 'doc-1' },
+      { scope, api }
+    );
+    await executeTool('reading', { action: 'flows' }, { scope, api });
+    expect(calls.map((call) => call.path)).toEqual([
+      '/documents/doc-1/navigation',
+      '/documents/doc-1/translation/summary',
+      '/flows'
+    ]);
+  });
 });

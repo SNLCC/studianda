@@ -128,8 +128,18 @@ const IMPLEMENTED_ACTIONS: Record<string, string[]> = {
     'trash_document',
     'restore_document'
   ],
-  compute: ['start', 'status', 'cancel'],
-  reading: ['sessions', 'tasks', 'summary'],
+  compute: ['start', 'status', 'cancel', 'web_search'],
+  reading: [
+    'sessions',
+    'tasks',
+    'summary',
+    'navigation',
+    'navigation_status',
+    'translation',
+    'translation_pages',
+    'flows',
+    'flow'
+  ],
   system: ['health']
 };
 
@@ -142,7 +152,7 @@ export function toolSpecs(): ToolSpec[] {
     ['annotations', '批注：list_for_document / create / update / delete / restore（写入需允许整理）。'],
     ['organize', '整理与撤销：preview / apply / undo（标签/题录/文件夹）+ folders / projects / 排序 / 回收站；写操作需允许整理。'],
     ['compute', '长任务：start / status / cancel；kind=summary（全书摘要）/ translate（整篇翻译）/ ask（问答）/ ocr（补扫描页 OCR）。'],
-    ['reading', '阅读会话：sessions / tasks / summary。'],
+    ['reading', '阅读：sessions / tasks / summary / navigation / navigation_status / translation / translation_pages / flows / flow。'],
     ['system', '系统状态：health。']
   ];
   return defs.map(([name, description]) => ({
@@ -189,6 +199,7 @@ interface ToolArgs {
   selection?: unknown;
   chat_session_id?: unknown;
   scale?: unknown;
+  flow_id?: unknown;
 }
 
 const MAX_PAGES = 8;
@@ -642,8 +653,23 @@ export async function executeTool(
 
   if (name === 'compute') {
     const kind = args.kind;
-    if (kind !== 'summary' && kind !== 'translate' && kind !== 'ask' && kind !== 'ocr') {
-      throw new Error('compute.kind 必须是 summary / translate / ask / ocr');
+    if (
+      kind !== 'summary' &&
+      kind !== 'translate' &&
+      kind !== 'ask' &&
+      kind !== 'ocr' &&
+      kind !== 'web_search'
+    ) {
+      throw new Error('compute.kind 必须是 summary / translate / ask / ocr / web_search');
+    }
+    if (kind === 'web_search') {
+      if (scope.kind === 'none') {
+        throw new ScopeError('scope_denied', '联网搜索需要先共享文献或全库范围。');
+      }
+      if (action !== 'web_search') throw new Error('web_search 只支持 action=web_search');
+      return api.request('POST', '/web-search/search', {
+        query: requireString(args.query, 'query')
+      });
     }
     const documentId = requireString(args.document_id, 'document_id');
     assertDocumentAllowed(scope, documentId);
@@ -758,6 +784,15 @@ export async function executeTool(
   }
 
   if (name === 'reading') {
+    if (action === 'flows') {
+      requireLibraryScope(scope, '阅读流程列表需要全库范围。');
+      return api.request('GET', '/flows');
+    }
+    if (action === 'flow') {
+      requireLibraryScope(scope, '阅读流程需要全库范围。');
+      const flowId = requireString(args.flow_id, 'flow_id');
+      return api.request('GET', `/flows/${encodeURIComponent(flowId)}`);
+    }
     const documentId = requireString(args.document_id, 'document_id');
     assertDocumentAllowed(scope, documentId);
     if (action === 'sessions') {
@@ -768,6 +803,18 @@ export async function executeTool(
     }
     if (action === 'summary') {
       return api.request('GET', `/documents/${encodeURIComponent(documentId)}/book-summary`);
+    }
+    if (action === 'navigation') {
+      return api.request('GET', `/documents/${encodeURIComponent(documentId)}/navigation`);
+    }
+    if (action === 'navigation_status') {
+      return api.request('GET', `/documents/${encodeURIComponent(documentId)}/navigation/status`);
+    }
+    if (action === 'translation') {
+      return api.request('GET', `/documents/${encodeURIComponent(documentId)}/translation/summary`);
+    }
+    if (action === 'translation_pages') {
+      return api.request('GET', `/documents/${encodeURIComponent(documentId)}/translation/pages`);
     }
     throw new Error(`reading 不支持 action=${action}`);
   }
