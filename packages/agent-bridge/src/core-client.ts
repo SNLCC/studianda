@@ -20,6 +20,17 @@ export class CoreUnavailableError extends Error {
   }
 }
 
+/** Core HTTP 非 2xx：保留状态码，bridge 可据此映射 MCP 错误码。 */
+export class CoreHttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string
+  ) {
+    super(message);
+    this.name = 'CoreHttpError';
+  }
+}
+
 export function resolveDataDir(argv: readonly string[] = process.argv, env = process.env): string {
   const index = argv.indexOf('--data-dir');
   if (index >= 0) {
@@ -75,7 +86,10 @@ export class CoreHttpApi implements CoreApi {
     });
     if (!response.ok) {
       const text = await response.text().catch(() => '');
-      throw new Error(`Core ${response.status}: ${text.slice(0, 300)}`);
+      throw new CoreHttpError(
+        response.status,
+        `Core ${response.status}: ${text.slice(0, 300)}`
+      );
     }
     // 204（软删除等）没有 JSON 体，不能调用 response.json()。
     if (response.status === 204) return undefined as T;

@@ -53,6 +53,18 @@ describe('agent-bridge（MCP stdio）', () => {
     expect(names).toEqual(
       expect.arrayContaining(['scope', 'capabilities', 'library', 'notes', 'annotations', 'reading', 'system'])
     );
+    const libraryTool = tools.tools.find((tool) => tool.name === 'library');
+    const notesTool = tools.tools.find((tool) => tool.name === 'notes');
+    expect(libraryTool?.annotations?.readOnlyHint).toBe(true);
+    expect(notesTool?.annotations?.readOnlyHint).toBe(false);
+    expect(JSON.stringify(libraryTool?.inputSchema)).toContain('"search"');
+
+    const badKind = await client.callTool({
+      name: 'compute',
+      arguments: { action: 'start', kind: 'bogus', document_id: 'doc-x' }
+    });
+    expect(badKind.isError).toBe(true);
+    expect(textOf(badKind)).toContain('bad_request');
 
     const resources = await client.listResources();
     expect(resources.resources.map((resource) => resource.uri)).toEqual(

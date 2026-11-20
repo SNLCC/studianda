@@ -1,6 +1,6 @@
 # 许可证来源与哈希
 
-生成时间：2026-11-20T18:33:46.182Z
+生成时间：2026-11-20T18:42:23.226Z
 
 “官方仓库”列取自各包 `package.json` 的 repository/homepage；许可证文件哈希取自安装包内实际文件。
 
@@ -214,8 +214,8 @@
   - `/node_modules/pdfjs-dist/wasm/openjpeg.wasm`（容器 `apps/desktop/release/win-unpacked/resources/app.asar`） — 251131 B — SHA-256 `95e5002597af0824004aa57b1900fe019715db389e37640b1e58395e42f00cc5`
   - `/node_modules/pdfjs-dist/wasm/qcms_bg.wasm`（容器 `apps/desktop/release/win-unpacked/resources/app.asar`） — 96589 B — SHA-256 `663d86126d5f5fcb1c61490f94353e2a8375660b8c5498ab3ebab5a34b08800e`
 - **Agent MCP bridge bundle（agent-bridge.mjs，内嵌 MCP SDK / zod 等 8 个 npm 包）**（0.1.3）
-  - `packages/agent-bridge/dist/agent-bridge.mjs` — 1456687 B — SHA-256 `7b3deb396ea61cc90500c303ca3c8c99f9fa26da8dd7fde70f4a2308e1ad4bbf`
-  - `packages/agent-bridge/dist/agent-bridge.mjs.meta.json` — 196991 B — SHA-256 `b59d9173515de68d1b57026b745b234c458f8fc9bcb1ba403379b7d1c8bb152a`
+  - `packages/agent-bridge/dist/agent-bridge.mjs` — 1458500 B — SHA-256 `e6343ac91f51e4473f05890814ed4e545c8c676774e3e27e5fde46c04a055c1b`
+  - `packages/agent-bridge/dist/agent-bridge.mjs.meta.json` — 196991 B — SHA-256 `7fda4bad7a8f06fa3092f991906ef3edaec836cf0675043a053adedcff91449c`
 - **Noto Serif CJK SC**（2.003）
   - `packages/ui/src/styles/assets/fonts/StudiandaSerifSC-Regular.woff2` — 11168936 B — SHA-256 `5329e86415b45a98eb4fb9c78e4c053f79e4728f985feabab8b26f92328635be`
   - `packages/ui/src/styles/assets/fonts/StudiandaSerifSC-SemiBold.woff2` — 11266872 B — SHA-256 `8cfe445056c835196c448b30df24e65aedfb80e589791f12a77c23c5e71ee6a7`

@@ -9,13 +9,18 @@ import {
   scopeFromEnv,
   toolSpecs
 } from '@studianda/agent-core';
-import { CoreHttpApi, CoreUnavailableError, resolveDataDir } from './core-client.js';
+import {
+  CoreHttpApi,
+  CoreHttpError,
+  CoreUnavailableError,
+  resolveDataDir
+} from './core-client.js';
 
 /**
- * Studianda agent bridge（P0）：把 agent-core 的只读工具接到 MCP stdio。
- * - initialize / tools/list 不碰 Core（DSH 建连前有探测进程）；
- * - 只有 tools/call 才读 runtime.json 并请求 Core；
- * - 共享范围由 STUDIANDA_AGENT_SCOPE 表达（none / library / document:<id>,<id>）。
+ * Studianda MCP bridge：把 agent-core 的工具接到 MCP stdio。
+ * - initialize / tools/list 不碰 Core；
+ * - 只有 tools/call / resources/read 才读 runtime.json 并请求 Core；
+ * - 共享范围优先按 MCP clientInfo.name 隔离，缺省回退工作台写入的默认 grant。
  */
 
 const dataDir = resolveDataDir();
@@ -43,13 +48,15 @@ const server = new McpServer(
   { name: 'studianda', version: '0.1.3' },
   {
     instructions:
-      '这是用户本机的文献库。先调用 scope(action=get) 查看共享范围；范围外先请求，不要猜。' +
-      '引用必须带文献 id 与页码；P0 只开放只读工具，不要假设可以删改。'
+      '这是用户本机的勘读文献库。先调用 scope(action=get) 查看共享范围；范围外先请求，不要猜。' +
+      '能力：只读文献/检索/OCR 结果/阅读会话；可撤销的标签/题录/文件夹/项目整理；AI 笔记与批注。' +
+      '所有写操作都要求用户在勘读「Agent 工作台」勾选「允许整理」，并可通过 organize undo 或 operations 撤销。' +
+      '长任务（摘要/翻译/问答/OCR）用 compute.start → compute.status → compute.cancel。' +
+      '引用必须带文献 id 与页码；大结果分页读取；材料没有覆盖的结论要明确说明。'
   }
 );
 
-const inputSchema = {
-  action: z.string().describe('动作名；见工具描述里的 actions'),
+const COMMON_INPUT = {
   document_id: z.string().optional().describe('文献 id'),
   note_id: z.string().optional().describe('笔记 id'),
   annotation_id: z.string().optional().describe('批注 id'),
@@ -82,10 +89,57 @@ const inputSchema = {
   quote: z.string().optional().describe('写笔记/批注关联的原文摘录'),
   color: z.string().optional().describe('批注颜色'),
   style: z.string().optional().describe('批注样式'),
-  kind: z.string().optional().describe('organize 的变更类型：tags / metadata / folder'),
+  kind: z.string().optional().describe('organize 变更类型（tags/metadata/folder）或 compute 任务类型（summary/translate/ask/ocr）'),
   items: z.array(z.unknown()).optional().describe('organize 的 items：documentId + 目标字段'),
   operation_id: z.string().optional().describe('organize undo 的变更记录 id')
 };
+
+/** 每个工具只暴露自己支持的 action enum，减少模型传错动作。 */
+function inputSchemaFor(actions: string[]) {
+  return {
+    action: z
+      .enum(actions as [string, ...string[]])
+      .describe(`动作：${actions.join(' / ')}`),
+    ...COMMON_INPUT
+  };
+}
+
+const READ_ONLY_TOOLS = new Set(['scope', 'capabilities', 'library', 'reading', 'system']);
+
+function toolAnnotations(name: string) {
+  return {
+    title: name,
+    readOnlyHint: READ_ONLY_TOOLS.has(name),
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: false
+  };
+}
+
+function toolErrorText(toolName: string, error: unknown): string {
+  if (error instanceof ScopeError) return `${error.code}: ${error.message}`;
+  if (error instanceof CoreUnavailableError) return `core_unavailable: ${error.message}`;
+  if (error instanceof CoreHttpError) {
+    const code =
+      error.status === 404
+        ? 'not_found'
+        : error.status === 409
+          ? 'conflict'
+          : error.status === 429
+            ? 'too_many'
+            : error.status >= 400 && error.status < 500
+              ? 'bad_request'
+              : 'core_error';
+    return `${code}: ${error.message}`;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  if (/不存在/.test(message)) return `not_found: ${message}`;
+  if (/最多|上限|超过限制/.test(message)) return `too_many: ${message}`;
+  if (/需要|必须|不能|非法|不支持|至少|无效/.test(message)) {
+    return `bad_request: ${message}`;
+  }
+  return `tool_failed: ${toolName}: ${message}`;
+}
 
 for (const spec of toolSpecs()) {
   server.registerTool(
@@ -93,7 +147,8 @@ for (const spec of toolSpecs()) {
     {
       title: spec.name,
       description: `${spec.description} actions: ${spec.actions.join(' / ')}`,
-      inputSchema
+      inputSchema: inputSchemaFor(spec.actions),
+      annotations: toolAnnotations(spec.name)
     },
     async (args) => {
       try {
@@ -124,20 +179,9 @@ for (const spec of toolSpecs()) {
         }
         return { content };
       } catch (error) {
-        if (error instanceof ScopeError) {
-          return { isError: true, content: [{ type: 'text', text: `${error.code}: ${error.message}` }] };
-        }
-        if (error instanceof CoreUnavailableError) {
-          return { isError: true, content: [{ type: 'text', text: `core_unavailable: ${error.message}` }] };
-        }
         return {
           isError: true,
-          content: [
-            {
-              type: 'text',
-              text: `${spec.name}_failed: ${error instanceof Error ? error.message : String(error)}`
-            }
-          ]
+          content: [{ type: 'text', text: toolErrorText(spec.name, error) }]
         };
       }
     }
