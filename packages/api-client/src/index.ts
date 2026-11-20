@@ -644,7 +644,7 @@ export interface ApiClient {
   listAgentOperations(limit?: number): Promise<AgentOperationRecord[]>;
   /** 创建 MCP 长任务记录（当前 kind=ask；执行在 bridge，Core 只持久化状态）。 */
   createAgentJob(input: {
-    kind: 'ask' | 'ocr';
+    kind: 'ask' | 'ocr' | 'corpus_ask';
     agentName: string;
     documentId: string;
     question?: string;
@@ -654,6 +654,9 @@ export interface ApiClient {
     pages?: number[];
     force?: boolean;
     scale?: number;
+    project_id?: string;
+    document_ids?: string[];
+    include_memory?: boolean;
   }): Promise<AgentJobRecord>;
   getAgentJob(id: string, agentName: string): Promise<AgentJobRecord>;
   listAgentJobs(agentName: string, limit?: number): Promise<AgentJobRecord[]>;

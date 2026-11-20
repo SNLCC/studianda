@@ -151,7 +151,7 @@ export function toolSpecs(): ToolSpec[] {
     ['notes', '笔记全生命周期：list / list_for_document / create / update / set_tags / delete / restore（写入需允许整理）。'],
     ['annotations', '批注：list_for_document / create / update / delete / restore（写入需允许整理）。'],
     ['organize', '整理与撤销：preview / apply / undo（标签/题录/文件夹）+ folders / projects / 排序 / 回收站；写操作需允许整理。'],
-    ['compute', '长任务：start / status / cancel；kind=summary（全书摘要）/ translate（整篇翻译）/ ask（问答）/ ocr（补扫描页 OCR）。'],
+    ['compute', '长任务：start / status / cancel；kind=summary / translate / ask / corpus_ask（跨文献问答）/ ocr；另有 web_search。'],
     ['reading', '阅读：sessions / tasks / summary / navigation / navigation_status / translation / translation_pages / flows / flow。'],
     ['system', '系统：health / backups / maintenance / file_health / diagnostics（后四项只读，需全库范围）。']
   ];
@@ -200,6 +200,7 @@ interface ToolArgs {
   chat_session_id?: unknown;
   scale?: unknown;
   flow_id?: unknown;
+  include_memory?: unknown;
 }
 
 const MAX_PAGES = 8;
@@ -665,9 +666,12 @@ export async function executeTool(
       kind !== 'translate' &&
       kind !== 'ask' &&
       kind !== 'ocr' &&
+      kind !== 'corpus_ask' &&
       kind !== 'web_search'
     ) {
-      throw new Error('compute.kind 必须是 summary / translate / ask / ocr / web_search');
+      throw new Error(
+        'compute.kind 必须是 summary / translate / ask / corpus_ask / ocr / web_search'
+      );
     }
     if (kind === 'web_search') {
       if (scope.kind === 'none') {
@@ -677,6 +681,55 @@ export async function executeTool(
       return api.request('POST', '/web-search/search', {
         query: requireString(args.query, 'query')
       });
+    }
+
+    if (kind === 'corpus_ask') {
+      const jobs = context.jobs;
+      if (!jobs) throw new Error('当前运行环境没有 ask 任务管理器');
+      const owner = context.agentName ?? 'agent';
+      if (action !== 'start' && action !== 'status' && action !== 'cancel') {
+        throw new Error(`compute(corpus_ask) 不支持 action=${action}`);
+      }
+      if (action !== 'start') {
+        const jobId = requireString(args.job_id, 'job_id');
+        return await (action === 'status'
+          ? jobs.get(api, jobId, owner)
+          : jobs.cancel(api, jobId, owner));
+      }
+      const question = requireString(args.question, 'question');
+      if (question.length > 4000) throw new Error('question 最多 4000 字');
+      let projectId: string | undefined;
+      let documentIds: string[];
+      if (args.project_id !== undefined) {
+        projectId = requireString(args.project_id, 'project_id');
+        const projectDocs = await api.request<Array<{ id?: unknown }>>(
+          'GET',
+          `/projects/${encodeURIComponent(projectId)}/documents`
+        );
+        documentIds = (Array.isArray(projectDocs) ? projectDocs : [])
+          .map((row) => row.id)
+          .filter((id): id is string => typeof id === 'string' && id.length > 0);
+      } else {
+        if (!Array.isArray(args.document_ids) || args.document_ids.length === 0) {
+          throw new Error('corpus_ask 需要 project_id 或 document_ids');
+        }
+        documentIds = args.document_ids.map((id) => {
+          if (typeof id !== 'string') throw new Error('document_ids 必须是字符串数组');
+          return id;
+        });
+      }
+      if (documentIds.length === 0) throw new Error('范围内没有可用文献');
+      for (const documentId of documentIds) assertDocumentAllowed(scope, documentId);
+      return await jobs.startCorpusAsk(
+        api,
+        {
+          documentId: documentIds[0]!,
+          question,
+          ...(projectId ? { projectId } : { documentIds }),
+          ...(args.include_memory === true ? { includeMemory: true } : {})
+        },
+        owner
+      );
     }
     const documentId = requireString(args.document_id, 'document_id');
     assertDocumentAllowed(scope, documentId);

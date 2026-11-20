@@ -112,8 +112,7 @@ describe('AskJobManager（Core 持久化）', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
-  it('OCR 任务跳过已有 OCR/文本页，只识别缺页并落结果', async () => {
-    const calls: Array<{ path: string; body?: unknown }> = [];
+  it('OCR 任务跳过已有 OCR/文本页，只识别缺页并落结果', async () => {    const calls: Array<{ path: string; body?: unknown }> = [];
     const api = {
       request: async (method: string, path: string, body?: unknown) => {
         calls.push({ path, body });
@@ -144,6 +143,34 @@ describe('AskJobManager（Core 持久化）', () => {
     expect(finish?.body).toMatchObject({
       status: 'succeeded',
       result: { done: [1], skipped: [2, 3] }
+    });
+  });
+
+  it('corpus_ask 透传 projectId 与 reading_scope=corpus', async () => {
+    const calls: Array<{ path: string; body?: unknown }> = [];
+    const api = {
+      request: async (method: string, path: string, body?: unknown) => {
+        calls.push({ path, body });
+        if (method === 'POST' && path === '/agent/jobs') {
+          return { id: 'j3', status: 'running', created: 'c', updated: 'c' };
+        }
+        if (method === 'POST' && path === '/chat/ask') return { answer: '跨文献回答' };
+        if (method === 'POST' && path === '/agent/jobs/j3/finish') return { id: 'j3' };
+        throw new Error(`unexpected request: ${method} ${path}`);
+      }
+    } as unknown as CoreApi;
+    const manager = new AskJobManager();
+    await manager.startCorpusAsk(
+      api,
+      { documentId: 'doc-1', question: '两篇的共同点？', projectId: 'p1' },
+      'dsh'
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls[0]?.body).toMatchObject({ kind: 'corpus_ask', project_id: 'p1' });
+    expect(calls.find((call) => call.path === '/chat/ask')?.body).toMatchObject({
+      documentId: 'doc-1',
+      projectId: 'p1',
+      reading_scope: 'corpus'
     });
   });
 });

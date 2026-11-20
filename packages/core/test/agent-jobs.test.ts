@@ -94,6 +94,21 @@ describe('Agent 长任务持久化', () => {
     expect(ocr.statusCode).toBe(200);
     expect((ocr.json() as AgentJobRecord).status).toBe('running');
 
+    const corpus = await server.inject({
+      method: 'POST',
+      url: '/api/v1/agent/jobs',
+      headers: headers(),
+      payload: {
+        kind: 'corpus_ask',
+        agentName: 'dsh',
+        documentId,
+        question: '共同点？',
+        document_ids: [documentId]
+      }
+    });
+    expect(corpus.statusCode).toBe(200);
+    expect((corpus.json() as AgentJobRecord).status).toBe('running');
+
     const created = await server.inject({
       method: 'POST',
       url: '/api/v1/agent/jobs',

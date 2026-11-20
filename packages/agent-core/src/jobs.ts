@@ -40,6 +40,14 @@ export interface OcrJobInput {
   scale?: number;
 }
 
+export interface CorpusAskInput {
+  documentId: string;
+  question: string;
+  projectId?: string;
+  documentIds?: string[];
+  includeMemory?: boolean;
+}
+
 interface RemoteJob {
   id?: unknown;
   status?: unknown;
@@ -87,8 +95,30 @@ export class AskJobManager {
     return snapshot;
   }
 
-  async startOcr(api: CoreApi, input: OcrJobInput, owner: string): Promise<AskJobSnapshot> {
+  async startCorpusAsk(
+    api: CoreApi,
+    input: CorpusAskInput,
+    owner: string
+  ): Promise<AskJobSnapshot> {
     const created = await api.request('POST', '/agent/jobs', {
+      kind: 'corpus_ask',
+      agentName: owner,
+      documentId: input.documentId,
+      question: input.question,
+      ...(input.projectId ? { project_id: input.projectId } : {}),
+      ...(input.documentIds && input.documentIds.length > 0
+        ? { document_ids: input.documentIds }
+        : {}),
+      ...(input.includeMemory ? { include_memory: true } : {})
+    });
+    const snapshot = toSnapshot(created);
+    const controller = new AbortController();
+    this.controllers.set(snapshot.id, controller);
+    void this.runCorpus(api, snapshot.id, owner, input, controller);
+    return snapshot;
+  }
+
+  async startOcr(api: CoreApi, input: OcrJobInput, owner: string): Promise<AskJobSnapshot> {    const created = await api.request('POST', '/agent/jobs', {
       kind: 'ocr',
       agentName: owner,
       documentId: input.documentId,
@@ -214,6 +244,65 @@ export class AskJobManager {
         skipped,
         failed
       });
+    } catch (error) {
+      if (controller.signal.aborted) {
+        await finish('cancelled');
+        return;
+      }
+      await finish(
+        'failed',
+        undefined,
+        error instanceof Error ? error.message : String(error)
+      );
+    } finally {
+      this.controllers.delete(jobId);
+    }
+  }
+
+  private async runCorpus(
+    api: CoreApi,
+    jobId: string,
+    owner: string,
+    input: CorpusAskInput,
+    controller: AbortController
+  ): Promise<void> {
+    const finish = async (
+      status: 'succeeded' | 'failed' | 'cancelled' | 'needs_confirmation',
+      result?: unknown,
+      error?: string
+    ): Promise<void> => {
+      try {
+        await api.request('POST', `/agent/jobs/${encodeURIComponent(jobId)}/finish`, {
+          agentName: owner,
+          status,
+          ...(result !== undefined ? { result } : {}),
+          ...(error !== undefined ? { error } : {})
+        });
+      } catch {
+        // Core 已退出时 finish 失败：任务会在下次 Core 启动时标 interrupted。
+      }
+    };
+    try {
+      const result = await api.request(
+        'POST',
+        '/chat/ask',
+        {
+          question: input.question,
+          documentId: input.documentId,
+          reading_scope: 'corpus',
+          ...(input.projectId
+            ? { projectId: input.projectId }
+            : { scope_documents: input.documentIds ?? [] }),
+          ...(input.includeMemory ? { include_memory: true } : {})
+        },
+        { signal: controller.signal, timeoutMs: TIMEOUT_MS }
+      );
+      if (controller.signal.aborted) return;
+      const needsConfirmation =
+        result !== null &&
+        typeof result === 'object' &&
+        (result as { needs_confirmation?: unknown }).needs_confirmation === true;
+      await finish(needsConfirmation ? 'needs_confirmation' : 'succeeded', result);
     } catch (error) {
       if (controller.signal.aborted) {
         await finish('cancelled');

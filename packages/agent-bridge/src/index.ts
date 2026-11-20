@@ -82,6 +82,7 @@ const COMMON_INPUT = {
   chat_session_id: z.string().optional().describe('阅读会话 id（可选）'),
   scale: z.number().min(1).max(3).optional().describe('OCR 渲染倍率（默认 2）'),
   flow_id: z.string().optional().describe('阅读流程 id'),
+  include_memory: z.boolean().optional().describe('corpus_ask 是否纳入本机笔记/批注'),
   page: z.number().int().min(0).optional().describe('页码（写笔记可为 0 表示整篇）'),
   from: z.number().int().min(1).optional().describe('起始页（含）'),
   to: z.number().int().min(1).optional().describe('结束页（含）'),

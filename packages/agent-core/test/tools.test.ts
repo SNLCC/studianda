@@ -336,8 +336,56 @@ describe('compute 异步任务', () => {
     ).rejects.toBeInstanceOf(ScopeError);
   });
 
-  it('web_search 走 compute，不需要文档但需要 scope', async () => {
-    const { api, calls } = routedApi({
+  it('corpus_ask 校验每篇 scope 并交给 job 管理器', async () => {
+    const { api } = routedApi({});
+    let startedWith: unknown = null;
+    const jobs = {
+      startCorpusAsk: async (_api: unknown, input: unknown) => {
+        startedWith = input;
+        return { id: 'j3', state: 'running', createdAt: 'c', updatedAt: 'c' };
+      }
+    } as unknown as AskJobManager;
+    const result = (await executeTool(
+      'compute',
+      {
+        action: 'start',
+        kind: 'corpus_ask',
+        question: '共同点？',
+        document_ids: ['doc-1', 'doc-2']
+      },
+      {
+        scope: { kind: 'documents', documentIds: ['doc-1', 'doc-2'], caps: ['read'] },
+        api,
+        agentName: 'dsh',
+        jobs
+      }
+    )) as { id: string };
+    expect(result.id).toBe('j3');
+    expect(startedWith).toMatchObject({
+      documentId: 'doc-1',
+      documentIds: ['doc-1', 'doc-2'],
+      question: '共同点？'
+    });
+
+    await expect(
+      executeTool(
+        'compute',
+        {
+          action: 'start',
+          kind: 'corpus_ask',
+          question: 'q',
+          document_ids: ['doc-1', 'doc-2']
+        },
+        {
+          scope: { kind: 'documents', documentIds: ['doc-1'], caps: ['read'] },
+          api,
+          jobs
+        }
+      )
+    ).rejects.toBeInstanceOf(ScopeError);
+  });
+
+  it('web_search 走 compute，不需要文档但需要 scope', async () => {    const { api, calls } = routedApi({
       'POST /web-search/search': { results: [] }
     });
     await executeTool(

@@ -49,19 +49,32 @@ export function registerAgentJobsRoutes(
       pages?: unknown;
       force?: unknown;
       scale?: unknown;
+      project_id?: unknown;
+      document_ids?: unknown;
+      include_memory?: unknown;
       agentName?: unknown;
     };
-    if (body.kind !== 'ask' && body.kind !== 'ocr') {
-      return badRequest(reply, '当前只支持 kind=ask / ocr');
+    if (body.kind !== 'ask' && body.kind !== 'ocr' && body.kind !== 'corpus_ask') {
+      return badRequest(reply, '当前只支持 kind=ask / ocr / corpus_ask');
     }
     if (typeof body.documentId !== 'string' || !body.documentId.trim()) {
       return badRequest(reply, '需要 documentId');
     }
     if (
-      body.kind === 'ask' &&
+      (body.kind === 'ask' || body.kind === 'corpus_ask') &&
       (typeof body.question !== 'string' || !body.question.trim())
     ) {
       return badRequest(reply, '需要 question');
+    }
+    if (body.kind === 'corpus_ask') {
+      if (
+        typeof body.project_id !== 'string' &&
+        (!Array.isArray(body.document_ids) ||
+          body.document_ids.length === 0 ||
+          !body.document_ids.every((id) => typeof id === 'string' && id.trim()))
+      ) {
+        return badRequest(reply, 'corpus_ask 需要 project_id 或 document_ids');
+      }
     }
     if (body.kind === 'ocr' && body.pages !== undefined) {
       if (
@@ -98,7 +111,10 @@ export function registerAgentJobsRoutes(
           : {}),
         ...(Array.isArray(body.pages) ? { pages: body.pages } : {}),
         ...(body.force === true ? { force: true } : {}),
-        ...(typeof body.scale === 'number' ? { scale: body.scale } : {})
+        ...(typeof body.scale === 'number' ? { scale: body.scale } : {}),
+        ...(typeof body.project_id === 'string' ? { project_id: body.project_id } : {}),
+        ...(Array.isArray(body.document_ids) ? { document_ids: body.document_ids } : {}),
+        ...(body.include_memory === true ? { include_memory: true } : {})
       }),
       created: now
     });
