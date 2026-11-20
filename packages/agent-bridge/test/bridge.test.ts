@@ -54,6 +54,17 @@ describe('agent-bridge（MCP stdio）', () => {
       expect.arrayContaining(['scope', 'capabilities', 'library', 'notes', 'annotations', 'reading', 'system'])
     );
 
+    const resources = await client.listResources();
+    expect(resources.resources.map((resource) => resource.uri)).toEqual(
+      expect.arrayContaining(['studianda://scope', 'studianda://library'])
+    );
+    const prompts = await client.listPrompts();
+    expect(prompts.prompts.map((prompt) => prompt.name)).toEqual(
+      expect.arrayContaining(['read_document', 'summarize_document'])
+    );
+    const scopeResource = await client.readResource({ uri: 'studianda://scope' });
+    expect((scopeResource.contents[0] as { text?: string }).text).toContain('"kind":"none"');
+
     const scope = await client.callTool({ name: 'scope', arguments: { action: 'get' } });
     expect(scope.isError).not.toBe(true);
     expect(textOf(scope)).toContain('"kind": "none"');

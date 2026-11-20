@@ -1,8 +1,9 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import {
   ScopeError,
+  assertDocumentAllowed,
   executeTool,
   scopeFromEnv,
   toolSpecs
@@ -120,5 +121,148 @@ for (const spec of toolSpecs()) {
   );
 }
 
-const transport = new StdioServerTransport();await server.connect(transport);
+const transport = new StdioServerTransport();
+
+// ---------------------------------------------------------------------------
+// MCP Resources：把共享范围/文献目录暴露为可读资源，客户端无需额外工具即可预览。
+// 资源读取同样受 scope 约束；Core 未运行时返回空目录、读取正文报错。
+// ---------------------------------------------------------------------------
+async function scopedDocuments(): Promise<Array<{ id: string; name: string }>> {
+  try {
+    const scope = await currentScope(clientName());
+    const rows = await api.request<Array<{ id?: unknown; name?: unknown }>>('GET', '/documents');
+    return (Array.isArray(rows) ? rows : [])
+      .filter((row) => typeof row.id === 'string')
+      .filter((row) =>
+        scope.kind === 'library'
+          ? true
+          : scope.kind === 'documents'
+            ? scope.documentIds.includes(String(row.id))
+            : false
+      )
+      .map((row) => ({ id: String(row.id), name: String(row.name ?? '') }));
+  } catch {
+    return [];
+  }
+}
+
+server.registerResource(
+  'scope',
+  'studianda://scope',
+  {
+    title: '当前共享范围',
+    description: '勘读 Agent 工作台写入的共享范围 JSON（kind/documentIds/caps/expiresAt）。',
+    mimeType: 'application/json'
+  },
+  async (uri) => {
+    const scope = await currentScope(clientName());
+    return {
+      contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(scope) }]
+    };
+  }
+);
+
+server.registerResource(
+  'library',
+  'studianda://library',
+  {
+    title: '共享文献目录',
+    description: '当前 scope 内可见文献的 id 与标题。',
+    mimeType: 'application/json'
+  },
+  async (uri) => ({
+    contents: [
+      {
+        uri: uri.href,
+        mimeType: 'application/json',
+        text: JSON.stringify(await scopedDocuments())
+      }
+    ]
+  })
+);
+
+server.registerResource(
+  'document',
+  new ResourceTemplate('studianda://document/{id}', {
+    list: async () => ({
+      resources: (await scopedDocuments()).map((document) => ({
+        uri: `studianda://document/${document.id}`,
+        name: document.name || document.id,
+        mimeType: 'application/json'
+      }))
+    })
+  }),
+  {
+    title: '文献元数据',
+    description: '单篇文献的元数据（标题/作者/页数/标签等）；需在共享范围内。',
+    mimeType: 'application/json'
+  },
+  async (uri, variables) => {
+    const documentId = String(variables.id ?? '');
+    const scope = await currentScope(clientName());
+    assertDocumentAllowed(scope, documentId);
+    const document = await api.request('GET', `/documents/${encodeURIComponent(documentId)}`);
+    return {
+      contents: [
+        { uri: uri.href, mimeType: 'application/json', text: JSON.stringify(document) }
+      ]
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// MCP Prompts：把常用交接模板做成 prompt，客户端可直接选择，不必手写说明。
+// ---------------------------------------------------------------------------
+server.registerPrompt(
+  'read_document',
+  {
+    title: '读一篇共享文献',
+    description: '按页读取并给出带文献 id / 页码的引用。',
+    argsSchema: {
+      document_id: z.string().describe('文献 id（studianda://library 可查）'),
+      pages: z.string().optional().describe('页码范围，例如 1-5；省略则先读第 1 页')
+    }
+  },
+  ({ document_id, pages }) => ({
+    messages: [
+      {
+        role: 'user',
+        content: {
+          type: 'text',
+          text:
+            `请用 studianda MCP 工具阅读文献 ${document_id}。` +
+            `先 library.get 看页数与元数据，再用 library.pages 读 ${pages ?? '第 1 页'}。` +
+            '引用必须带文献 id 与页码；材料没有覆盖的结论要明确说未覆盖。'
+        }
+      }
+    ]
+  })
+);
+
+server.registerPrompt(
+  'summarize_document',
+  {
+    title: '生成全书摘要',
+    description: '启动 Core 的书本摘要任务并轮询结果。',
+    argsSchema: {
+      document_id: z.string().describe('文献 id')
+    }
+  },
+  ({ document_id }) => ({
+    messages: [
+      {
+        role: 'user',
+        content: {
+          type: 'text',
+          text:
+            `请用 compute 工具为文献 ${document_id} 生成全书摘要：` +
+            "compute.start（kind=summary），然后轮询 compute.status（kind=summary）直到完成。" +
+            '摘要只能基于原文；不要编造未被材料覆盖的内容。'
+        }
+      }
+    ]
+  })
+);
+
+await server.connect(transport);
 console.error('[agent-bridge] ready (stdio)');
