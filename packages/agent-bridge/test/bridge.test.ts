@@ -69,7 +69,7 @@ describe('agent-bridge（MCP stdio）', () => {
     await client.close();
   });
 
-  it('无共享范围时读正文返回 scope_denied', async () => {
+  it('无共享范围时读正文与整理都返回 scope_denied', async () => {
     const dataDir = tempDir();
     const client = await connect(dataDir);
     const result = await client.callTool({
@@ -78,6 +78,17 @@ describe('agent-bridge（MCP stdio）', () => {
     });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain('scope_denied');
+
+    const organize = await client.callTool({
+      name: 'organize',
+      arguments: {
+        action: 'preview',
+        kind: 'tags',
+        items: [{ documentId: 'doc-x', tags: ['a'] }]
+      }
+    });
+    expect(organize.isError).toBe(true);
+    expect(textOf(organize)).toContain('scope_denied');
     await client.close();
   });
 });

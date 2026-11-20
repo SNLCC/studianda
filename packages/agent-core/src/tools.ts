@@ -6,8 +6,8 @@ export interface CoreApi {
 
 export type AgentScope =
   | { kind: 'none' }
-  | { kind: 'library' }
-  | { kind: 'documents'; documentIds: string[] };
+  | { kind: 'library'; caps?: string[] }
+  | { kind: 'documents'; documentIds: string[]; caps?: string[] };
 
 export class ScopeError extends Error {
   constructor(
@@ -23,14 +23,14 @@ export class ScopeError extends Error {
 export function scopeFromEnv(value: string | undefined): AgentScope {
   const raw = value?.trim();
   if (!raw) return { kind: 'none' };
-  if (raw === 'library') return { kind: 'library' };
+  if (raw === 'library') return { kind: 'library', caps: ['read'] };
   if (raw.startsWith('document:')) {
     const ids = raw
       .slice('document:'.length)
       .split(',')
       .map((id) => id.trim())
       .filter(Boolean);
-    return ids.length > 0 ? { kind: 'documents', documentIds: ids } : { kind: 'none' };
+    return ids.length > 0 ? { kind: 'documents', documentIds: ids, caps: ['read'] } : { kind: 'none' };
   }
   return { kind: 'none' };
 }
@@ -58,6 +58,7 @@ const IMPLEMENTED_ACTIONS: Record<string, string[]> = {
   library: ['list', 'get', 'pages', 'outline', 'references'],
   notes: ['list', 'list_for_document'],
   annotations: ['list_for_document'],
+  organize: ['preview', 'apply', 'undo'],
   reading: ['sessions', 'tasks', 'summary'],
   system: ['health']
 };
@@ -69,6 +70,7 @@ export function toolSpecs(): ToolSpec[] {
     ['library', '文献与结构：list / get / pages / outline / references。'],
     ['notes', '笔记：list（独立笔记）/ list_for_document。'],
     ['annotations', '批注：list_for_document。'],
+    ['organize', '整理（可撤销）：preview（dry-run）/ apply / undo；需要允许写入的共享范围。'],
     ['reading', '阅读会话：sessions / tasks / summary。'],
     ['system', '系统状态：health。']
   ];
@@ -85,6 +87,9 @@ interface ToolArgs {
   from?: unknown;
   to?: unknown;
   limit?: unknown;
+  kind?: unknown;
+  items?: unknown;
+  operation_id?: unknown;
 }
 
 const MAX_PAGES = 8;
@@ -111,7 +116,7 @@ function asRecord(value: unknown): Record<string, unknown> {
 export async function executeTool(
   name: string,
   rawArgs: unknown,
-  context: { scope: AgentScope; api: CoreApi }
+  context: { scope: AgentScope; api: CoreApi; agentName?: string }
 ): Promise<unknown> {
   const args = asRecord(rawArgs) as ToolArgs;
   const action = typeof args.action === 'string' ? args.action : '';
@@ -203,6 +208,41 @@ export async function executeTool(
     const documentId = requireString(args.document_id, 'document_id');
     assertDocumentAllowed(scope, documentId);
     return api.request('GET', `/documents/${encodeURIComponent(documentId)}/annotations`);
+  }
+
+  if (name === 'organize') {
+    const hasWrite = scope.kind !== 'none' && (scope.caps ?? []).includes('write');
+    if (action !== 'preview' && action !== 'apply' && action !== 'undo') {
+      throw new Error(`organize 不支持 action=${action}`);
+    }
+    if (action === 'undo') {
+      if (!hasWrite) {
+        throw new ScopeError('scope_denied', '撤销变更需要新的共享范围，并勾选「允许整理」。');
+      }
+      const operationId = requireString(args.operation_id, 'operation_id');
+      return api.request('POST', '/agent/changes/undo', { operationId });
+    }
+    const kind = args.kind;
+    if (kind !== 'tags' && kind !== 'metadata' && kind !== 'folder') {
+      throw new Error('kind 必须是 tags / metadata / folder');
+    }
+    if (!Array.isArray(args.items) || args.items.length === 0) {
+      throw new Error('items 不能为空');
+    }
+    const items = args.items.map((raw, index) => {
+      const item = asRecord(raw);
+      const documentId = requireString(item.documentId, `items[${index}].documentId`);
+      return { ...item, documentId };
+    });
+    for (const item of items) assertDocumentAllowed(scope, item.documentId);
+    if (action === 'apply' && !hasWrite) {
+      throw new ScopeError('scope_denied', '应用变更需要在共享范围里勾选「允许整理」。');
+    }
+    return api.request('POST', `/agent/changes/${action}`, {
+      action: kind,
+      items,
+      agentName: context.agentName ?? 'agent'
+    });
   }
 
   if (name === 'reading') {

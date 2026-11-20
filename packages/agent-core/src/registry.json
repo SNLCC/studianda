@@ -945,6 +945,48 @@
       "routes": [
         "GET /api/v1/agent/scope"
       ]
+    },
+    {
+      "id": "organize.preview",
+      "tool": "organize",
+      "action": "preview",
+      "effect": "read",
+      "risk": "low",
+      "phase": "P1",
+      "caps": [
+        "read"
+      ],
+      "routes": [
+        "POST /api/v1/agent/changes/preview"
+      ]
+    },
+    {
+      "id": "organize.apply",
+      "tool": "organize",
+      "action": "apply",
+      "effect": "write",
+      "risk": "medium",
+      "phase": "P1",
+      "caps": [
+        "write"
+      ],
+      "routes": [
+        "POST /api/v1/agent/changes/apply"
+      ]
+    },
+    {
+      "id": "organize.undo",
+      "tool": "organize",
+      "action": "undo",
+      "effect": "write",
+      "risk": "low",
+      "phase": "P1",
+      "caps": [
+        "write"
+      ],
+      "routes": [
+        "POST /api/v1/agent/changes/undo"
+      ]
     }
   ],
   "never": [

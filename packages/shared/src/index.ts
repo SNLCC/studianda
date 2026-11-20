@@ -3066,6 +3066,52 @@ export function defaultAgentScope(): AgentScope {
   };
 }
 
+/** Agent 可撤销写操作（P1）：一批文献的标签 / 题录 / 文件夹修改。 */
+export type AgentChangeAction = 'tags' | 'metadata' | 'folder';
+
+export interface AgentChangeItem {
+  documentId: string;
+  /** action='tags'：目标标签集合（空数组 = 清空）。 */
+  tags?: string[];
+  /** action='metadata'：只改传入字段。 */
+  metadata?: { name?: string; author?: string; docType?: string };
+  /** action='folder'：目标文件夹 id，'' = 未分类。 */
+  folderId?: string;
+}
+
+export interface AgentChangeRequest {
+  action: AgentChangeAction;
+  items: AgentChangeItem[];
+  agentName?: string;
+}
+
+export interface AgentChangeItemPreview {
+  documentId: string;
+  documentName: string;
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+  changed: boolean;
+}
+
+export interface AgentChangePreview {
+  action: AgentChangeAction;
+  items: AgentChangeItemPreview[];
+  changed: number;
+  requiresReview: boolean;
+}
+
+export interface AgentChangeApplyResult {
+  action: AgentChangeAction;
+  operationId: string;
+  applied: number;
+  items: AgentChangeItemPreview[];
+}
+
+export interface AgentChangeUndoResult {
+  operationId: string;
+  restored: number;
+}
+
 /** 生成一个配置型 DSH bundle（Plugins → Add plugin 可安装的本地目录）。 */
 export interface AgentBridgeBundleInput {
   command: string;

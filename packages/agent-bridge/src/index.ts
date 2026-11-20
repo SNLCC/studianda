@@ -27,6 +27,15 @@ async function currentScope() {
   return envScope ?? (await api.getScope());
 }
 
+/** MCP clientInfo.name：写入笔记/批注/变更审计的 Agent 名字。 */
+function clientName(): string {
+  const low = (server as unknown as {
+    server?: { getClientVersion?: () => { name?: string } };
+  }).server;
+  const name = low?.getClientVersion?.()?.name?.trim();
+  return name ? name.slice(0, 80) : 'agent';
+}
+
 const server = new McpServer(
   { name: 'studianda', version: '0.1.3' },
   {
@@ -41,7 +50,10 @@ const inputSchema = {
   document_id: z.string().optional().describe('文献 id'),
   from: z.number().int().min(1).optional().describe('起始页（含）'),
   to: z.number().int().min(1).optional().describe('结束页（含）'),
-  limit: z.number().int().min(1).max(50).optional().describe('返回条数')
+  limit: z.number().int().min(1).max(50).optional().describe('返回条数'),
+  kind: z.string().optional().describe('organize 的变更类型：tags / metadata / folder'),
+  items: z.array(z.unknown()).optional().describe('organize 的 items：documentId + 目标字段'),
+  operation_id: z.string().optional().describe('organize undo 的变更记录 id')
 };
 
 for (const spec of toolSpecs()) {
@@ -54,7 +66,11 @@ for (const spec of toolSpecs()) {
     },
     async (args) => {
       try {
-        const result = await executeTool(spec.name, args, { scope: await currentScope(), api });
+        const result = await executeTool(spec.name, args, {
+          scope: await currentScope(),
+          api,
+          agentName: clientName()
+        });
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]
         };
@@ -79,6 +95,5 @@ for (const spec of toolSpecs()) {
   );
 }
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
+const transport = new StdioServerTransport();await server.connect(transport);
 console.error('[agent-bridge] ready (stdio)');

@@ -7603,6 +7603,73 @@ export class Store {
     return runWithTransaction(this.db, fn);
   }
 
+  /** 记录一次可撤销的 agent 写操作（before/after 快照）。 */
+  insertAgentOperation(row: {
+    id: string;
+    agentName: string;
+    tool: string;
+    action: string;
+    requestJson: string;
+    resultJson: string;
+    beforeJson: string;
+    afterJson: string;
+    created: string;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT INTO agent_operations
+         (id, agent_name, tool, action, status, dry_run, request_json, result_json, before_json, after_json, created, applied_at)
+         VALUES (?, ?, ?, ?, 'applied', 0, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        row.id,
+        row.agentName,
+        row.tool,
+        row.action,
+        row.requestJson,
+        row.resultJson,
+        row.beforeJson,
+        row.afterJson,
+        row.created,
+        row.created
+      );
+  }
+
+  getAgentOperation(id: string): {
+    id: string;
+    agent_name: string;
+    tool: string;
+    action: string;
+    status: string;
+    before_json: string;
+    after_json: string;
+    created: string;
+  } | null {
+    const row = this.db
+      .prepare(
+        'SELECT id, agent_name, tool, action, status, before_json, after_json, created FROM agent_operations WHERE id = ?'
+      )
+      .get(id) as
+      | {
+          id: string;
+          agent_name: string;
+          tool: string;
+          action: string;
+          status: string;
+          before_json: string;
+          after_json: string;
+          created: string;
+        }
+      | undefined;
+    return row ?? null;
+  }
+
+  markAgentOperationUndone(id: string, when: string): void {
+    this.db
+      .prepare("UPDATE agent_operations SET status = 'undone', undone_at = ? WHERE id = ?")
+      .run(when, id);
+  }
+
   getSettings(): SettingsMap {
     const rows = this.db.prepare('SELECT key, value FROM settings ORDER BY key').all() as unknown as Array<{
       key: string;

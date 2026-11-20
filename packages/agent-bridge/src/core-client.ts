@@ -75,13 +75,17 @@ export class CoreHttpApi implements CoreApi {
       const row = await this.request<{
         kind?: string;
         documentIds?: unknown;
+        caps?: unknown;
       }>('GET', '/agent/scope');
-      if (row.kind === 'library') return { kind: 'library' };
+      const caps = Array.isArray(row.caps)
+        ? row.caps.filter((cap): cap is string => typeof cap === 'string')
+        : [];
+      if (row.kind === 'library') return { kind: 'library', caps };
       if (row.kind === 'documents') {
         const ids = Array.isArray(row.documentIds)
           ? row.documentIds.filter((id): id is string => typeof id === 'string')
           : [];
-        return ids.length > 0 ? { kind: 'documents', documentIds: ids } : { kind: 'none' };
+        return ids.length > 0 ? { kind: 'documents', documentIds: ids, caps } : { kind: 'none' };
       }
       return { kind: 'none' };
     } catch {

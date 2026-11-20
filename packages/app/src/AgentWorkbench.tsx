@@ -55,6 +55,7 @@ export function AgentWorkbench({
   } | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [target, setTarget] = useState<Target>('none');
+  const [allowWrite, setAllowWrite] = useState(false);
   const [documentId, setDocumentId] = useState(currentDocumentId ?? '');
   const [projectId, setProjectId] = useState('');
   const [brief, setBrief] = useState('');
@@ -71,6 +72,7 @@ export function AgentWorkbench({
         const [current, list] = await Promise.all([api.getAgentScope(), api.listProjects()]);
         if (disposed) return;
         setScope(current);
+        setAllowWrite(current.caps.includes('write'));
         setProjects(list);
         if (current.kind === 'library') setTarget('library');
         else if (current.kind === 'documents') {
@@ -134,9 +136,11 @@ export function AgentWorkbench({
       `【任务】${target === 'none' ? '先确认共享范围' : '请基于共享范围完成：<在这里写任务>'}`,
       `【范围】${targetText}；scope 由勘读的 Agent 工作台写入，范围不够先请求，不要猜。`,
       `【已知】当前页 ${currentPage ?? '未打开文献'}；引用必须带文献 id 与页码。`,
-      `【边界】只读；不改批注、不导出、不写文件；没有的结论写"材料未覆盖"。`
+      allowWrite
+        ? '【边界】可写：只限标签/题录/文件夹，先 preview 再 apply；每次 apply 返回 operationId，可撤销。不写正文/批注/文件。'
+        : '【边界】只读；不改批注、不导出、不写文件；没有的结论写"材料未覆盖"。'
     ].join('\n');
-  }, [target, projectId, documentId, documents, projects, currentPage]);
+  }, [target, projectId, documentId, documents, projects, currentPage, allowWrite]);
 
   useEffect(() => {
     setBrief(briefText);
@@ -176,8 +180,9 @@ export function AgentWorkbench({
         return;
       }
       let next: AgentScope;
+      const caps = allowWrite ? ['read', 'write'] : ['read'];
       if (target === 'library') {
-        next = { ...defaultAgentScope(), kind: 'library', caps: ['read'], expiresAt: expiry() };
+        next = { ...defaultAgentScope(), kind: 'library', caps, expiresAt: expiry() };
       } else if (target === 'project') {
         if (!projectId) throw new Error('先选择项目');
         const rows = await api.listProjectDocuments(projectId);
@@ -187,7 +192,7 @@ export function AgentWorkbench({
           kind: 'documents',
           projectId,
           documentIds: rows.map((row) => row.id),
-          caps: ['read'],
+          caps,
           expiresAt: expiry()
         };
       } else {
@@ -197,7 +202,7 @@ export function AgentWorkbench({
           kind: 'documents',
           documentIds: [documentId],
           page: currentPage ?? null,
-          caps: ['read'],
+          caps,
           expiresAt: expiry()
         };
       }
@@ -336,8 +341,21 @@ export function AgentWorkbench({
             </label>
           ) : null}
 
+          <label className={`kr-agent__option${allowWrite ? ' is-active' : ''}`}>
+            <input
+              type="checkbox"
+              checked={allowWrite}
+              onChange={(event) => setAllowWrite(event.target.checked)}
+            />
+            <span>
+              <strong>允许整理</strong>
+              <small>标签 / 题录 / 文件夹；每次写入都可在 DSH 里撤销</small>
+            </span>
+          </label>
+
           <p className="kr-muted">
-            只授予只读；2 小时后自动失效；随时可撤销。写入能力（笔记/批注/整理）在 P1，尚未开放。
+            只授予只读；2 小时后自动失效；随时可撤销。勾选「允许整理」后 agent 才能写标签/题录/文件夹，
+            每次写入都有 before/after 记录，可撤销。
           </p>
           {error ? (
             <p className="kr-page-error" role="alert">

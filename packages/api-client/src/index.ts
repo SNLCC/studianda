@@ -1,4 +1,8 @@
 import type {
+  AgentChangeApplyResult,
+  AgentChangePreview,
+  AgentChangeRequest,
+  AgentChangeUndoResult,
   AgentScope,
   AnnotationRecord,
   ApiErrorBody,
@@ -628,6 +632,12 @@ export interface ApiClient {
   getAgentScope(): Promise<AgentScope>;
   setAgentScope(scope: AgentScope): Promise<AgentScope>;
   clearAgentScope(): Promise<AgentScope>;
+  /** Agent 写操作 dry-run：只算 before/after，不落库。 */
+  previewAgentChanges(input: AgentChangeRequest): Promise<AgentChangePreview>;
+  /** 应用一批变更（事务 + agent_operations 审计），返回 operationId 供撤销。 */
+  applyAgentChanges(input: AgentChangeRequest): Promise<AgentChangeApplyResult>;
+  /** 按 before 快照撤销一次 apply。 */
+  undoAgentChanges(operationId: string): Promise<AgentChangeUndoResult>;
   /** 提示词分层 P1-2：只读列出 `<dataDir>/flows` 下的 L1 用户阅读流程（含启用状态与跳过原因）。 */
   listFlows(): Promise<FlowListResponse>;
   /** 读取单个流程的完整正文（编辑用；只返回通过服务端校验的流程）。 */
@@ -1971,6 +1981,21 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         body: JSON.stringify(scope)
       }),
     clearAgentScope: () => request<AgentScope>('/agent/scope', { method: 'DELETE' }),
+    previewAgentChanges: (input) =>
+      request<AgentChangePreview>('/agent/changes/preview', {
+        method: 'POST',
+        body: JSON.stringify(input)
+      }),
+    applyAgentChanges: (input) =>
+      request<AgentChangeApplyResult>('/agent/changes/apply', {
+        method: 'POST',
+        body: JSON.stringify(input)
+      }),
+    undoAgentChanges: (operationId) =>
+      request<AgentChangeUndoResult>('/agent/changes/undo', {
+        method: 'POST',
+        body: JSON.stringify({ operationId })
+      }),
     listFlows: () => request<FlowListResponse>('/flows'),
     getFlow: (id) => request<FlowDetailRecord>(`/flows/${encodeURIComponent(id)}`),
     createFlow: (input) =>
