@@ -353,8 +353,7 @@ describe('compute 异步任务', () => {
   });
 });
 
-describe('system 只读维护信息', () => {
-  it('health 任意 scope；backups/file_health 需要全库', async () => {
+describe('system 只读维护信息', () => {  it('health 任意 scope；backups/file_health 需要全库', async () => {
     const calls: Array<{ method: string; path: string }> = [];
     const api = {
       request: async (method: string, path: string) => {
@@ -385,8 +384,7 @@ describe('system 只读维护信息', () => {
 });
 
 describe('reading 扩展', () => {
-  it('导航 / 译文摘要 / 流程列表', async () => {
-    const calls: Array<{ method: string; path: string }> = [];
+  it('导航 / 译文摘要 / 流程列表', async () => {    const calls: Array<{ method: string; path: string }> = [];
     const api = {
       request: async (method: string, path: string) => {
         calls.push({ method, path });
@@ -409,6 +407,29 @@ describe('reading 扩展', () => {
       '/documents/doc-1/navigation',
       '/documents/doc-1/translation/summary',
       '/flows'
+    ]);
+  });
+});
+
+describe('MCP progress 回调', () => {
+  it('多页读取按页报告 done/total', async () => {
+    const progress: Array<[number, number]> = [];
+    const { api } = routedApi({
+      'GET /documents/doc-1/pages/1/text': { page: 1, text: 'a', origin: 'native' },
+      'GET /documents/doc-1/pages/2/text': { page: 2, text: 'b', origin: 'native' }
+    });
+    await executeTool(
+      'library',
+      { action: 'pages', document_id: 'doc-1', from: 1, to: 2 },
+      {
+        scope: { kind: 'library', caps: ['read'] },
+        api,
+        onProgress: (done, total) => progress.push([done, total])
+      }
+    );
+    expect(progress).toEqual([
+      [1, 2],
+      [2, 2]
     ]);
   });
 });

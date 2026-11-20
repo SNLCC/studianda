@@ -237,6 +237,8 @@ export async function executeTool(
     api: CoreApi;
     agentName?: string;
     jobs?: AskJobManager;
+    /** MCP 进度回调：多页/批量工具可报告 done/total。 */
+    onProgress?: (done: number, total: number, message?: string) => void;
   }
 ): Promise<unknown> {
   const args = asRecord(rawArgs) as ToolArgs;
@@ -323,12 +325,14 @@ export async function executeTool(
       if (end < from) throw new Error('to 不能小于 from');
       if (end - from + 1 > MAX_PAGES) throw new Error(`单次最多 ${MAX_PAGES} 页`);
       const pages: Array<{ page: number; text: string; origin?: string }> = [];
+      const total = end - from + 1;
       for (let page = from; page <= end; page += 1) {
         const row = await api.request<{ page: number; text: string; origin?: string }>(
           'GET',
           `/documents/${encodeURIComponent(documentId)}/pages/${page}/text`
         );
         pages.push({ page: row.page, text: row.text, origin: row.origin });
+        context.onProgress?.(pages.length, total, `page ${page}`);
       }
       return { document_id: documentId, pages };
     }
@@ -346,6 +350,7 @@ export async function executeTool(
         text: string;
         boxes: string;
       }> = [];
+      const total = end - from + 1;
       for (let page = from; page <= end; page += 1) {
         const row = await api.request<{
           page: number;
@@ -360,6 +365,7 @@ export async function executeTool(
           text: row.text,
           boxes: row.boxes ?? ''
         });
+        context.onProgress?.(pages.length, total, `ocr page ${page}`);
       }
       return { document_id: documentId, pages };
     }
@@ -572,7 +578,7 @@ export async function executeTool(
       for (const documentId of documentIds) assertDocumentAllowed(scope, documentId);
       const results: unknown[] = [];
       let changed = 0;
-      for (const documentId of documentIds) {
+      for (const [index, documentId] of documentIds.entries()) {
         try {
           const result =
             action === 'project_add_documents'
@@ -592,6 +598,7 @@ export async function executeTool(
             error: error instanceof Error ? error.message : String(error)
           });
         }
+        context.onProgress?.(index + 1, documentIds.length, `document ${documentId}`);
       }
       return { projectId, changed, results };
     }

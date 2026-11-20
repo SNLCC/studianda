@@ -151,14 +151,34 @@ for (const spec of toolSpecs()) {
       inputSchema: inputSchemaFor(spec.actions),
       annotations: toolAnnotations(spec.name)
     },
-    async (args) => {
+    async (args, extra) => {
       try {
         const agentName = clientName();
+        const progressToken = (
+          extra as { _meta?: { progressToken?: string | number } } | undefined
+        )?._meta?.progressToken;
+        const onProgress =
+          progressToken === undefined
+            ? undefined
+            : (done: number, total: number, message?: string): void => {
+                void extra
+                  .sendNotification({
+                    method: 'notifications/progress',
+                    params: {
+                      progressToken,
+                      progress: done,
+                      total,
+                      ...(message ? { message } : {})
+                    }
+                  } as never)
+                  .catch(() => undefined);
+              };
         const result = await executeTool(spec.name, args, {
           scope: await currentScope(agentName),
           api,
           agentName,
-          jobs: askJobs
+          jobs: askJobs,
+          onProgress
         });
         type ToolContent =
           | { type: 'text'; text: string }
@@ -258,7 +278,17 @@ server.registerResource(
         name: document.name || document.id,
         mimeType: 'application/json'
       }))
-    })
+    }),
+    complete: {
+      id: async (value) =>
+        (await scopedDocuments())
+          .filter(
+            (document) =>
+              document.id.includes(value) ||
+              document.name.toLowerCase().includes(value.toLowerCase())
+          )
+          .map((document) => document.id)
+    }
   }),
   {
     title: '文献元数据',
