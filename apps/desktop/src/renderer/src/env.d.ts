@@ -17,6 +17,13 @@ declare global {
       setSecret(name: string, value: string): Promise<{ encryptionAvailable: boolean; configured: string[] }>;
       clearSecret(name: string): Promise<{ encryptionAvailable: boolean; configured: string[] }>;
       getDataLocation(): Promise<string>;
+      getAgentBridge(): Promise<{
+        command: string;
+        script: string;
+        dataDir: string;
+        packaged: boolean;
+      } | null>;
+      prepareAgentBridge(): Promise<{ ok: boolean; directory?: string; message: string }>;
       openDataLocation(): Promise<{ ok: boolean; message: string }>;
       getDataSetup(): Promise<{ configured: boolean; current: string }>;
       setupDataLocation(): Promise<{ ok: boolean; message: string }>;

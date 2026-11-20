@@ -48,12 +48,19 @@ export function AgentWorkbench({
 }): React.JSX.Element {
   const [scope, setScope] = useState<AgentScope>(() => defaultAgentScope());
   const [dataDir, setDataDir] = useState('');
+  const [bridge, setBridge] = useState<{
+    command: string;
+    script: string;
+    packaged: boolean;
+  } | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [target, setTarget] = useState<Target>('none');
   const [documentId, setDocumentId] = useState(currentDocumentId ?? '');
   const [projectId, setProjectId] = useState('');
   const [brief, setBrief] = useState('');
   const [busy, setBusy] = useState(false);
+  const [installBusy, setInstallBusy] = useState(false);
+  const [pluginDir, setPluginDir] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
 
@@ -95,6 +102,22 @@ export function AgentWorkbench({
   }, [adapter]);
 
   useEffect(() => {
+    let disposed = false;
+    if (!adapter.getAgentBridge) return undefined;
+    void adapter
+      .getAgentBridge()
+      .then((value) => {
+        if (disposed) return;
+        setBridge(value);
+        if (value) setDataDir(value.dataDir);
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+    };
+  }, [adapter]);
+
+  useEffect(() => {
     if (!documentId && currentDocumentId) setDocumentId(currentDocumentId);
   }, [currentDocumentId, documentId]);
 
@@ -120,7 +143,8 @@ export function AgentWorkbench({
   }, [briefText]);
 
   const dshConfig = useMemo(() => {
-    const install = '<安装目录，例如 C:\\Users\\你\\AppData\\Local\\Programs\\Studianda>';
+    const command = bridge?.command ?? '<安装目录>\\Studianda.exe';
+    const script = bridge?.script ?? '<安装目录>\\resources\\agent-bridge.mjs';
     const data = dataDir || '<资料目录>';
     return [
       '- id: mcp-studianda',
@@ -128,9 +152,9 @@ export function AgentWorkbench({
       '  config:',
       '    serverName: studianda',
       '    transport: stdio',
-      `    command: '${install}\\Studianda.exe'`,
+      `    command: '${command}'`,
       '    args:',
-      `      - '${install}\\resources\\agent-bridge.mjs'`,
+      `      - '${script}'`,
       "      - '--data-dir'",
       `      - '${data}'`,
       '    env:',
@@ -139,7 +163,7 @@ export function AgentWorkbench({
       '    failOnStartupError: true',
       '    toolCallTimeoutMs: 120000'
     ].join('\n');
-  }, [dataDir]);
+  }, [bridge, dataDir]);
 
   const save = async (): Promise<void> => {
     setBusy(true);
@@ -198,9 +222,41 @@ export function AgentWorkbench({
   const copyConfig = async (): Promise<void> => {
     try {
       await navigator.clipboard.writeText(dshConfig);
-      setNotice('DSH 配置已复制；粘到 profile 的 cordis.patch.yml 后重启 DSH。');
+      setNotice('YAML 已复制（备用方式）；推荐直接用「在 DSH 中安装」。');
     } catch {
       setNotice('复制失败：请展开配置手动复制。');
+    }
+  };
+
+  const installInDsh = async (): Promise<void> => {
+    setInstallBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      if (!adapter.prepareAgentBridge) {
+        setNotice('当前宿主不支持自动生成插件目录；请用下方 YAML 备用方式。');
+        return;
+      }
+      const result = await adapter.prepareAgentBridge();
+      if (result.ok) {
+        setPluginDir(result.directory ?? '');
+        setNotice(result.message);
+      } else {
+        setError(result.message);
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setInstallBusy(false);
+    }
+  };
+
+  const copyPluginDir = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(pluginDir);
+      setNotice('插件目录路径已复制。');
+    } catch {
+      setNotice(`请手动复制目录：${pluginDir}`);
     }
   };
 
@@ -315,17 +371,38 @@ export function AgentWorkbench({
             onChange={(event) => setBrief(event.target.value)}
           />
           <div className="kr-agent__hint">
-            接入方式：设置 → 外部 Agent（下一步）。当前 P0 可用环境变量
-            <code> STUDIANDA_AGENT_SCOPE </code>临时验证。
+            点「在 DSH 中安装」会生成一个本地 DSH 插件目录并打开；在 DSH 的
+            <strong> 插件 → 添加插件 </strong>
+            里选择这个目录，启用「勘读文献库」，然后新开会话验证。不需要手写 YAML。
           </div>
           <div className="kr-agent__actions">
-            <button type="button" className="kr-ghost" onClick={() => void copyConfig()}>
-              复制 DSH 接入配置
+            <button
+              type="button"
+              className="kr-primary"
+              disabled={installBusy}
+              onClick={() => void installInDsh()}
+            >
+              {installBusy ? '生成中…' : '在 DSH 中安装…'}
             </button>
+            {pluginDir ? (
+              <button type="button" className="kr-ghost" onClick={() => void copyPluginDir()}>
+                复制插件目录
+              </button>
+            ) : null}
           </div>
+          {pluginDir ? (
+            <p className="kr-agent__hint">
+              插件目录：<code>{pluginDir}</code>
+            </p>
+          ) : null}
           <details className="kr-agent__config-details">
-            <summary>查看 YAML（安装目录与资料目录需替换）</summary>
+            <summary>高级：手动 YAML（不推荐，仅 CLI/无插件页时使用）</summary>
             <pre className="kr-agent__config">{dshConfig}</pre>
+            <div className="kr-agent__actions">
+              <button type="button" className="kr-ghost" onClick={() => void copyConfig()}>
+                复制 YAML
+              </button>
+            </div>
           </details>
         </div>
       </div>

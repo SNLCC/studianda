@@ -33,6 +33,7 @@ import {
   RUNTIME_FILE_NAME,
   TOKEN_HEADER,
   SecretFileStore,
+  agentBridgeBundleFiles,
   type RuntimeInfo,
   type SecretsFileCipher,
   type SecretsFileStatus,
@@ -1178,6 +1179,62 @@ app.whenReady().then(async () => {
   );
 
   ipcMain.handle('studianda:get-data-location', () => dataDir ?? '');
+  const agentBridgeLaunch = (): {
+    command: string;
+    script: string;
+    dataDir: string;
+    packaged: boolean;
+  } | null => {
+    if (!dataDir) return null;
+    const script = app.isPackaged
+      ? path.join(process.resourcesPath, 'agent-bridge.mjs')
+      : path.join(app.getAppPath(), '..', '..', 'packages', 'agent-bridge', 'dist', 'agent-bridge.mjs');
+    return {
+      command: process.execPath,
+      script: path.normalize(script),
+      dataDir,
+      packaged: app.isPackaged
+    };
+  };
+  ipcMain.handle('studianda:get-agent-bridge', () => agentBridgeLaunch());
+  ipcMain.handle('studianda:prepare-agent-bridge', async () => {
+    const launch = agentBridgeLaunch();
+    if (!launch) return { ok: false, message: '资料目录尚未初始化。' };
+    if (!existsSync(launch.script)) {
+      return {
+        ok: false,
+        message: `bridge 尚未构建：${launch.script}。请先运行 pnpm --filter @studianda/agent-bridge build。`
+      };
+    }
+    const directory = path.join(dataDir as string, 'dsh-plugin');
+    try {
+      // 不要删除目录：DSH 的本地安装会 link 这个目录，删除会破坏已安装的插件。
+      // 只覆盖生成的文件，重复点击是幂等的。
+      for (const file of agentBridgeBundleFiles({
+        command: launch.command,
+        script: launch.script,
+        dataDir: launch.dataDir,
+        version: app.getVersion()
+      })) {
+        const target = path.join(directory, file.relativePath);
+        mkdirSync(path.dirname(target), { recursive: true });
+        writeFileSync(target, file.content, 'utf8');
+      }
+      const error = await shell.openPath(directory);
+      return {
+        ok: true,
+        directory,
+        message: error
+          ? `插件目录已生成，但自动打开失败：${directory}`
+          : '插件目录已生成并打开：DSH → 插件 → 添加插件 → 选择这个目录。'
+      };
+    } catch (cause) {
+      return {
+        ok: false,
+        message: `生成插件目录失败：${cause instanceof Error ? cause.message : String(cause)}`
+      };
+    }
+  });
   // 打开数据目录：只调用本机文件管理器；失败时把路径回传，由界面提示手动打开。
   ipcMain.handle('studianda:open-data-dir', async () => {
     const target = dataDir ?? app.getPath('userData');

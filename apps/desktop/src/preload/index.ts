@@ -13,6 +13,14 @@ contextBridge.exposeInMainWorld('studianda', {
   setSecret: (name: string, value: string) => ipcRenderer.invoke('studianda:secret-set', name, value),
   clearSecret: (name: string) => ipcRenderer.invoke('studianda:secret-clear', name),
   getDataLocation: (): Promise<string> => ipcRenderer.invoke('studianda:get-data-location'),
+  getAgentBridge: (): Promise<{
+    command: string;
+    script: string;
+    dataDir: string;
+    packaged: boolean;
+  } | null> => ipcRenderer.invoke('studianda:get-agent-bridge'),
+  prepareAgentBridge: (): Promise<{ ok: boolean; directory?: string; message: string }> =>
+    ipcRenderer.invoke('studianda:prepare-agent-bridge'),
   openDataLocation: (): Promise<{ ok: boolean; message: string }> =>
     ipcRenderer.invoke('studianda:open-data-dir'),
   getDataSetup: (): Promise<{ configured: boolean; current: string }> =>

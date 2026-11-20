@@ -45,6 +45,16 @@ export interface DataSetupState {
   current: string;
 }
 
+/** Agent MCP bridge 的启动信息：命令、脚本、资料目录。 */
+export interface AgentBridgeLaunch {
+  /** 可执行文件：打包版是 Studianda.exe，开发版是 Electron。 */
+  command: string;
+  /** 单文件 bridge（`resources/agent-bridge.mjs` 或仓库 dist）。 */
+  script: string;
+  dataDir: string;
+  packaged: boolean;
+}
+
 /** 宿主类型。只用于诊断和少数必须分支的地方，不鼓励在业务组件里判断。 */
 export type HostKind = 'electron' | 'web' | 'dsh' | 'unknown';
 
@@ -94,6 +104,10 @@ export interface RuntimeAdapter {
     name: string
   ): Promise<{ encryptionAvailable: boolean; configured: string[] }>;
   getDataLocation?(): Promise<string>;
+  /** Agent bridge 的启动信息；宿主不提供时界面回退到占位符。 */
+  getAgentBridge?(): Promise<AgentBridgeLaunch | null>;
+  /** 生成一个可被 DSH「插件 → 添加插件」安装的本地 bundle 目录，并打开它。 */
+  prepareAgentBridge?(): Promise<{ ok: boolean; directory?: string; message: string }>;
   openLegalNotice?(): Promise<{ ok: boolean }>;
   /** 打开安装包内完整版《使用须知与隐私说明》；未实现时调用方回退到仓库文档链接。 */
   openUsageNotice?(): Promise<{ ok: boolean; message?: string }>;
