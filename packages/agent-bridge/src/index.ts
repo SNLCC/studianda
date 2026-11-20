@@ -23,8 +23,8 @@ const envScope =
     : scopeFromEnv(process.env.STUDIANDA_AGENT_SCOPE);
 const api = new CoreHttpApi(dataDir);
 
-async function currentScope() {
-  return envScope ?? (await api.getScope());
+async function currentScope(agentName: string) {
+  return envScope ?? (await api.getScope(agentName));
 }
 
 /** MCP clientInfo.name：写入笔记/批注/变更审计的 Agent 名字。 */
@@ -54,6 +54,15 @@ const inputSchema = {
   types: z.string().optional().describe('检索类型，逗号分隔：document,tag,annotation,note,chunk'),
   tags: z.array(z.string()).optional().describe('笔记标签'),
   folder_path: z.string().optional().describe('笔记文件夹路径'),
+  folder_id: z.string().optional().describe('文献文件夹 id'),
+  folder_name: z.string().optional().describe('文献文件夹名称'),
+  project_id: z.string().optional().describe('项目 id'),
+  project_name: z.string().optional().describe('项目名称'),
+  description: z.string().optional().describe('项目描述'),
+  before_id: z.string().optional().describe('排序：放到该文献之后'),
+  after_id: z.string().optional().describe('排序：放到该文献之前'),
+  document_ids: z.array(z.string()).optional().describe('项目批量加入/移出的文献 id'),
+  archived: z.boolean().optional().describe('项目是否归档'),
   page: z.number().int().min(0).optional().describe('页码（写笔记可为 0 表示整篇）'),
   from: z.number().int().min(1).optional().describe('起始页（含）'),
   to: z.number().int().min(1).optional().describe('结束页（含）'),
@@ -77,10 +86,11 @@ for (const spec of toolSpecs()) {
     },
     async (args) => {
       try {
+        const agentName = clientName();
         const result = await executeTool(spec.name, args, {
-          scope: await currentScope(),
+          scope: await currentScope(agentName),
           api,
-          agentName: clientName()
+          agentName
         });
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]

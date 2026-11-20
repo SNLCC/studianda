@@ -13,9 +13,9 @@ const MAX_SELECTION = 2000;
 const MAX_DOCUMENTS = 200;
 const MAX_TTL_MS = 8 * 60 * 60 * 1000;
 
-function readScope(store: Store): AgentScope {
+function readScope(store: Store, agentName = ''): AgentScope {
   try {
-    const grant = store.getActiveAgentGrant();
+    const grant = store.getActiveAgentGrant(agentName);
     if (!grant) return defaultAgentScope();
     return {
       kind: grant.kind as AgentScopeKind,
@@ -101,17 +101,25 @@ function normalizeScope(
   };
 }
 
-/** Agent 共享范围：单一活跃 scope，存 settings（随备份走、不新建表）。 */
+/** Agent 共享范围：每个 MCP client 一条 grant；缺省 grant 由工作台写入，作为所有 agent 的兜底。 */
 export function registerAgentRoutes(app: FastifyInstance, options: { store: Store }): void {
-  app.get(`${API_PREFIX}/agent/scope`, async () => readScope(options.store));
+  app.get(`${API_PREFIX}/agent/scope`, async (request) => {
+    const query = request.query as { agent?: string };
+    return readScope(options.store, query.agent ?? '');
+  });
 
   app.put(`${API_PREFIX}/agent/scope`, async (request, reply) => {
     try {
       const scope = normalizeScope(request.body);
       const body = (request.body ?? {}) as { agentName?: unknown };
+      const agentName =
+        typeof body.agentName === 'string' ? body.agentName.trim().slice(0, 80) : '';
+      if (scope.kind === 'none') {
+        options.store.clearAgentGrants(agentName);
+        return defaultAgentScope();
+      }
       options.store.replaceAgentGrant({
-        agentName:
-          typeof body.agentName === 'string' ? body.agentName.trim().slice(0, 80) : '',
+        agentName,
         kind: scope.kind,
         projectId: scope.projectId,
         documentIds: scope.documentIds,
@@ -126,8 +134,14 @@ export function registerAgentRoutes(app: FastifyInstance, options: { store: Stor
     }
   });
 
-  app.delete(`${API_PREFIX}/agent/scope`, async () => {
-    options.store.clearAgentGrants();
-    return defaultAgentScope();
+  app.delete(`${API_PREFIX}/agent/scope`, async (request) => {
+    const query = request.query as { agent?: string };
+    const body = (request.body ?? {}) as { agentName?: unknown };
+    const agentName =
+      typeof body.agentName === 'string'
+        ? body.agentName.trim().slice(0, 80)
+        : (query.agent ?? '').trim().slice(0, 80);
+    options.store.clearAgentGrants(agentName);
+    return readScope(options.store, agentName);
   });
 }

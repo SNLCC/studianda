@@ -84,6 +84,60 @@ describe('Agent 共享范围（settings 单一活跃 scope）', () => {
     }
   });
 
+  it('按 MCP client 隔离：指定 agent 优先，缺失回退默认 grant', async () => {
+    await server.inject({
+      method: 'PUT',
+      url: '/api/v1/agent/scope',
+      headers: headers(),
+      payload: { kind: 'library', caps: ['read'] }
+    });
+    await server.inject({
+      method: 'PUT',
+      url: '/api/v1/agent/scope',
+      headers: headers(),
+      payload: {
+        kind: 'documents',
+        documentIds: ['dsh-doc'],
+        caps: ['read', 'write'],
+        agentName: 'dsh'
+      }
+    });
+
+    const scoped = await server.inject({
+      method: 'GET',
+      url: '/api/v1/agent/scope?agent=dsh',
+      headers: headers()
+    });
+    expect((scoped.json() as AgentScope).documentIds).toEqual(['dsh-doc']);
+
+    const fallback = await server.inject({
+      method: 'GET',
+      url: '/api/v1/agent/scope?agent=claude-code',
+      headers: headers()
+    });
+    expect((fallback.json() as AgentScope).kind).toBe('library');
+
+    const defaultScope = await server.inject({
+      method: 'GET',
+      url: '/api/v1/agent/scope',
+      headers: headers()
+    });
+    expect((defaultScope.json() as AgentScope).kind).toBe('library');
+
+    await server.inject({
+      method: 'DELETE',
+      url: '/api/v1/agent/scope?agent=dsh',
+      headers: headers()
+    });
+    const dshAfter = await server.inject({
+      method: 'GET',
+      url: '/api/v1/agent/scope?agent=dsh',
+      headers: headers()
+    });
+    expect((dshAfter.json() as AgentScope).kind).toBe('library');
+    await server.inject({ method: 'DELETE', url: '/api/v1/agent/scope', headers: headers() });
+  });
+
   it('scope 写 agent_grants 表，不再写 settings', async () => {
     const put = await server.inject({
       method: 'PUT',

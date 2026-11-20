@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-20T17:17:40.369Z",
+  "generatedAt": "2026-11-20T17:39:06.528Z",
   "electron": "44.5.1",
   "node": "24.21.0",
   "asar": "app.asar",
@@ -853,13 +853,13 @@
       "artifacts": [
         {
           "path": "packages/agent-bridge/dist/agent-bridge.mjs",
-          "bytes": 1414893,
-          "sha256": "944ce7d2dd5d94ee22b8bdb7ad764c31c70c8d922f6e1e054b166b3838d97715"
+          "bytes": 1423320,
+          "sha256": "f2be7f372b39e0d08bb74a0123bf4274d9bfc4606f6393df1321e7b5a38a8b72"
         },
         {
           "path": "packages/agent-bridge/dist/agent-bridge.mjs.meta.json",
           "bytes": 196801,
-          "sha256": "82ef409c112f0abccf33eeef327ddf9be7f776e52ded461dd890eea165e8a463"
+          "sha256": "bcc68d93c67caa20da16ffdb1edef53015e232f94d2a4aa2742886cd7c3b6d7d"
         }
       ]
     }
@@ -870,7 +870,7 @@
     "bundled": 10,
     "fonts": 5,
     "artifacts": 52,
-    "artifactBytes": 170040698,
+    "artifactBytes": 170049125,
     "sourceVerified": 9,
     "sourceUnverified": 8
   },

@@ -159,3 +159,63 @@ describe('Agent MCP-only 扩展：search 与笔记/批注生命周期', () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+describe('organize 扩展：文件夹 / 项目 / 排序 / 回收站', () => {
+  it('创建文献文件夹（全库 + 写）', async () => {
+    const { api, calls } = routedApi({
+      'POST /folders': { id: 'f1', name: '新文件夹' }
+    });
+    const result = await executeTool(
+      'organize',
+      { action: 'folder_create', folder_name: '新文件夹' },
+      { scope: { kind: 'library', caps: ['read', 'write'] }, api }
+    );
+    expect((result as { id: string }).id).toBe('f1');
+    expect(calls[0]?.body).toEqual({ name: '新文件夹' });
+  });
+
+  it('项目批量加文献逐篇调用，先校验 scope', async () => {
+    const { api, calls } = routedApi({
+      'POST /projects/p1/documents': { ok: true }
+    });
+    const result = (await executeTool(
+      'organize',
+      {
+        action: 'project_add_documents',
+        project_id: 'p1',
+        document_ids: ['doc-1', 'doc-2']
+      },
+      {
+        scope: { kind: 'documents', documentIds: ['doc-1', 'doc-2'], caps: ['read', 'write'] },
+        api
+      }
+    )) as { changed: number };
+    expect(result.changed).toBe(2);
+    expect(calls.map((call) => call.body)).toEqual([
+      { documentId: 'doc-1' },
+      { documentId: 'doc-2' }
+    ]);
+  });
+
+  it('排序与软删除文献', async () => {
+    const move = routedApi({
+      'POST /documents/doc-1/move': { id: 'doc-1' }
+    });
+    await executeTool(
+      'organize',
+      { action: 'reorder_documents', document_id: 'doc-1', after_id: 'doc-2' },
+      { scope: { kind: 'library', caps: ['read', 'write'] }, api: move.api }
+    );
+    expect(move.calls[0]?.body).toEqual({ beforeId: null, afterId: 'doc-2' });
+
+    const trash = routedApi({
+      'DELETE /documents/doc-1': { ok: true }
+    });
+    await executeTool(
+      'organize',
+      { action: 'trash_document', document_id: 'doc-1' },
+      { scope: { kind: 'library', caps: ['read', 'write'] }, api: trash.api }
+    );
+    expect(trash.calls[0]?.method).toBe('DELETE');
+  });
+});

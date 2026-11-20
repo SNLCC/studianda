@@ -57,6 +57,17 @@ export function assertWriteAllowed(scope: AgentScope, message: string): void {
   }
 }
 
+function requireLibraryScope(scope: AgentScope, message: string): void {
+  if (scope.kind !== 'library') throw new ScopeError('scope_denied', message);
+}
+
+function requireStringArray(value: unknown, field: string): string[] {
+  if (!Array.isArray(value) || value.length === 0 || !value.every((item) => typeof item === 'string')) {
+    throw new Error(`${field} 必须是非空字符串数组`);
+  }
+  return value.map((item) => item.trim()).filter(Boolean);
+}
+
 async function assertNoteBelongs(
   api: CoreApi,
   documentId: string,
@@ -95,7 +106,25 @@ const IMPLEMENTED_ACTIONS: Record<string, string[]> = {
   library: ['list', 'get', 'search', 'pages', 'outline', 'references'],
   notes: ['list', 'list_for_document', 'create', 'update', 'set_tags', 'delete', 'restore'],
   annotations: ['list_for_document', 'create', 'update', 'delete', 'restore'],
-  organize: ['preview', 'apply', 'undo'],
+  organize: [
+    'preview',
+    'apply',
+    'undo',
+    'folders',
+    'folder_create',
+    'folder_rename',
+    'folder_delete',
+    'projects',
+    'project_create',
+    'project_update',
+    'project_delete',
+    'project_documents',
+    'project_add_documents',
+    'project_remove_documents',
+    'reorder_documents',
+    'trash_document',
+    'restore_document'
+  ],
   reading: ['sessions', 'tasks', 'summary'],
   system: ['health']
 };
@@ -107,7 +136,7 @@ export function toolSpecs(): ToolSpec[] {
     ['library', '文献、检索与结构：list / get / search / pages / outline / references。'],
     ['notes', '笔记全生命周期：list / list_for_document / create / update / set_tags / delete / restore（写入需允许整理）。'],
     ['annotations', '批注：list_for_document / create / update / delete / restore（写入需允许整理）。'],
-    ['organize', '整理（可撤销）：preview（dry-run）/ apply / undo；需要允许写入的共享范围。'],
+    ['organize', '整理与撤销：preview / apply / undo（标签/题录/文件夹）+ folders / projects / 排序 / 回收站；写操作需允许整理。'],
     ['reading', '阅读会话：sessions / tasks / summary。'],
     ['system', '系统状态：health。']
   ];
@@ -138,6 +167,15 @@ interface ToolArgs {
   types?: unknown;
   tags?: unknown;
   folder_path?: unknown;
+  folder_id?: unknown;
+  folder_name?: unknown;
+  project_id?: unknown;
+  project_name?: unknown;
+  description?: unknown;
+  before_id?: unknown;
+  after_id?: unknown;
+  document_ids?: unknown;
+  archived?: unknown;
 }
 
 const MAX_PAGES = 8;
@@ -401,6 +439,125 @@ export async function executeTool(
 
   if (name === 'organize') {
     const hasWrite = scope.kind !== 'none' && (scope.caps ?? []).includes('write');
+    const writeMessage = '该整理操作需要在共享范围里勾选「允许整理」。';
+
+    if (action === 'folders') {
+      requireLibraryScope(scope, '文件夹列表需要全库范围。');
+      return api.request('GET', '/folders');
+    }
+    if (action === 'folder_create' || action === 'folder_rename' || action === 'folder_delete') {
+      assertWriteAllowed(scope, writeMessage);
+      requireLibraryScope(scope, '文件夹管理需要全库范围。');
+      const name = optionalString(args.folder_name, 'folder_name', 60);
+      if (action === 'folder_create') {
+        if (!name) throw new Error('folder_create 需要 folder_name');
+        return api.request('POST', '/folders', { name });
+      }
+      const folderId = requireString(args.folder_id, 'folder_id');
+      if (action === 'folder_rename') {
+        if (!name) throw new Error('folder_rename 需要 folder_name');
+        return api.request('PATCH', `/folders/${encodeURIComponent(folderId)}`, { name });
+      }
+      return api.request('DELETE', `/folders/${encodeURIComponent(folderId)}`);
+    }
+
+    if (action === 'projects') {
+      requireLibraryScope(scope, '项目列表需要全库范围。');
+      return api.request('GET', '/projects');
+    }
+    if (action === 'project_create') {
+      assertWriteAllowed(scope, writeMessage);
+      requireLibraryScope(scope, '项目管理需要全库范围。');
+      const name = requireString(args.project_name, 'project_name');
+      return api.request('POST', '/projects', {
+        name,
+        ...(args.description !== undefined
+          ? { description: optionalString(args.description, 'description', 500) ?? '' }
+          : {})
+      });
+    }
+    if (action === 'project_update') {
+      assertWriteAllowed(scope, writeMessage);
+      requireLibraryScope(scope, '项目管理需要全库范围。');
+      const projectId = requireString(args.project_id, 'project_id');
+      const patch: Record<string, unknown> = {};
+      if (args.project_name !== undefined) {
+        patch.name = requireString(args.project_name, 'project_name');
+      }
+      if (args.description !== undefined) {
+        patch.description = optionalString(args.description, 'description', 500) ?? '';
+      }
+      if (args.archived !== undefined) {
+        if (typeof args.archived !== 'boolean') throw new Error('archived 必须是布尔值');
+        patch.archived = args.archived;
+      }
+      if (Object.keys(patch).length === 0) throw new Error('project_update 至少需要一个字段');
+      return api.request('PATCH', `/projects/${encodeURIComponent(projectId)}`, patch);
+    }
+    if (action === 'project_delete') {
+      assertWriteAllowed(scope, writeMessage);
+      requireLibraryScope(scope, '项目管理需要全库范围。');
+      const projectId = requireString(args.project_id, 'project_id');
+      return api.request('DELETE', `/projects/${encodeURIComponent(projectId)}`);
+    }
+    if (action === 'project_documents') {
+      requireLibraryScope(scope, '项目文献列表需要全库范围。');
+      const projectId = requireString(args.project_id, 'project_id');
+      return api.request('GET', `/projects/${encodeURIComponent(projectId)}/documents`);
+    }
+    if (action === 'project_add_documents' || action === 'project_remove_documents') {
+      assertWriteAllowed(scope, writeMessage);
+      const projectId = requireString(args.project_id, 'project_id');
+      const documentIds = requireStringArray(args.document_ids, 'document_ids');
+      for (const documentId of documentIds) assertDocumentAllowed(scope, documentId);
+      const results: unknown[] = [];
+      let changed = 0;
+      for (const documentId of documentIds) {
+        try {
+          const result =
+            action === 'project_add_documents'
+              ? await api.request('POST', `/projects/${encodeURIComponent(projectId)}/documents`, {
+                  documentId
+                })
+              : await api.request(
+                  'DELETE',
+                  `/projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent(documentId)}`
+                );
+          changed += 1;
+          results.push({ documentId, ok: true, result });
+        } catch (error) {
+          results.push({
+            documentId,
+            ok: false,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+      }
+      return { projectId, changed, results };
+    }
+
+    if (action === 'reorder_documents') {
+      assertWriteAllowed(scope, writeMessage);
+      const documentId = requireString(args.document_id, 'document_id');
+      assertDocumentAllowed(scope, documentId);
+      const beforeId = optionalString(args.before_id, 'before_id', 200) ?? null;
+      const afterId = optionalString(args.after_id, 'after_id', 200) ?? null;
+      if (beforeId && afterId) throw new Error('before_id 与 after_id 只能给一个');
+      return api.request('POST', `/documents/${encodeURIComponent(documentId)}/move`, {
+        beforeId,
+        afterId
+      });
+    }
+    if (action === 'trash_document' || action === 'restore_document') {
+      assertWriteAllowed(scope, writeMessage);
+      const documentId = requireString(args.document_id, 'document_id');
+      assertDocumentAllowed(scope, documentId);
+      if (action === 'trash_document') {
+        return api.request('DELETE', `/documents/${encodeURIComponent(documentId)}`);
+      }
+      return api.request('POST', `/documents/${encodeURIComponent(documentId)}/restore`);
+    }
+
     if (action !== 'preview' && action !== 'apply' && action !== 'undo') {
       throw new Error(`organize 不支持 action=${action}`);
     }

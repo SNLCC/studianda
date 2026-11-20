@@ -81,14 +81,15 @@ export class CoreHttpApi implements CoreApi {
     return (await response.json()) as T;
   }
 
-  /** 读取应用写入的共享范围；Core 未运行或读取失败时退回 none。 */
-  async getScope(): Promise<AgentScope> {
+  /** 读取指定 MCP client 的共享范围；该 client 没有 grant 时回退默认 grant。 */
+  async getScope(agentName = ''): Promise<AgentScope> {
     try {
+      const suffix = agentName ? `?agent=${encodeURIComponent(agentName)}` : '';
       const row = await this.request<{
         kind?: string;
         documentIds?: unknown;
         caps?: unknown;
-      }>('GET', '/agent/scope');
+      }>('GET', `/agent/scope${suffix}`);
       const caps = Array.isArray(row.caps)
         ? row.caps.filter((cap): cap is string => typeof cap === 'string')
         : [];

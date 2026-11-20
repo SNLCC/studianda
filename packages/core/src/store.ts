@@ -7743,8 +7743,11 @@ export class Store {
     }));
   }
 
-  /** 当前生效的 Agent 共享范围（agent_grants 表；过期即视为没有）。 */
-  getActiveAgentGrant(now = new Date().toISOString()): {
+  /** 当前生效的 Agent 共享范围；指定 agentName 时优先该 client 的 grant，否则回退默认 grant。 */
+  getActiveAgentGrant(
+    agentName = '',
+    now = new Date().toISOString()
+  ): {
     id: string;
     agentName: string;
     kind: string;
@@ -7756,14 +7759,16 @@ export class Store {
     created: string;
     expiresAt: string | null;
   } | null {
+    const normalized = agentName.trim().slice(0, 80);
     const row = this.db
       .prepare(
         `SELECT id, agent_name, kind, project_id, document_ids, page, selection, caps, created, expires_at
          FROM agent_grants
-         WHERE expires_at IS NULL OR expires_at > ?
-         ORDER BY created DESC LIMIT 1`
+         WHERE agent_name IN (?, '')
+           AND (expires_at IS NULL OR expires_at > ?)
+         ORDER BY CASE WHEN agent_name = ? THEN 0 ELSE 1 END, created DESC LIMIT 1`
       )
-      .get(now) as
+      .get(normalized, now, normalized) as
       | {
           id: string;
           agent_name: string;
@@ -7800,7 +7805,7 @@ export class Store {
     };
   }
 
-  /** 替换当前共享范围：当前只保留一条活跃 grant（多 agent 隔离留给 P2）。 */
+  /** 替换某个 agent 的共享范围；缺省 agentName 操作默认 grant（工作台的手动共享）。 */
   replaceAgentGrant(input: {
     agentName?: string;
     kind: string;
@@ -7813,8 +7818,9 @@ export class Store {
   }): void {
     const id = randomUUID();
     const created = new Date().toISOString();
+    const agentName = (input.agentName ?? '').trim().slice(0, 80);
     this.withTransaction(() => {
-      this.db.exec('DELETE FROM agent_grants');
+      this.db.prepare('DELETE FROM agent_grants WHERE agent_name = ?').run(agentName);
       this.db
         .prepare(
           `INSERT INTO agent_grants
@@ -7823,7 +7829,7 @@ export class Store {
         )
         .run(
           id,
-          input.agentName ?? '',
+          agentName,
           input.kind,
           input.projectId,
           JSON.stringify(input.documentIds),
@@ -7836,8 +7842,11 @@ export class Store {
     });
   }
 
-  clearAgentGrants(): void {
-    this.db.exec('DELETE FROM agent_grants');
+  /** 清除某个 agent 的 grant；缺省只清默认 grant，不影响其它 agent。 */
+  clearAgentGrants(agentName = ''): void {
+    this.db
+      .prepare('DELETE FROM agent_grants WHERE agent_name = ?')
+      .run(agentName.trim().slice(0, 80));
   }
 
   markAgentOperationUndone(id: string, when: string): void {
