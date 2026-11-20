@@ -140,7 +140,7 @@ const IMPLEMENTED_ACTIONS: Record<string, string[]> = {
     'flows',
     'flow'
   ],
-  system: ['health']
+  system: ['health', 'backups', 'maintenance', 'file_health', 'diagnostics']
 };
 
 export function toolSpecs(): ToolSpec[] {
@@ -153,7 +153,7 @@ export function toolSpecs(): ToolSpec[] {
     ['organize', '整理与撤销：preview / apply / undo（标签/题录/文件夹）+ folders / projects / 排序 / 回收站；写操作需允许整理。'],
     ['compute', '长任务：start / status / cancel；kind=summary（全书摘要）/ translate（整篇翻译）/ ask（问答）/ ocr（补扫描页 OCR）。'],
     ['reading', '阅读：sessions / tasks / summary / navigation / navigation_status / translation / translation_pages / flows / flow。'],
-    ['system', '系统状态：health。']
+    ['system', '系统：health / backups / maintenance / file_health / diagnostics（后四项只读，需全库范围）。']
   ];
   return defs.map(([name, description]) => ({
     name,
@@ -820,8 +820,13 @@ export async function executeTool(
   }
 
   if (name === 'system') {
-    if (action !== 'health') throw new Error(`system 不支持 action=${action}`);
-    return api.request('GET', '/health');
+    if (action === 'health') return api.request('GET', '/health');
+    requireLibraryScope(scope, '系统维护信息需要全库范围。');
+    if (action === 'backups') return api.request('GET', '/backups');
+    if (action === 'maintenance') return api.request('GET', '/maintenance/status');
+    if (action === 'file_health') return api.request('GET', '/maintenance/file-health');
+    if (action === 'diagnostics') return api.request('GET', '/maintenance/diagnostics');
+    throw new Error(`system 不支持 action=${action}`);
   }
 
   throw new Error(`未知工具：${name}`);

@@ -353,6 +353,37 @@ describe('compute 异步任务', () => {
   });
 });
 
+describe('system 只读维护信息', () => {
+  it('health 任意 scope；backups/file_health 需要全库', async () => {
+    const calls: Array<{ method: string; path: string }> = [];
+    const api = {
+      request: async (method: string, path: string) => {
+        calls.push({ method, path });
+        return { ok: true };
+      }
+    } as unknown as CoreApi;
+    await executeTool('system', { action: 'health' }, { scope: { kind: 'none' }, api });
+    await executeTool(
+      'system',
+      { action: 'backups' },
+      { scope: { kind: 'library', caps: ['read'] }, api }
+    );
+    await executeTool(
+      'system',
+      { action: 'file_health' },
+      { scope: { kind: 'library', caps: ['read'] }, api }
+    );
+    expect(calls.map((call) => call.path)).toEqual([
+      '/health',
+      '/backups',
+      '/maintenance/file-health'
+    ]);
+    await expect(
+      executeTool('system', { action: 'backups' }, { scope: { kind: 'none' }, api })
+    ).rejects.toBeInstanceOf(ScopeError);
+  });
+});
+
 describe('reading 扩展', () => {
   it('导航 / 译文摘要 / 流程列表', async () => {
     const calls: Array<{ method: string; path: string }> = [];
