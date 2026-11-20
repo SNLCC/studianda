@@ -54,11 +54,26 @@ export function registerAgentJobsRoutes(
       include_memory?: unknown;
       agentName?: unknown;
     };
-    if (body.kind !== 'ask' && body.kind !== 'ocr' && body.kind !== 'corpus_ask') {
-      return badRequest(reply, '当前只支持 kind=ask / ocr / corpus_ask');
+    if (
+      body.kind !== 'ask' &&
+      body.kind !== 'ocr' &&
+      body.kind !== 'corpus_ask' &&
+      body.kind !== 'embed'
+    ) {
+      return badRequest(reply, '当前只支持 kind=ask / ocr / corpus_ask / embed');
     }
-    if (typeof body.documentId !== 'string' || !body.documentId.trim()) {
+    if (
+      body.kind !== 'embed' &&
+      (typeof body.documentId !== 'string' || !body.documentId.trim())
+    ) {
       return badRequest(reply, '需要 documentId');
+    }
+    if (
+      body.kind === 'embed' &&
+      body.documentId !== undefined &&
+      typeof body.documentId !== 'string'
+    ) {
+      return badRequest(reply, 'documentId 必须是字符串');
     }
     if (
       (body.kind === 'ask' || body.kind === 'corpus_ask') &&
@@ -90,8 +105,12 @@ export function registerAgentJobsRoutes(
     ) {
       return badRequest(reply, 'question 最多 4000 字');
     }
-    if (!options.store.getDocument(body.documentId)) return notFound(reply, '文档不存在');
-    const agentName = ownerOf(body);
+    if (
+      body.kind !== 'embed' &&
+      (typeof body.documentId !== 'string' || !options.store.getDocument(body.documentId))
+    ) {
+      return notFound(reply, '文档不存在');
+    }    const agentName = ownerOf(body);
     if (options.store.countRunningAgentJobs(agentName) >= MAX_RUNNING) {
       return badRequest(reply, `同时最多 ${MAX_RUNNING} 个任务`);
     }
@@ -102,7 +121,7 @@ export function registerAgentJobsRoutes(
       agentName,
       kind: body.kind,
       requestJson: JSON.stringify({
-        documentId: body.documentId,
+        ...(typeof body.documentId === 'string' ? { documentId: body.documentId } : {}),
         ...(typeof body.question === 'string' ? { question: body.question } : {}),
         ...(typeof body.page === 'number' ? { page: body.page } : {}),
         ...(typeof body.selection === 'string' ? { selection: body.selection } : {}),

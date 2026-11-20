@@ -109,6 +109,15 @@ describe('Agent 长任务持久化', () => {
     expect(corpus.statusCode).toBe(200);
     expect((corpus.json() as AgentJobRecord).status).toBe('running');
 
+    const embed = await server.inject({
+      method: 'POST',
+      url: '/api/v1/agent/jobs',
+      headers: headers(),
+      payload: { kind: 'embed', agentName: 'dsh' }
+    });
+    expect(embed.statusCode).toBe(200);
+    expect((embed.json() as AgentJobRecord).status).toBe('running');
+
     const created = await server.inject({
       method: 'POST',
       url: '/api/v1/agent/jobs',

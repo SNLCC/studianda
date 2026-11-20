@@ -173,4 +173,31 @@ describe('AskJobManager（Core 持久化）', () => {
       reading_scope: 'corpus'
     });
   });
+
+  it('embed 任务调用 /embeddings/index 并落结果', async () => {
+    const calls: Array<{ path: string; body?: unknown }> = [];
+    const api = {
+      request: async (method: string, path: string, body?: unknown) => {
+        calls.push({ path, body });
+        if (method === 'POST' && path === '/agent/jobs') {
+          return { id: 'j4', status: 'running', created: 'c', updated: 'c' };
+        }
+        if (method === 'POST' && path === '/embeddings/index') {
+          return { indexed: 12 };
+        }
+        if (method === 'POST' && path === '/agent/jobs/j4/finish') return { id: 'j4' };
+        throw new Error(`unexpected request: ${method} ${path}`);
+      }
+    } as unknown as CoreApi;
+    const manager = new AskJobManager();
+    await manager.startEmbed(api, { documentId: 'doc-1' }, 'dsh');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls.find((call) => call.path === '/embeddings/index')?.body).toEqual({
+      documentId: 'doc-1'
+    });
+    expect(calls.find((call) => call.path === '/agent/jobs/j4/finish')?.body).toMatchObject({
+      status: 'succeeded',
+      result: { indexed: 12 }
+    });
+  });
 });

@@ -482,8 +482,7 @@ describe('MCP progress 回调', () => {
   });
 });
 
-describe('独立笔记与参考文献', () => {
-  it('create 省略 document_id 即独立笔记', async () => {
+describe('独立笔记与参考文献', () => {  it('create 省略 document_id 即独立笔记', async () => {
     const { api, calls } = routedApi({ 'POST /notes': { id: 'n1' } });
     await executeTool(
       'notes',
@@ -531,5 +530,76 @@ describe('独立笔记与参考文献', () => {
       }
     );
     expect(calls[0]?.body).toEqual({ title: '责任伦理', authors: ['韦伯'] });
+  });
+});
+
+describe('重任务：parse / embed', () => {
+  it('parse 走 Core 导入任务；需要全库 + write', async () => {
+    const { api, calls } = routedApi({
+      'POST /documents/import/start': { id: 'imp1', state: 'queued', progress: 0 }
+    });
+    const result = (await executeTool(
+      'compute',
+      { action: 'start', kind: 'parse', path: 'C:\\papers\\a.pdf' },
+      { scope: { kind: 'library', caps: ['read', 'write'] }, api }
+    )) as { id: string };
+    expect(result.id).toBe('imp1');
+    expect(calls[0]?.body).toMatchObject({ path: 'C:\\papers\\a.pdf' });
+
+    const status = routedApi({
+      'GET /documents/import/jobs/imp1': { id: 'imp1', state: 'running', progress: 40 }
+    });
+    const row = (await executeTool(
+      'compute',
+      { action: 'status', kind: 'parse', job_id: 'imp1' },
+      { scope: { kind: 'library', caps: ['read'] }, api: status.api }
+    )) as { progress: number };
+    expect(row.progress).toBe(40);
+
+    await expect(
+      executeTool(
+        'compute',
+        { action: 'start', kind: 'parse', path: 'a.pdf' },
+        { scope: { kind: 'library', caps: ['read'] }, api }
+      )
+    ).rejects.toBeInstanceOf(ScopeError);
+  });
+
+  it('embed 启动持久化 job；全库索引需 library + write', async () => {
+    const { api } = routedApi({});
+    let startedWith: unknown = null;
+    const jobs = {
+      startEmbed: async (_api: unknown, input: unknown) => {
+        startedWith = input;
+        return { id: 'emb1', state: 'running', createdAt: 'c', updatedAt: 'c' };
+      }
+    } as unknown as AskJobManager;
+    const result = (await executeTool(
+      'compute',
+      { action: 'start', kind: 'embed' },
+      { scope: { kind: 'library', caps: ['read', 'write'] }, api, jobs }
+    )) as { id: string };
+    expect(result.id).toBe('emb1');
+    expect(startedWith).toEqual({});
+
+    await expect(
+      executeTool(
+        'compute',
+        { action: 'start', kind: 'embed' },
+        { scope: { kind: 'library', caps: ['read'] }, api, jobs }
+      )
+    ).rejects.toBeInstanceOf(ScopeError);
+
+    const scoped = (await executeTool(
+      'compute',
+      { action: 'start', kind: 'embed', document_id: 'doc-1' },
+      {
+        scope: { kind: 'documents', documentIds: ['doc-1'], caps: ['read', 'write'] },
+        api,
+        jobs
+      }
+    )) as { id: string };
+    expect(scoped.id).toBe('emb1');
+    expect(startedWith).toEqual({ documentId: 'doc-1' });
   });
 });
