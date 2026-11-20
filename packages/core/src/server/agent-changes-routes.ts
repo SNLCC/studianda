@@ -9,6 +9,12 @@ export function registerAgentChangesRoutes(
   app: FastifyInstance,
   options: { store: Store }
 ): void {
+  app.get(`${API_PREFIX}/agent/operations`, async (request) => {
+    const query = request.query as { limit?: string };
+    const parsed = Number(query.limit ?? 20);
+    return options.store.listAgentOperations(Number.isFinite(parsed) ? parsed : 20);
+  });
+
   app.post(`${API_PREFIX}/agent/changes/preview`, async (request, reply) => {
     try {
       return previewChanges(options.store, request.body);

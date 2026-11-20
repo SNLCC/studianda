@@ -7664,6 +7664,40 @@ export class Store {
     return row ?? null;
   }
 
+  listAgentOperations(limit = 20): Array<{
+    id: string;
+    agentName: string;
+    action: string;
+    status: string;
+    created: string;
+    appliedAt: string | null;
+    undoneAt: string | null;
+  }> {
+    const rows = this.db
+      .prepare(
+        `SELECT id, agent_name, action, status, created, applied_at, undone_at
+         FROM agent_operations ORDER BY created DESC LIMIT ?`
+      )
+      .all(Math.max(1, Math.min(50, Math.trunc(limit)))) as unknown as Array<{
+      id: string;
+      agent_name: string;
+      action: string;
+      status: string;
+      created: string;
+      applied_at: string | null;
+      undone_at: string | null;
+    }>;
+    return rows.map((row) => ({
+      id: row.id,
+      agentName: row.agent_name,
+      action: row.action,
+      status: row.status,
+      created: row.created,
+      appliedAt: row.applied_at,
+      undoneAt: row.undone_at
+    }));
+  }
+
   markAgentOperationUndone(id: string, when: string): void {
     this.db
       .prepare("UPDATE agent_operations SET status = 'undone', undone_at = ? WHERE id = ?")

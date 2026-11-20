@@ -13030,6 +13030,45 @@ details.kr-outline2__card > summary::-webkit-details-marker {
   max-height: 320px;
   overflow: auto;
 }
+.kr-agent__history {
+  gap: 10px;
+}
+.kr-agent__history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.kr-agent__history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.kr-agent__history-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--kr-line);
+}
+.kr-agent__history-list li:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.kr-agent__history-status {
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: var(--kr-paper-sunk);
+  color: var(--kr-ink-soft);
+}
+.kr-agent__history-status.is-applied {
+  background: var(--kr-celadon-soft);
+  color: var(--kr-celadon-deep);
+}
 
 /* 身份徽标：用户 / Agent，颜色 + 图标 + 文字三重编码。 */
 .kr-identity {

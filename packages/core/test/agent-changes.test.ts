@@ -63,6 +63,18 @@ describe('Agent 变更集（preview / apply / undo）', () => {
     expect(operation?.status).toBe('applied');
     expect(operation?.agent_name).toBe('DSH');
 
+    const history = await server.inject({
+      method: 'GET',
+      url: '/api/v1/agent/operations',
+      headers: headers()
+    });
+    expect(history.statusCode).toBe(200);
+    expect(
+      (history.json() as Array<{ id: string; status: string }>).some(
+        (row) => row.id === result.operationId && row.status === 'applied'
+      )
+    ).toBe(true);
+
     const undone = await server.inject({
       method: 'POST',
       url: '/api/v1/agent/changes/undo',

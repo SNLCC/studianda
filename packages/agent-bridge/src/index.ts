@@ -48,9 +48,14 @@ const server = new McpServer(
 const inputSchema = {
   action: z.string().describe('动作名；见工具描述里的 actions'),
   document_id: z.string().optional().describe('文献 id'),
+  page: z.number().int().min(0).optional().describe('页码（写笔记可为 0 表示整篇）'),
   from: z.number().int().min(1).optional().describe('起始页（含）'),
   to: z.number().int().min(1).optional().describe('结束页（含）'),
   limit: z.number().int().min(1).max(50).optional().describe('返回条数'),
+  content: z.string().optional().describe('写笔记/批注的正文（Markdown）'),
+  quote: z.string().optional().describe('写笔记/批注关联的原文摘录'),
+  color: z.string().optional().describe('批注颜色'),
+  style: z.string().optional().describe('批注样式'),
   kind: z.string().optional().describe('organize 的变更类型：tags / metadata / folder'),
   items: z.array(z.unknown()).optional().describe('organize 的 items：documentId + 目标字段'),
   operation_id: z.string().optional().describe('organize undo 的变更记录 id')

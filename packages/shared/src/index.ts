@@ -3112,6 +3112,17 @@ export interface AgentChangeUndoResult {
   restored: number;
 }
 
+/** 应用侧审阅用的变更记录摘要（不含 before/after 全文）。 */
+export interface AgentOperationRecord {
+  id: string;
+  agentName: string;
+  action: string;
+  status: string;
+  created: string;
+  appliedAt: string | null;
+  undoneAt: string | null;
+}
+
 /** 生成一个配置型 DSH bundle（Plugins → Add plugin 可安装的本地目录）。 */
 export interface AgentBridgeBundleInput {
   command: string;

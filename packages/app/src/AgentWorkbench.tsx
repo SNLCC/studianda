@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import type { ApiClient } from '@studianda/api-client';
 import {
   defaultAgentScope,
+  type AgentOperationRecord,
   type AgentScope,
   type DocumentSummary,
   type ProjectSummary
@@ -59,6 +60,8 @@ export function AgentWorkbench({
   const [documentId, setDocumentId] = useState(currentDocumentId ?? '');
   const [projectId, setProjectId] = useState('');
   const [brief, setBrief] = useState('');
+  const [operations, setOperations] = useState<AgentOperationRecord[]>([]);
+  const [undoing, setUndoing] = useState('');
   const [busy, setBusy] = useState(false);
   const [installBusy, setInstallBusy] = useState(false);
   const [pluginDir, setPluginDir] = useState('');
@@ -84,6 +87,7 @@ export function AgentWorkbench({
         if (!disposed) setError(err instanceof Error ? err.message : String(err));
       }
     })();
+    void refreshOperations();
     return () => {
       disposed = true;
     };
@@ -265,6 +269,28 @@ export function AgentWorkbench({
     }
   };
 
+  async function refreshOperations(): Promise<void> {
+    try {
+      setOperations(await api.listAgentOperations(10));
+    } catch {
+      // 操作历史读取失败不阻断共享/安装主流程。
+    }
+  }
+
+  const undoOperation = async (operation: AgentOperationRecord): Promise<void> => {
+    setUndoing(operation.id);
+    setError('');
+    try {
+      const result = await api.undoAgentChanges(operation.id);
+      setNotice(`已撤销 ${result.restored} 篇文献的变更。`);
+      await refreshOperations();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setUndoing('');
+    }
+  };
+
   return (
     <section className="kr-agent" aria-label="Agent 工作台">
       <header className="kr-agent__head">
@@ -424,6 +450,55 @@ export function AgentWorkbench({
           </details>
         </div>
       </div>
+
+      <div className="kr-agent__card kr-agent__history">
+        <div className="kr-agent__history-head">
+          <h2>最近变更</h2>
+          <button type="button" className="kr-link-button" onClick={() => void refreshOperations()}>
+            刷新
+          </button>
+        </div>
+        {operations.length === 0 ? (
+          <p className="kr-muted">这个库里还没有 agent 写操作。允许整理后，agent 的每次 apply 都会记在这里。</p>
+        ) : (
+          <ul className="kr-agent__history-list">
+            {operations.map((operation) => (
+              <li key={operation.id}>
+                <span className={`kr-agent__history-status is-${operation.status}`}>
+                  {operation.status === 'applied' ? '已应用' : '已撤销'}
+                </span>
+                <strong>{operation.agentName || 'Agent'}</strong>
+                <span>{changeLabel(operation.action)}</span>
+                <span className="kr-muted">
+                  {new Date(operation.created).toLocaleString('zh-CN', {
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                  })}
+                </span>
+                {operation.status === 'applied' ? (
+                  <button
+                    type="button"
+                    className="kr-ghost"
+                    disabled={undoing === operation.id}
+                    onClick={() => void undoOperation(operation)}
+                  >
+                    {undoing === operation.id ? '撤销中…' : '撤销'}
+                  </button>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </section>
   );
+}
+
+function changeLabel(action: string): string {
+  if (action === 'tags') return '标签';
+  if (action === 'metadata') return '题录';
+  if (action === 'folder') return '文件夹';
+  return action;
 }

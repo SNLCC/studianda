@@ -46,6 +46,13 @@ export function assertDocumentAllowed(scope: AgentScope, documentId: string): vo
   );
 }
 
+/** 写入（笔记/批注/整理）要求用户在工作台勾选「允许整理」。 */
+export function assertWriteAllowed(scope: AgentScope, message: string): void {
+  if (scope.kind === 'none' || !(scope.caps ?? []).includes('write')) {
+    throw new ScopeError('scope_denied', message);
+  }
+}
+
 export interface ToolSpec {
   name: string;
   description: string;
@@ -56,8 +63,8 @@ const IMPLEMENTED_ACTIONS: Record<string, string[]> = {
   scope: ['get'],
   capabilities: ['list'],
   library: ['list', 'get', 'pages', 'outline', 'references'],
-  notes: ['list', 'list_for_document'],
-  annotations: ['list_for_document'],
+  notes: ['list', 'list_for_document', 'create'],
+  annotations: ['list_for_document', 'create'],
   organize: ['preview', 'apply', 'undo'],
   reading: ['sessions', 'tasks', 'summary'],
   system: ['health']
@@ -68,8 +75,8 @@ export function toolSpecs(): ToolSpec[] {
     ['scope', '查看当前共享范围（只读）。'],
     ['capabilities', '列出当前可用的只读能力（op / action / 说明）。'],
     ['library', '文献与结构：list / get / pages / outline / references。'],
-    ['notes', '笔记：list（独立笔记）/ list_for_document。'],
-    ['annotations', '批注：list_for_document。'],
+    ['notes', '笔记：list（独立笔记）/ list_for_document / create（写 AI 笔记，需要写入范围）。'],
+    ['annotations', '批注：list_for_document / create（写 AI 批注，需要写入范围）。'],
     ['organize', '整理（可撤销）：preview（dry-run）/ apply / undo；需要允许写入的共享范围。'],
     ['reading', '阅读会话：sessions / tasks / summary。'],
     ['system', '系统状态：health。']
@@ -90,6 +97,11 @@ interface ToolArgs {
   kind?: unknown;
   items?: unknown;
   operation_id?: unknown;
+  page?: unknown;
+  quote?: unknown;
+  content?: unknown;
+  color?: unknown;
+  style?: unknown;
 }
 
 const MAX_PAGES = 8;
@@ -111,6 +123,12 @@ function optionalInt(value: unknown, field: string, min: number, max: number): n
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value != null && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+}
+
+function optionalString(value: unknown, field: string, max = 500): string | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== 'string') throw new Error(`${field} 必须是字符串`);
+  return value.slice(0, max);
 }
 
 export async function executeTool(
@@ -200,14 +218,49 @@ export async function executeTool(
       assertDocumentAllowed(scope, documentId);
       return api.request('GET', `/documents/${encodeURIComponent(documentId)}/notes`);
     }
+    if (action === 'create') {
+      assertWriteAllowed(scope, '写笔记需要在共享范围里勾选「允许整理」。');
+      const documentId = requireString(args.document_id, 'document_id');
+      assertDocumentAllowed(scope, documentId);
+      const content = requireString(args.content, 'content');
+      const page = optionalInt(args.page, 'page', 0, 100000) ?? 0;
+      return api.request('POST', '/notes', {
+        documentId,
+        page,
+        quote: optionalString(args.quote, 'quote', 2000) ?? '',
+        content,
+        origin: 'ai',
+        agentName: context.agentName ?? 'agent'
+      });
+    }
     throw new Error(`notes 不支持 action=${action}`);
   }
 
   if (name === 'annotations') {
-    if (action !== 'list_for_document') throw new Error(`annotations 不支持 action=${action}`);
-    const documentId = requireString(args.document_id, 'document_id');
-    assertDocumentAllowed(scope, documentId);
-    return api.request('GET', `/documents/${encodeURIComponent(documentId)}/annotations`);
+    if (action === 'list_for_document') {
+      const documentId = requireString(args.document_id, 'document_id');
+      assertDocumentAllowed(scope, documentId);
+      return api.request('GET', `/documents/${encodeURIComponent(documentId)}/annotations`);
+    }
+    if (action === 'create') {
+      assertWriteAllowed(scope, '写批注需要在共享范围里勾选「允许整理」。');
+      const documentId = requireString(args.document_id, 'document_id');
+      assertDocumentAllowed(scope, documentId);
+      const page = optionalInt(args.page, 'page', 1, 100000);
+      if (page == null) throw new Error('写批注需要 page');
+      const content = requireString(args.content, 'content');
+      return api.request('POST', '/annotations', {
+        documentId,
+        page,
+        quote: optionalString(args.quote, 'quote', 2000) ?? '',
+        content,
+        color: optionalString(args.color, 'color', 20) ?? 'yellow',
+        style: optionalString(args.style, 'style', 20) ?? 'highlight',
+        origin: 'ai',
+        agentName: context.agentName ?? 'agent'
+      });
+    }
+    throw new Error(`annotations 不支持 action=${action}`);
   }
 
   if (name === 'organize') {

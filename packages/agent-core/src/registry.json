@@ -1071,6 +1071,13 @@
         "PUT /api/v1/agent/scope",
         "DELETE /api/v1/agent/scope"
       ]
+    },
+    {
+      "id": "agent-operations-history",
+      "reason": "操作历史只给应用侧审阅/撤销入口读；agent 不需要也不应枚举历史",
+      "routes": [
+        "GET /api/v1/agent/operations"
+      ]
     }
   ]
 }
