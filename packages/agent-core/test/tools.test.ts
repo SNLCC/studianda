@@ -481,3 +481,55 @@ describe('MCP progress 回调', () => {
     ]);
   });
 });
+
+describe('独立笔记与参考文献', () => {
+  it('create 省略 document_id 即独立笔记', async () => {
+    const { api, calls } = routedApi({ 'POST /notes': { id: 'n1' } });
+    await executeTool(
+      'notes',
+      { action: 'create', content: '独立想法' },
+      { scope: { kind: 'library', caps: ['read', 'write'] }, api, agentName: 'dsh' }
+    );
+    expect(calls[0]?.body).toMatchObject({
+      documentId: '',
+      page: 0,
+      content: '独立想法',
+      origin: 'ai'
+    });
+  });
+
+  it('update 独立笔记先查 /notes/standalone', async () => {
+    const { api, calls } = routedApi({
+      'GET /notes/standalone': [{ id: 'n1' }],
+      'PATCH /notes/n1': { id: 'n1', content: '改' }
+    });
+    await executeTool(
+      'notes',
+      { action: 'update', note_id: 'n1', content: '改' },
+      { scope: { kind: 'library', caps: ['read', 'write'] }, api }
+    );
+    expect(calls.map((call) => call.path)).toEqual([
+      '/notes/standalone',
+      '/notes/n1'
+    ]);
+  });
+
+  it('reference_add 写入门参考文献条目', async () => {
+    const { api, calls } = routedApi({
+      'POST /documents/doc-1/references/entries': { id: 'r1' }
+    });
+    await executeTool(
+      'organize',
+      {
+        action: 'reference_add',
+        document_id: 'doc-1',
+        entry: { title: '责任伦理', authors: ['韦伯'] }
+      },
+      {
+        scope: { kind: 'documents', documentIds: ['doc-1'], caps: ['read', 'write'] },
+        api
+      }
+    );
+    expect(calls[0]?.body).toEqual({ title: '责任伦理', authors: ['韦伯'] });
+  });
+});

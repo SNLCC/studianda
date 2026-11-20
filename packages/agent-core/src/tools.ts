@@ -84,6 +84,27 @@ async function assertNoteBelongs(
   }
 }
 
+async function assertStandaloneNote(
+  api: CoreApi,
+  noteId: string,
+  trash: boolean
+): Promise<void> {
+  const rows = await api.request<Array<{ id?: unknown }>>(
+    'GET',
+    `/notes/standalone${trash ? '?trash=true' : ''}`
+  );
+  if (!Array.isArray(rows) || !rows.some((row) => row.id === noteId)) {
+    throw new Error(trash ? '回收站里没有这条独立笔记' : '这条独立笔记不存在');
+  }
+}
+
+function noteDocumentId(args: ToolArgs, scope: AgentScope): string {
+  if (args.document_id === undefined) return '';
+  const documentId = requireString(args.document_id, 'document_id');
+  assertDocumentAllowed(scope, documentId);
+  return documentId;
+}
+
 async function assertAnnotationBelongs(
   api: CoreApi,
   documentId: string,
@@ -126,7 +147,11 @@ const IMPLEMENTED_ACTIONS: Record<string, string[]> = {
     'project_remove_documents',
     'reorder_documents',
     'trash_document',
-    'restore_document'
+    'restore_document',
+    'reference_add',
+    'reference_update',
+    'reference_delete',
+    'reference_reset'
   ],
   compute: ['start', 'status', 'cancel', 'web_search'],
   reading: [
@@ -148,9 +173,9 @@ export function toolSpecs(): ToolSpec[] {
     ['scope', '查看当前共享范围（只读）。'],
     ['capabilities', '列出当前可用的只读能力（op / action / 说明）。'],
     ['library', '文献、检索与结构：list / get / search / pages / ocr（读已有 OCR 结果）/ outline / references。'],
-    ['notes', '笔记全生命周期：list / list_for_document / create / update / set_tags / delete / restore（写入需允许整理）。'],
+    ['notes', 'AI 笔记：list（独立笔记）/ list_for_document / create（省略 document_id 即独立笔记）/ update / set_tags / delete / restore。'],
     ['annotations', '批注：list_for_document / create / update / delete / restore（写入需允许整理）。'],
-    ['organize', '整理与撤销：preview / apply / undo（标签/题录/文件夹）+ folders / projects / 排序 / 回收站；写操作需允许整理。'],
+    ['organize', '整理与撤销：preview / apply / undo（标签/题录/文件夹）+ folders / projects / 排序 / 回收站 / 参考文献。'],
     ['compute', '长任务：start / status / cancel；kind=summary / translate / ask / corpus_ask（跨文献问答）/ ocr；另有 web_search。'],
     ['reading', '阅读：sessions / tasks / summary / navigation / navigation_status / translation / translation_pages / flows / flow。'],
     ['system', '系统：health / backups / maintenance / file_health / diagnostics（后四项只读，需全库范围）。']
@@ -201,6 +226,9 @@ interface ToolArgs {
   scale?: unknown;
   flow_id?: unknown;
   include_memory?: unknown;
+  trash?: unknown;
+  entry_id?: unknown;
+  entry?: unknown;
 }
 
 const MAX_PAGES = 8;
@@ -375,8 +403,13 @@ export async function executeTool(
 
   if (name === 'notes') {
     if (action === 'list') {
-      if (scope.kind !== 'library') throw new ScopeError('scope_denied', '独立笔记列表需要 library 范围');
-      return api.request('GET', '/notes/standalone');
+      if (scope.kind !== 'library') {
+        throw new ScopeError('scope_denied', '独立笔记列表需要 library 范围');
+      }
+      return api.request(
+        'GET',
+        `/notes/standalone${args.trash === true ? '?trash=true' : ''}`
+      );
     }
     if (action === 'list_for_document') {
       const documentId = requireString(args.document_id, 'document_id');
@@ -385,14 +418,14 @@ export async function executeTool(
     }
     if (action === 'create') {
       assertWriteAllowed(scope, '写笔记需要在共享范围里勾选「允许整理」。');
-      const documentId = requireString(args.document_id, 'document_id');
-      assertDocumentAllowed(scope, documentId);
+      const documentId = noteDocumentId(args, scope);
       const content = requireString(args.content, 'content');
       const page = optionalInt(args.page, 'page', 0, 100000) ?? 0;
+      if (!documentId && page !== 0) throw new Error('独立笔记的 page 必须为 0');
       return api.request('POST', '/notes', {
         documentId,
         page,
-        quote: optionalString(args.quote, 'quote', 2000) ?? '',
+        quote: documentId ? (optionalString(args.quote, 'quote', 2000) ?? '') : '',
         content,
         origin: 'ai',
         agentName: context.agentName ?? 'agent'
@@ -400,14 +433,20 @@ export async function executeTool(
     }
     if (action === 'update') {
       assertWriteAllowed(scope, '更新笔记需要在共享范围里勾选「允许整理」。');
-      const documentId = requireString(args.document_id, 'document_id');
-      assertDocumentAllowed(scope, documentId);
+      const documentId = noteDocumentId(args, scope);
       const noteId = requireString(args.note_id, 'note_id');
-      await assertNoteBelongs(api, documentId, noteId, false);
+      if (documentId) await assertNoteBelongs(api, documentId, noteId, false);
+      else await assertStandaloneNote(api, noteId, false);
       const patch: Record<string, unknown> = {};
       if (args.content !== undefined) patch.content = requireString(args.content, 'content');
-      if (args.quote !== undefined) patch.quote = optionalString(args.quote, 'quote', 2000) ?? '';
-      if (args.page !== undefined) patch.page = optionalInt(args.page, 'page', 0, 100000);
+      if (args.quote !== undefined) {
+        if (!documentId) throw new Error('独立笔记没有原文摘录');
+        patch.quote = optionalString(args.quote, 'quote', 2000) ?? '';
+      }
+      if (args.page !== undefined) {
+        if (!documentId) throw new Error('独立笔记没有页码');
+        patch.page = optionalInt(args.page, 'page', 0, 100000);
+      }
       if (args.folder_path !== undefined) {
         patch.folderPath = optionalString(args.folder_path, 'folder_path', 240) ?? '';
       }
@@ -416,10 +455,10 @@ export async function executeTool(
     }
     if (action === 'set_tags') {
       assertWriteAllowed(scope, '改笔记标签需要在共享范围里勾选「允许整理」。');
-      const documentId = requireString(args.document_id, 'document_id');
-      assertDocumentAllowed(scope, documentId);
+      const documentId = noteDocumentId(args, scope);
       const noteId = requireString(args.note_id, 'note_id');
-      await assertNoteBelongs(api, documentId, noteId, false);
+      if (documentId) await assertNoteBelongs(api, documentId, noteId, false);
+      else await assertStandaloneNote(api, noteId, false);
       if (!Array.isArray(args.tags) || !args.tags.every((tag) => typeof tag === 'string')) {
         throw new Error('tags 必须是字符串数组');
       }
@@ -429,19 +468,19 @@ export async function executeTool(
     }
     if (action === 'delete') {
       assertWriteAllowed(scope, '删除笔记需要在共享范围里勾选「允许整理」。');
-      const documentId = requireString(args.document_id, 'document_id');
-      assertDocumentAllowed(scope, documentId);
+      const documentId = noteDocumentId(args, scope);
       const noteId = requireString(args.note_id, 'note_id');
-      await assertNoteBelongs(api, documentId, noteId, false);
+      if (documentId) await assertNoteBelongs(api, documentId, noteId, false);
+      else await assertStandaloneNote(api, noteId, false);
       await api.request('DELETE', `/notes/${encodeURIComponent(noteId)}`);
       return { ok: true, noteId, deleted: true };
     }
     if (action === 'restore') {
       assertWriteAllowed(scope, '恢复笔记需要在共享范围里勾选「允许整理」。');
-      const documentId = requireString(args.document_id, 'document_id');
-      assertDocumentAllowed(scope, documentId);
+      const documentId = noteDocumentId(args, scope);
       const noteId = requireString(args.note_id, 'note_id');
-      await assertNoteBelongs(api, documentId, noteId, true);
+      if (documentId) await assertNoteBelongs(api, documentId, noteId, true);
+      else await assertStandaloneNote(api, noteId, true);
       return api.request('POST', `/notes/${encodeURIComponent(noteId)}/restore`);
     }
     throw new Error(`notes 不支持 action=${action}`);
@@ -624,6 +663,37 @@ export async function executeTool(
         return api.request('DELETE', `/documents/${encodeURIComponent(documentId)}`);
       }
       return api.request('POST', `/documents/${encodeURIComponent(documentId)}/restore`);
+    }
+
+    if (action.startsWith('reference_')) {
+      assertWriteAllowed(scope, writeMessage);
+      const documentId = requireString(args.document_id, 'document_id');
+      assertDocumentAllowed(scope, documentId);
+      const base = `/documents/${encodeURIComponent(documentId)}/references`;
+      if (action === 'reference_reset') {
+        return api.request('POST', `${base}/reset`);
+      }
+      if (action === 'reference_add') {
+        if (args.entry === null || typeof args.entry !== 'object' || Array.isArray(args.entry)) {
+          throw new Error('reference_add 需要 entry 对象');
+        }
+        return api.request('POST', `${base}/entries`, args.entry);
+      }
+      const entryId = requireString(args.entry_id, 'entry_id');
+      if (action === 'reference_delete') {
+        return api.request(
+          'DELETE',
+          `${base}/entries/${encodeURIComponent(entryId)}`
+        );
+      }
+      if (args.entry === null || typeof args.entry !== 'object' || Array.isArray(args.entry)) {
+        throw new Error('reference_update 需要 entry 对象');
+      }
+      return api.request(
+        'PUT',
+        `${base}/entries/${encodeURIComponent(entryId)}`,
+        args.entry
+      );
     }
 
     if (action !== 'preview' && action !== 'apply' && action !== 'undo') {
