@@ -23,5 +23,29 @@ const result = await build({
   logLevel: 'info'
 });
 
-writeFileSync(`${outfile}.meta.json`, `${JSON.stringify(result.metafile, null, 2)}\n`);
+/**
+ * 把对象/数组递归规范化：对象键按字典序、数组按序列化结果排序。
+ *
+ * 为什么需要：esbuild metafile 里对象键/数组顺序取决于文件系统遍历顺序，在不同机器/CI 上
+ * 可能生成 **字节数相同但 SHA-256 不同** 的 meta.json；而 legal 清单会记录这个文件的哈希。
+ * 排序后的 metafile 在本地与 CI 上可复现（是否被 bundle 的内容本身不受影响）。
+ */
+function canonicalJson(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map(canonicalJson)
+      .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  }
+  if (value && typeof value === 'object') {
+    const result = {};
+    for (const key of Object.keys(value).sort()) result[key] = canonicalJson(value[key]);
+    return result;
+  }
+  return value;
+}
+
+writeFileSync(
+  `${outfile}.meta.json`,
+  `${JSON.stringify(canonicalJson(result.metafile), null, 2)}\n`
+);
 console.log(`[agent-bridge] bundled -> ${path.relative(root, outfile)}`);

@@ -1,6 +1,6 @@
 # 许可证来源与哈希
 
-生成时间：2026-11-21T09:16:06.777Z
+生成时间：2026-11-21T09:34:41.049Z
 
 “官方仓库”列取自各包 `package.json` 的 repository/homepage；许可证文件哈希取自安装包内实际文件。
 
@@ -215,7 +215,7 @@
   - `/node_modules/pdfjs-dist/wasm/qcms_bg.wasm`（容器 `apps/desktop/release/win-unpacked/resources/app.asar`） — 96589 B — SHA-256 `663d86126d5f5fcb1c61490f94353e2a8375660b8c5498ab3ebab5a34b08800e`
 - **Agent MCP bridge bundle（agent-bridge.mjs，内嵌 MCP SDK / zod 等 8 个 npm 包）**（0.1.4）
   - `packages/agent-bridge/dist/agent-bridge.mjs` — 1478437 B — SHA-256 `c1a2c0c814d93d12d15ab64b4e4a8057c6f88b420e97e592da3cca9ee35e5743`
-  - `packages/agent-bridge/dist/agent-bridge.mjs.meta.json` — 196991 B — SHA-256 `476676139b54b2e4f466a0e4368fed9f7aa293e5708f9af1bd58aa95631bb6b0`
+  - `packages/agent-bridge/dist/agent-bridge.mjs.meta.json` — 196991 B — SHA-256 `2e9af4326062f270e7b2a170240f04971e77ade21988042c3961d035d454e8ce`
 - **Noto Serif CJK SC**（2.003）
   - `packages/ui/src/styles/assets/fonts/StudiandaSerifSC-Regular.woff2` — 11168936 B — SHA-256 `5329e86415b45a98eb4fb9c78e4c053f79e4728f985feabab8b26f92328635be`
   - `packages/ui/src/styles/assets/fonts/StudiandaSerifSC-SemiBold.woff2` — 11266872 B — SHA-256 `8cfe445056c835196c448b30df24e65aedfb80e589791f12a77c23c5e71ee6a7`

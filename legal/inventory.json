@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-21T09:16:06.777Z",
+  "generatedAt": "2026-11-21T09:34:41.049Z",
   "electron": "44.5.1",
   "node": "24.21.0",
   "asar": "app.asar",
@@ -847,7 +847,7 @@
         {
           "path": "packages/agent-bridge/dist/agent-bridge.mjs.meta.json",
           "bytes": 196991,
-          "sha256": "476676139b54b2e4f466a0e4368fed9f7aa293e5708f9af1bd58aa95631bb6b0"
+          "sha256": "2e9af4326062f270e7b2a170240f04971e77ade21988042c3961d035d454e8ce"
         }
       ]
     }
