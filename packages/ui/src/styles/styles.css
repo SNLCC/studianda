@@ -4730,10 +4730,11 @@ a {
   font-size: var(--kr-fs-caption);
   box-shadow: 0 8px 24px rgb(35 27 14 / 25%);
 }
-/* 选区快捷菜单 */
+/* 选区快捷菜单：挂到窗口层（portal）后用 fixed 定位，不跟文献缩放一起放大/错位。
+   层级放在阅读区工具条之上、设置/模态遮罩之下，避免盖住设置页与确认框。 */
 .kr-selection-actions {
-  position: absolute;
-  z-index: 24;
+  position: fixed;
+  z-index: 36;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -4755,6 +4756,8 @@ a {
   white-space: nowrap;
 }
 .kr-selection-actions button:hover { background: var(--kr-celadon-soft); color: var(--kr-celadon-deep); }
+.kr-selection-actions button.kr-selection-actions__copy.is-copied { color: var(--kr-celadon-deep); }
+.kr-selection-actions button.kr-selection-actions__copy.is-failed { color: var(--kr-vermilion-deep); }
 .kr-selection-actions__hint { padding: 4px 6px; color: var(--kr-ink-soft); font-size: var(--kr-fs-caption); }
 /* 添加批注弹窗 */
 .kr-annotation-editor-backdrop {
@@ -4818,11 +4821,12 @@ a {
 .kr-highlight--margin {
   border-bottom: 0 !important;
 }
-/* 添加批注弹窗固定到窗口中央，不跟随页面坐标偏移 */
+/* 添加批注弹窗固定到窗口中央，不跟随页面坐标偏移。
+   弹窗挂到 portal 根，z-index 需低于设置页（40）/模态（50），高于阅读区工具条。 */
 .kr-annotation-editor-backdrop {
   position: fixed !important;
   inset: 0 !important;
-  z-index: 1400 !important;
+  z-index: 37 !important;
 }
 /* 阅读伙伴批注卡使用主题色，不再使用暗色块 */
 .kr-side .kr-annotations,
@@ -4934,7 +4938,7 @@ a {
 }
 .kr-annotation-popover {
   position: fixed;
-  z-index: 1500;
+  z-index: 38;
   width: 360px;
   min-width: 280px;
   max-width: 90vw;
@@ -10800,18 +10804,18 @@ font-size: var(--kr-fs-body);
   gap: 8px;
 }
 
-/* 正文引用弹窗：点 [1] / (Smith, 2020) 时显示对应条目 */
+/* 正文引用弹窗：点 [1] / (Smith, 2020) 时显示对应条目。
+   和批注弹窗一样挂到窗口层，不参与阅读页 transform 缩放。 */
 .kr-cite-pop {
-  position: absolute;
-  z-index: 30;
+  position: fixed;
+  z-index: 34;
   min-width: 200px;
-  max-width: min(340px, 82%);
+  max-width: min(340px, 86%);
   padding: 8px 10px;
   border: 1px solid var(--kr-line-strong);
   border-radius: 8px;
   background: var(--kr-paper-raised);
   box-shadow: 0 8px 22px rgba(44, 42, 36, 0.18);
-  transform: translate(6px, 6px);
 }
 .kr-cite-pop__head {
   display: flex;

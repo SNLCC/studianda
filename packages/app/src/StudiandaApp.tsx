@@ -2,6 +2,12 @@ import { appDialogs, setAppDialogs, type AppDialogs } from './dialogs.js';
 import { useElapsedSeconds } from './use-elapsed-seconds.js';
 import { useDialogFocusTrap } from './use-dialog-focus-trap.js';
 import { useAiCopyGuard } from './use-ai-copy-guard.js';
+import { copyPlainText } from './clipboard.js';
+import {
+  clampFixedBox,
+  useAnchoredViewportPoint,
+  useClampedFixedPoint
+} from './reader-overlay.js';
 import { ApiRequestError, createApiClient, type ApiClient } from '@studianda/api-client';
 import {
   API_ERROR_CODES,
@@ -93,6 +99,7 @@ import {
   StandaloneNotesView,
   StructurePanel,
   TranslationPanel,
+  getAppPortalRoot,
   onHostKeyDown,
   type ChatMessageView,
   type DocumentReorderTarget,
@@ -123,6 +130,7 @@ import {
   type JSX,
   type MouseEvent as ReactMouseEvent
 } from 'react';
+import { createPortal } from 'react-dom';
 import type { RuntimeAdapter } from './runtime.js';
 import { blobToWav, mediaRecordingSupport } from './runtime.js';
 
@@ -4145,13 +4153,10 @@ function clampBoxToViewport(
   width: number,
   height: number
 ): { x: number; y: number } {
-  const margin = 8;
-  const maxX = Math.max(margin, window.innerWidth - width - margin);
-  const maxY = Math.max(margin, window.innerHeight - height - margin);
-  return {
-    x: Math.max(margin, Math.min(x, maxX)),
-    y: Math.max(margin, Math.min(y, maxY))
-  };
+  return clampFixedBox(x, y, width, height, {
+    width: window.innerWidth,
+    height: window.innerHeight
+  });
 }
 
 type SelectionStyle = 'highlight' | 'underline' | 'margin';
@@ -4161,8 +4166,11 @@ interface SelectionDraft {
   rects: number[][];
   paragraphQuote?: string;
   paragraphRects?: number[][];
-  left: number;
-  top: number;
+  /**
+   * 选区锚点（页面内归一化坐标，0–1）。
+   * 快捷菜单挂到窗口层后按当前页面矩形换算，缩放时不会二次缩放或错位。
+   */
+  anchor: { x: number; y: number };
   isRegion?: boolean;
 }
 
@@ -4425,10 +4433,15 @@ function ReaderPage({
   /** 正文引用的弹窗：点 `[1]`、`(Smith, 2020)` 时显示对应条目。 */
   const [citationPopup, setCitationPopup] = useState<{
     label: string;
-    x: number;
-    y: number;
+    /** 点击位置在页面内的归一化坐标，弹窗据此贴住正文且不随缩放放大。 */
+    anchor: { x: number; y: number };
   } | null>(null);
+  const citationPopRef = useRef<HTMLDivElement | null>(null);
   const [draft, setDraft] = useState<SelectionDraft | null>(null);
+  const selectionMenuRef = useRef<HTMLDivElement | null>(null);
+  /** 「复制」按钮的短暂反馈：成功/失败都要让用户看见，不能静默。 */
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const copyStateTimerRef = useRef(0);
   const [maskMenu, setMaskMenu] = useState<{
     id: string;
     page: number;
@@ -4584,6 +4597,13 @@ function ReaderPage({
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
   const [dragCurrent, setDragCurrent] = useState<{ x: number; y: number } | null>(null);
 
+  useEffect(
+    () => () => {
+      if (copyStateTimerRef.current) window.clearTimeout(copyStateTimerRef.current);
+    },
+    []
+  );
+
   useEffect(() => {
     const dismiss = (event: MouseEvent | PointerEvent): void => {
       const target = event.target as Element | null;
@@ -4591,12 +4611,14 @@ function ReaderPage({
       setDraft((current) => (current ? null : current));
       setAnnotationEditor((current) => (current ? null : current));
       setSelectionRects((current) => (current.length > 0 ? [] : current));
+      setCopyState('idle');
     };
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') {
         setDraft(null);
         setAnnotationEditor(null);
         setSelectionRects([]);
+        setCopyState('idle');
       }
     };
     window.document.addEventListener('pointerdown', dismiss, true);
@@ -4966,9 +4988,19 @@ function ReaderPage({
       rects,
       paragraphQuote: paragraphQuote || quote,
       paragraphRects,
-      left: Math.max(8, Math.min(bounds.left - canvasRect.left, size.width - 300)),
-      top: Math.max(8, Math.min(bounds.bottom - canvasRect.top + 8, size.height - 120))
+      anchor: {
+        // 归一化后再换算：缩放/滚动只改页面矩形，不改这个比例，菜单因此贴着原文而不被二次缩放。
+        x: Math.max(
+          0,
+          Math.min(1, (bounds.left - canvasRect.left) / Math.max(1, canvasRect.width))
+        ),
+        y: Math.max(
+          0,
+          Math.min(1, (bounds.bottom - canvasRect.top) / Math.max(1, canvasRect.height))
+        )
+      }
     });
+    setCopyState('idle');
   };
 
   const commit = (nextStyle: SelectionStyle, color: string): void => {
@@ -4991,6 +5023,22 @@ function ReaderPage({
     setNote('');
     setSelectionRects([]);
     window.getSelection()?.removeAllRanges();
+  };
+
+  /**
+   * 复制选区原文：Clipboard API 失败时退回 execCommand，并给按钮一个短暂的
+   * “已复制 / 复制失败”反馈。之前这里只有一句 void writeText，权限被拒或
+   * 无安全上下文时用户看到的就是“点了没反应”。
+   */
+  const copyDraftQuote = async (): Promise<void> => {
+    if (!draft) return;
+    const copied = await copyPlainText(draft.quote);
+    setCopyState(copied ? 'copied' : 'failed');
+    if (copyStateTimerRef.current) window.clearTimeout(copyStateTimerRef.current);
+    copyStateTimerRef.current = window.setTimeout(
+      () => setCopyState('idle'),
+      copied ? 1400 : 2400
+    );
   };
 
   const pointAt = (event: { clientX: number; clientY: number }): { x: number; y: number } | null => {
@@ -5043,10 +5091,10 @@ function ReaderPage({
     setDraft({
       quote: '',
       rects: [[x0, y0, x1, y1]],
-      left: Math.max(8, Math.min(x0 * size.width, size.width - 300)),
-      top: Math.max(8, Math.min(y1 * size.height + 8, size.height - 120)),
+      anchor: { x: x0, y: y1 },
       isRegion: true
     });
+    setCopyState('idle');
   };
 
   const draftRect =
@@ -5095,8 +5143,11 @@ function ReaderPage({
     event.stopPropagation();
     setCitationPopup({
       label: labels[0]!,
-      x: Math.min(0.72, Math.max(0.03, x)),
-      y: Math.min(0.72, Math.max(0.03, y))
+      // 保存原始点击位置（不预先夹取）：弹窗挂到窗口层后会按自身尺寸夹回视口。
+      anchor: {
+        x: Math.max(0, Math.min(1, x)),
+        y: Math.max(0, Math.min(1, y))
+      }
     });
     // 首次点引用时按需加载参考文献数据（面板没打开也没关系）。
     onRequestReferences?.();
@@ -5145,6 +5196,36 @@ function ReaderPage({
   // 批注层保持同一口径），等清晰位图与文本层重绘完成后自然回到 1，避免文本层/批注错位。
   const textScaleRaw = size && size.width > 0 ? width / size.width : 1;
   const textScale = Math.abs(textScaleRaw - 1) < 0.002 ? 1 : textScaleRaw;
+
+  // 选区快捷菜单、引用弹窗挂到窗口层：按页面当前窗口矩形换算坐标，滚动/缩放时跟着原文走，
+  // 但浮层尺寸不参与页面 transform，不会跟文献一起放大缩小。
+  const readerScroll = hostRef.current?.closest<HTMLElement>('.kr-reader__scroll') ?? null;
+  const selectionMenuPoint = useAnchoredViewportPoint(
+    Boolean(draft),
+    readerScroll,
+    hostRef.current,
+    draft?.anchor ?? null,
+    { x: 0, y: 8 }
+  );
+  const selectionMenuPos = useClampedFixedPoint(
+    Boolean(draft),
+    selectionMenuPoint,
+    selectionMenuRef,
+    { width: 360, height: 44 }
+  );
+  const citationPopPoint = useAnchoredViewportPoint(
+    Boolean(citationPopup),
+    readerScroll,
+    hostRef.current,
+    citationPopup?.anchor ?? null,
+    { x: 6, y: 6 }
+  );
+  const citationPopPos = useClampedFixedPoint(
+    Boolean(citationPopup),
+    citationPopPoint,
+    citationPopRef,
+    { width: 260, height: 72 }
+  );
 
   return (
     <div
@@ -5409,45 +5490,52 @@ function ReaderPage({
         onMouseUp={startSelection}
         onClick={handleTextClick}
       />
-      {citationPopup ? (
-        <div
-          className="kr-cite-pop"
-          style={{ left: `${citationPopup.x * 100}%`, top: `${citationPopup.y * 100}%` }}
-          onClick={(event) => event.stopPropagation()}
-        >
-          <div className="kr-cite-pop__head">
-            <strong>引用 {citationPopup.label}</strong>
-            <button
-              type="button"
-              aria-label="关闭引用弹窗"
-              onClick={() => setCitationPopup(null)}
+      {citationPopup
+        ? createPortal(
+            <div
+              ref={citationPopRef}
+              className="kr-cite-pop"
+              style={{
+                left: citationPopPos?.x ?? -9999,
+                top: citationPopPos?.y ?? -9999
+              }}
+              onClick={(event) => event.stopPropagation()}
             >
-              ×
-            </button>
-          </div>
-          {!references ? (
-            <p className="kr-cite-pop__empty">正在识别参考文献…</p>
-          ) : popupEntries.length === 0 ? (
-            <p className="kr-cite-pop__empty">未在参考文献表中找到对应条目。</p>
-          ) : (
-            <ul>
-              {popupEntries.map((entry) => (
-                <li key={entry.id}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onLocateReferenceEntry?.(entry.id);
-                      setCitationPopup(null);
-                    }}
-                  >
-                    {referenceEntrySummary(entry)}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      ) : null}
+              <div className="kr-cite-pop__head">
+                <strong>引用 {citationPopup.label}</strong>
+                <button
+                  type="button"
+                  aria-label="关闭引用弹窗"
+                  onClick={() => setCitationPopup(null)}
+                >
+                  ×
+                </button>
+              </div>
+              {!references ? (
+                <p className="kr-cite-pop__empty">正在识别参考文献…</p>
+              ) : popupEntries.length === 0 ? (
+                <p className="kr-cite-pop__empty">未在参考文献表中找到对应条目。</p>
+              ) : (
+                <ul>
+                  {popupEntries.map((entry) => (
+                    <li key={entry.id}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onLocateReferenceEntry?.(entry.id);
+                          setCitationPopup(null);
+                        }}
+                      >
+                        {referenceEntrySummary(entry)}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>,
+            getAppPortalRoot()
+          )
+        : null}
       {regionMode || maskMode || ocrRegionMode ? (
         <div
           className="kr-region-layer"
@@ -5473,64 +5561,91 @@ function ReaderPage({
             />
           ))
         : null}
-      {draft ? (
-        <div
-          className="kr-selection-actions"
-          style={{ left: `${draft.left}px`, top: `${draft.top}px` }}
-          onMouseDown={(event) => event.preventDefault()}
-        >
-          {draft.isRegion ? <span className="kr-selection-actions__hint">框选区域</span> : null}
-          {draft.isRegion ? (
-            <button
-              type="button"
-              title="识别这块区域的文字，并以它作为引用向阅读伙伴提问（不会创建批注）"
-              onClick={() => {
-                const rect = draft.rects[0];
-                onAskRegion?.({
-                  page: pageNumber,
-                  x0: rect?.[0] ?? 0,
-                  y0: rect?.[1] ?? 0,
-                  x1: rect?.[2] ?? 1,
-                  y1: rect?.[3] ?? 1
-                });
-                setDraft(null);
-                setSelectionRects([]);
+      {draft
+        ? createPortal(
+            <div
+              ref={selectionMenuRef}
+              className="kr-selection-actions"
+              style={{
+                // 坐标由 useAnchoredViewportPoint/useClampedFixedPoint 量出来；
+                // 首帧先放到视口外，避免在旧位置闪一下。
+                left: selectionMenuPos?.x ?? -9999,
+                top: selectionMenuPos?.y ?? -9999
               }}
-            >对此处提问</button>
-          ) : (
-            <>
-              <button type="button" onClick={() => onQuickAction?.('translate', draft.quote)}>翻译</button>
-              <button type="button" onClick={() => onQuickAction?.('float', draft.quote)}>浮窗提问</button>
-              <button type="button" onClick={() => onQuickAction?.('ask', draft.quote)}>提问</button>
-            </>
-          )}
-          <button type="button" onClick={() => setAnnotationEditor({ style: 'highlight', color: 'yellow' })}>高亮</button>
-          <button type="button" onClick={() => setAnnotationEditor({ style: 'underline', color: 'yellow' })}>下划线</button>
-          <button type="button" onClick={() => setAnnotationEditor({ style: 'margin', color: 'yellow' })}>段落批注</button>
-          {draft.quote ? (
-            <button
-              type="button"
-              onClick={() => {
-                void navigator.clipboard.writeText(draft.quote);
-                onQuickAction?.('copy', draft.quote);
-              }}
-            >复制</button>
-          ) : null}
-        </div>
-      ) : null}
-      {draft && annotationEditor ? (
-        <div className="kr-annotation-editor-backdrop" onMouseDown={() => setAnnotationEditor(null)}>
-          <div
-            ref={annotationEditorRef}
-            className="kr-annotation-editor"
-            style={{
-              position: 'fixed',
-              left: annotationEditorPos.x,
-              top: annotationEditorPos.y,
-              margin: 0
-            }}
-            onMouseDown={(event) => event.stopPropagation()}
-          >
+              onMouseDown={(event) => event.preventDefault()}
+            >
+              {draft.isRegion ? (
+                <span className="kr-selection-actions__hint">框选区域</span>
+              ) : null}
+              {draft.isRegion ? (
+                <button
+                  type="button"
+                  title="识别这块区域的文字，并以它作为引用向阅读伙伴提问（不会创建批注）"
+                  onClick={() => {
+                    const rect = draft.rects[0];
+                    onAskRegion?.({
+                      page: pageNumber,
+                      x0: rect?.[0] ?? 0,
+                      y0: rect?.[1] ?? 0,
+                      x1: rect?.[2] ?? 1,
+                      y1: rect?.[3] ?? 1
+                    });
+                    setDraft(null);
+                    setSelectionRects([]);
+                  }}
+                >对此处提问</button>
+              ) : (
+                <>
+                  <button type="button" onClick={() => onQuickAction?.('translate', draft.quote)}>翻译</button>
+                  <button type="button" onClick={() => onQuickAction?.('float', draft.quote)}>浮窗提问</button>
+                  <button type="button" onClick={() => onQuickAction?.('ask', draft.quote)}>提问</button>
+                </>
+              )}
+              <button type="button" onClick={() => setAnnotationEditor({ style: 'highlight', color: 'yellow' })}>高亮</button>
+              <button type="button" onClick={() => setAnnotationEditor({ style: 'underline', color: 'yellow' })}>下划线</button>
+              <button type="button" onClick={() => setAnnotationEditor({ style: 'margin', color: 'yellow' })}>段落批注</button>
+              {draft.quote ? (
+                <button
+                  type="button"
+                  className={`kr-selection-actions__copy${
+                    copyState === 'copied'
+                      ? ' is-copied'
+                      : copyState === 'failed'
+                        ? ' is-failed'
+                        : ''
+                  }`}
+                  title={
+                    copyState === 'failed'
+                      ? '复制失败：请手动选中文字后按 Ctrl+C'
+                      : '复制选中的文字'
+                  }
+                  onClick={() => void copyDraftQuote()}
+                >
+                  {copyState === 'copied'
+                    ? '已复制'
+                    : copyState === 'failed'
+                      ? '复制失败'
+                      : '复制'}
+                </button>
+              ) : null}
+            </div>,
+            getAppPortalRoot()
+          )
+        : null}
+      {draft && annotationEditor
+        ? createPortal(
+            <div className="kr-annotation-editor-backdrop" onMouseDown={() => setAnnotationEditor(null)}>
+              <div
+                ref={annotationEditorRef}
+                className="kr-annotation-editor"
+                style={{
+                  position: 'fixed',
+                  left: annotationEditorPos.x,
+                  top: annotationEditorPos.y,
+                  margin: 0
+                }}
+                onMouseDown={(event) => event.stopPropagation()}
+              >
             <header
               onPointerDown={(event) => {
                 const rect = event.currentTarget.parentElement?.getBoundingClientRect();
@@ -5602,15 +5717,18 @@ function ReaderPage({
                 }}
               >保存批注</button>
             </footer>
-          </div>
-        </div>
-      ) : null}
-      {activeAnnotation ? (
-        <div
-          ref={annotationPopoverRef}
-          className="kr-annotation-popover"
-          style={{ left: annotationPopoverPos.x, top: annotationPopoverPos.y }}
-        >
+              </div>
+            </div>,
+            getAppPortalRoot()
+          )
+        : null}
+      {activeAnnotation
+        ? createPortal(
+            <div
+              ref={annotationPopoverRef}
+              className="kr-annotation-popover"
+              style={{ left: annotationPopoverPos.x, top: annotationPopoverPos.y }}
+            >
             <header
               onPointerDown={(event) => {
                 const rect = event.currentTarget.parentElement?.getBoundingClientRect();
@@ -5677,8 +5795,10 @@ function ReaderPage({
                 }}
               >保存</button>
             </footer>
-        </div>
-      ) : null}
+            </div>,
+            getAppPortalRoot()
+          )
+        : null}
       {maskMenu ? (
         <div
           className="kr-mask-menu"
