@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-21T07:50:04.341Z",
+  "generatedAt": "2026-11-21T09:16:06.777Z",
   "electron": "44.5.1",
   "node": "24.21.0",
   "asar": "app.asar",
@@ -37,7 +37,7 @@
       "licenseFiles": [
         {
           "path": "runtime/Node-LICENSE.txt",
-          "sha256": "ed34dd8e3f0a78dbaf00d0444ce8e285b015b765379c2e17880455f70370f8e9"
+          "sha256": "5888dbb9a1d2b18f2c3e6c5f6af1b39de658372b402a0577b002777f14c62ace"
         }
       ]
     },
@@ -428,11 +428,11 @@
       "licenseFiles": [
         {
           "path": "upstream/official/nsis7z/LICENSE.txt",
-          "sha256": "8b726d14f08a7fe230ee17d26862712c1bf9a34fbca8d97609ec951148e9e27d"
+          "sha256": "ce1b78c504c4f3d51cc93bc4a8c7f487425361ee0b7df60949f443f9d092be0e"
         },
         {
           "path": "upstream/official/nsis7z/LGPL-2.1.txt",
-          "sha256": "1e7e6bae5a5bde32f1ae5a7c37a082d1ab03cf89354f7f936ac40be9e39a6531"
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
         },
         {
           "path": "upstream/official/nsis7z/unRAR-LICENSE.txt",
@@ -447,8 +447,8 @@
         },
         {
           "path": "legal/upstream/official/nsis7z/source/nsis7z/CPP/7zip/Bundles/Nsis7z/nsis7z.cpp",
-          "bytes": 3554,
-          "sha256": "6e99ce3cef822ef32da6d3bf0827cd6c6c71af4e090759035094d12c17e631cd"
+          "bytes": 3427,
+          "sha256": "fb9d9640fb5a62d0c549f813433fb8a90080e6f1c620574430e795a3215401e5"
         }
       ]
     },
@@ -484,8 +484,8 @@
       "artifacts": [
         {
           "path": "legal/upstream/official/nsis-plugins/stdutils/source/Contrib/StdUtils/StdUtils.vcxproj",
-          "bytes": 17766,
-          "sha256": "dbbcdf093a92a2f607c1337eba1eba490fc4c555e1d9106a62fd79779804930c"
+          "bytes": 17452,
+          "sha256": "c98d65364f46c8c040a4cea7294a83f03db8c4e86f2a8e98b91a3d8d29fbbd25"
         },
         {
           "path": "legal/upstream/official/nsis-plugins/stdutils/source/Contrib/StdUtils/src/StdUtils.cpp",
@@ -516,7 +516,7 @@
       "licenseFiles": [
         {
           "path": "upstream/official/nsis-plugins/uac/LICENSE.txt",
-          "sha256": "997fd014643f27a2f240faf9b9b54a98371775c63eb38134829154794f7326fa"
+          "sha256": "dc66200eed16adc58e24a2a69403b304f8e025ba1967fc0d1aa9ef130d4ab412"
         }
       ],
       "artifacts": [
@@ -527,8 +527,8 @@
         },
         {
           "path": "legal/upstream/official/nsis-plugins/uac/source/uac.cpp",
-          "bytes": 33518,
-          "sha256": "a54b801a377dd4a9be29fcf68672f4ff381f50853e8a815cb535405e97ec1905"
+          "bytes": 32448,
+          "sha256": "b45231631d8871872c482b4268bafa206fc601ad49f4742edeb65d65709db976"
         }
       ]
     },
@@ -841,13 +841,13 @@
       "artifacts": [
         {
           "path": "packages/agent-bridge/dist/agent-bridge.mjs",
-          "bytes": 1478554,
-          "sha256": "043b5a814961b000b91f3653d6dce18c707cc44c3d92dc760d4c50c55249213a"
+          "bytes": 1478437,
+          "sha256": "c1a2c0c814d93d12d15ab64b4e4a8057c6f88b420e97e592da3cca9ee35e5743"
         },
         {
           "path": "packages/agent-bridge/dist/agent-bridge.mjs.meta.json",
-          "bytes": 198526,
-          "sha256": "63495807f61791812214b60b8f4ccbc39f2d40f06a0bb4dd6b5f08bed02a67d0"
+          "bytes": 196991,
+          "sha256": "476676139b54b2e4f466a0e4368fed9f7aa293e5708f9af1bd58aa95631bb6b0"
         }
       ]
     }
@@ -858,7 +858,7 @@
     "bundled": 10,
     "fonts": 5,
     "artifacts": 52,
-    "artifactBytes": 170107358,
+    "artifactBytes": 170104195,
     "sourceVerified": 13,
     "sourceUnverified": 4
   },

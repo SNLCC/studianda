@@ -1,0 +1,24 @@
+* text=auto eol=lf
+
+# 二进制文件：不做行尾转换（许可证/资源证据按字节记录哈希）
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.7z binary
+*.crate binary
+*.wasm binary
+*.pfb binary
+*.ttf binary
+*.woff binary
+*.woff2 binary
+*.exe binary
+*.dll binary
+*.node binary
+*.pak binary
+*.dat binary
+*.bmp binary
+*.lib binary
+*.jar binary

@@ -1,6 +1,6 @@
 # 许可证来源与哈希
 
-生成时间：2026-11-21T07:50:04.341Z
+生成时间：2026-11-21T09:16:06.777Z
 
 “官方仓库”列取自各包 `package.json` 的 repository/homepage；许可证文件哈希取自安装包内实际文件。
 
@@ -107,7 +107,7 @@
 - Electron 官方发行物：`apps/desktop/node_modules/electron/dist`
 - Electron LICENSE: `electron/LICENSE.txt`
 - Chromium 第三方声明: `electron/LICENSES.chromium.html`
-- Node.js 官方发行物许可证: `runtime/Node-LICENSE.txt`（SHA-256: ed34dd8e3f0a78dbaf00d0444ce8e285b015b765379c2e17880455f70370f8e9）
+- Node.js 官方发行物许可证: `runtime/Node-LICENSE.txt`（SHA-256: 5888dbb9a1d2b18f2c3e6c5f6af1b39de658372b402a0577b002777f14c62ace）
 - Electron 版本：44.5.1
 - Node.js 版本：24.21.0
 
@@ -181,13 +181,13 @@
   - `legal/upstream/official/nsis-COPYING.txt` — 15488 B — SHA-256 `3c8de989f6504d52f5f8dfafedb6668cd47201f5d01f1319570727c091425dd6`
 - **nsis7z.dll**（19.00（Nsis7z 19.00，基于 7-Zip 19.00））
   - `legal/upstream/official/nsis7z/7z1900-src.7z` — 1071569 B — SHA-256 `9ba70a5e8485cf9061b30a2a84fe741de5aeb8dd271aab8889da0e9b3bf1868e`
-  - `legal/upstream/official/nsis7z/source/nsis7z/CPP/7zip/Bundles/Nsis7z/nsis7z.cpp` — 3554 B — SHA-256 `6e99ce3cef822ef32da6d3bf0827cd6c6c71af4e090759035094d12c17e631cd`
+  - `legal/upstream/official/nsis7z/source/nsis7z/CPP/7zip/Bundles/Nsis7z/nsis7z.cpp` — 3427 B — SHA-256 `fb9d9640fb5a62d0c549f813433fb8a90080e6f1c620574430e795a3215401e5`
 - **StdUtils.dll**（1.1.4.0）
-  - `legal/upstream/official/nsis-plugins/stdutils/source/Contrib/StdUtils/StdUtils.vcxproj` — 17766 B — SHA-256 `dbbcdf093a92a2f607c1337eba1eba490fc4c555e1d9106a62fd79779804930c`
+  - `legal/upstream/official/nsis-plugins/stdutils/source/Contrib/StdUtils/StdUtils.vcxproj` — 17452 B — SHA-256 `c98d65364f46c8c040a4cea7294a83f03db8c4e86f2a8e98b91a3d8d29fbbd25`
   - `legal/upstream/official/nsis-plugins/stdutils/source/Contrib/StdUtils/src/StdUtils.cpp` — 35788 B — SHA-256 `51e50866c2e10d449a478fb13d4bbbf83228de002c914f4386f0a0f07666cae8`
 - **UAC.dll**（0.2.4c）
   - `legal/upstream/official/nsis-plugins/uac/source/Plugins/x86-unicode/UAC.dll` — 14848 B — SHA-256 `2f7f8fc05dc4fd0d5cda501b47e4433357e887bbfed7292c028d99c73b52dc08`
-  - `legal/upstream/official/nsis-plugins/uac/source/uac.cpp` — 33518 B — SHA-256 `a54b801a377dd4a9be29fcf68672f4ff381f50853e8a815cb535405e97ec1905`
+  - `legal/upstream/official/nsis-plugins/uac/source/uac.cpp` — 32448 B — SHA-256 `b45231631d8871872c482b4268bafa206fc601ad49f4742edeb65d65709db976`
 - **elevate.exe**（Elevate 1.0.0.2894（随 NSIS 3.04 / electron-builder nsis-resources 3.4.1 提供））
   - `apps/desktop/release/win-unpacked/resources/elevate.exe` — 107520 B — SHA-256 `9b1fbf0c11c520ae714af8aa9af12cfd48503eedecd7398d8992ee94d1b4dc37`
   - `legal/upstream/official/elevate-MIT.txt` — 1059 B — SHA-256 `1fa4d7c156bf8f9fadff2980ba23a8dd89d5476fcd520e0aeb8f43fd2187271b`
@@ -214,8 +214,8 @@
   - `/node_modules/pdfjs-dist/wasm/openjpeg.wasm`（容器 `apps/desktop/release/win-unpacked/resources/app.asar`） — 251131 B — SHA-256 `95e5002597af0824004aa57b1900fe019715db389e37640b1e58395e42f00cc5`
   - `/node_modules/pdfjs-dist/wasm/qcms_bg.wasm`（容器 `apps/desktop/release/win-unpacked/resources/app.asar`） — 96589 B — SHA-256 `663d86126d5f5fcb1c61490f94353e2a8375660b8c5498ab3ebab5a34b08800e`
 - **Agent MCP bridge bundle（agent-bridge.mjs，内嵌 MCP SDK / zod 等 8 个 npm 包）**（0.1.4）
-  - `packages/agent-bridge/dist/agent-bridge.mjs` — 1478554 B — SHA-256 `043b5a814961b000b91f3653d6dce18c707cc44c3d92dc760d4c50c55249213a`
-  - `packages/agent-bridge/dist/agent-bridge.mjs.meta.json` — 198526 B — SHA-256 `63495807f61791812214b60b8f4ccbc39f2d40f06a0bb4dd6b5f08bed02a67d0`
+  - `packages/agent-bridge/dist/agent-bridge.mjs` — 1478437 B — SHA-256 `c1a2c0c814d93d12d15ab64b4e4a8057c6f88b420e97e592da3cca9ee35e5743`
+  - `packages/agent-bridge/dist/agent-bridge.mjs.meta.json` — 196991 B — SHA-256 `476676139b54b2e4f466a0e4368fed9f7aa293e5708f9af1bd58aa95631bb6b0`
 - **Noto Serif CJK SC**（2.003）
   - `packages/ui/src/styles/assets/fonts/StudiandaSerifSC-Regular.woff2` — 11168936 B — SHA-256 `5329e86415b45a98eb4fb9c78e4c053f79e4728f985feabab8b26f92328635be`
   - `packages/ui/src/styles/assets/fonts/StudiandaSerifSC-SemiBold.woff2` — 11266872 B — SHA-256 `8cfe445056c835196c448b30df24e65aedfb80e589791f12a77c23c5e71ee6a7`
