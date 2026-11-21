@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@studianda/agent-core": ["../agent-core/src/index.ts"]
+    }
+  }
+}

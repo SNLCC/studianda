@@ -1,5 +1,8 @@
 appId: com.studianda.app
 productName: Studianda
+# 直接用 pnpm 已安装的 Electron 发行目录，不在打包阶段再联网下载/校验 zip：
+# CI 的 pnpm install 已经把 Electron 解压到 node_modules/electron/dist，离线与弱网环境更稳。
+electronDist: node_modules/electron/dist
 # 安装包文件名固定为 Studianda-Setup-<version>.exe：electron-updater 的 latest.yml 里
 # path / files[0].url 都指向它，改名会导致旧版本找不到更新包；scripts/package.mjs 按此名校验。
 artifactName: Studianda-Setup-${version}.${ext}
