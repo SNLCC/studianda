@@ -295,12 +295,43 @@ console.log(
     `${builderConfig.publish.releaseType ? `（${builderConfig.publish.releaseType}）` : ''}`
 );
 
-// 1) 构建 shared + core + agent-bridge + desktop（shared 是 core 的运行时依赖，必须先构建）。
-if (!skipBuild) {
+// 1) 构建顺序与根 package.json 的 `build` 脚本保持一致：
+//    shared → agent-core → agent-bridge → host → ui → api-client → app → core → desktop。
+//    agent-bridge 的构建/声明依赖 @studianda/agent-core 的 dist（干净 checkout 没有），
+//    desktop 的构建依赖 app/host/ui/api-client 的 dist，所以一个都不能省。
+//    --skip-build 只在所有构建产物都齐全时生效；否则改为完整构建，避免发布重试时
+//    用半个 out/ 打出损坏的 app.asar（历史上出现过 out/main/index.cjs 缺失）。
+const requiredBuildOutputs = [
+  path.join(root, 'packages', 'shared', 'dist', 'index.js'),
+  path.join(root, 'packages', 'agent-core', 'dist', 'index.js'),
+  path.join(root, 'packages', 'agent-bridge', 'dist', 'agent-bridge.mjs'),
+  path.join(root, 'packages', 'host', 'dist', 'index.js'),
+  path.join(root, 'packages', 'ui', 'dist', 'index.js'),
+  path.join(root, 'packages', 'api-client', 'dist', 'index.js'),
+  path.join(root, 'packages', 'app', 'dist', 'index.js'),
+  path.join(root, 'packages', 'core', 'dist', 'index.js'),
+  path.join(desktopDir, 'out', 'main', 'index.cjs'),
+  path.join(desktopDir, 'out', 'renderer')
+];
+const missingBuildOutputs = requiredBuildOutputs.filter((file) => !existsSync(file));
+const canSkipBuild = skipBuild && missingBuildOutputs.length === 0;
+if (!canSkipBuild) {
+  if (skipBuild) {
+    console.log(
+      `[package] --skip-build：构建产物不完整（缺 ${missingBuildOutputs
+        .map((file) => path.relative(root, file))
+        .join('、')}），改为完整构建`
+    );
+  }
   run(pnpm, ['--filter', '@studianda/shared', 'build']);
-  run(pnpm, ['--filter', '@studianda/core', 'build']);
+  run(pnpm, ['--filter', '@studianda/agent-core', 'build']);
   run(pnpm, ['--filter', '@studianda/agent-bridge', 'build']);
   run('node', [path.join(root, 'scripts', 'sync-agent-bridge-legal.mjs')]);
+  run(pnpm, ['--filter', '@studianda/host', 'build']);
+  run(pnpm, ['--filter', '@studianda/ui', 'build']);
+  run(pnpm, ['--filter', '@studianda/api-client', 'build']);
+  run(pnpm, ['--filter', '@studianda/app', 'build']);
+  run(pnpm, ['--filter', '@studianda/core', 'build']);
   run(pnpm, ['--filter', '@studianda/desktop', 'build']);
 } else {
   console.log('[package] --skip-build：跳过构建步骤');
