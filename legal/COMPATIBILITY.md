@@ -76,7 +76,7 @@ electron-builder / app-builder-lib **26.18.0** 的 NSIS 模板中已不存在任
 `IPersistFile::Save` 落盘。
 
 - 不包含任何第三方插件，也没有自编译 DLL：全部是安装器脚本；对 2026-11-21 构建的
-  `Studianda-Setup-0.1.3.exe` 用 7-Zip 实测 `$PLUGINSDIR`，其中**没有 `WinShell.dll`**；
+  `Studianda-Setup-0.1.4.exe` 用 7-Zip 实测 `$PLUGINSDIR`，其中**没有 `WinShell.dll`**；
 - 安装时仍会像以前一样，在开始菜单/桌面快捷方式上写入 `com.studianda.app` 这个 AUMID；
 - 卸载与快捷方式迁移时仍会清除旧快捷方式的该属性；
 - 应用启动时也仍调用 `app.setAppUserModelId(...)`，与快捷方式属性一致。

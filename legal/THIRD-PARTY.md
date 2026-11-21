@@ -1,6 +1,6 @@
 # 第三方组件与许可证声明
 
-生成时间：2026-11-21T06:10:57.423Z
+生成时间：2026-11-21T06:31:10.271Z
 
 本清单从**实际安装包** `resources/app.asar` 的依赖树生成，覆盖渲染器、Core 和生产依赖；不是仅根据源码清单推测。
 
@@ -130,7 +130,7 @@
 | MPL-2.0 组件源码归档（cssparser / cssparser-macros / dtoa-short / selectors） | cssparser 0.38.0、cssparser-macros 0.7.0、dtoa-short 0.3.5、selectors 0.41.0 | 随包源码归档 | MPL-2.0 | 来源哈希已核对 |
 | tesseract.js-core WASM（内嵌 Tesseract / Leptonica / libjpeg-turbo / libpng / libtiff / libwebp / giflib / openlibm / zlib） | tesseract.js-core 7.0.0 | 内嵌 WASM | Apache-2.0（tesseract.js-core）及内嵌组件各自许可证 | 来源哈希已核对 |
 | PDF.js WASM 解码器（JBIG2 / OpenJPEG / QCMS） | 6.4.299（pdfjs-dist） | 内嵌 WASM | Apache-2.0 / BSD-3-Clause / MIT 等（逐组件见 PDFJS-WASM-THIRD-PARTY.md） | 来源哈希已核对 |
-| Agent MCP bridge bundle（agent-bridge.mjs，内嵌 MCP SDK / zod 等 8 个 npm 包） | 0.1.3 | mcp-bridge-bundle | MIT / BSD-3-Clause / ISC（逐包见 upstream/agent-bridge/THIRD-PARTY.md） | 来源哈希未核对（原因见 inventory.json 的 source.reason） |
+| Agent MCP bridge bundle（agent-bridge.mjs，内嵌 MCP SDK / zod 等 8 个 npm 包） | 0.1.4 | mcp-bridge-bundle | MIT / BSD-3-Clause / ISC（逐包见 upstream/agent-bridge/THIRD-PARTY.md） | 来源哈希未核对（原因见 inventory.json 的 source.reason） |
 
 安装器容器（NSIS）由发布流程生成：其字节数与 SHA-256 记录在 Release 的 build-manifest.json 与 SHA256SUMS.txt；安装器内嵌本目录的完整副本，安装器内 legal/ 与仓库 legal/ 逐字节一致。NSIS stub 与插件的随包观测哈希见 legal/bundled.json 的 source.observed。
 

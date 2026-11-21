@@ -313,7 +313,7 @@
       "class": "bundled",
       "kind": "mcp-bridge-bundle",
       "name": "Agent MCP bridge bundle（agent-bridge.mjs，内嵌 MCP SDK / zod 等 8 个 npm 包）",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "license": "MIT / BSD-3-Clause / ISC（逐包见 upstream/agent-bridge/THIRD-PARTY.md）",
       "ecosystem": "bundled",
       "source": {

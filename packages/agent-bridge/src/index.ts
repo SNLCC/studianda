@@ -45,7 +45,7 @@ function clientName(): string {
 }
 
 const server = new McpServer(
-  { name: 'studianda', version: '0.1.3' },
+  { name: 'studianda', version: '0.1.4' },
   {
     instructions:
       '这是用户本机的勘读文献库。先调用 scope(action=get) 查看共享范围；范围外先请求，不要猜。' +

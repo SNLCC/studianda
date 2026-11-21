@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-21T06:10:57.423Z",
+  "generatedAt": "2026-11-21T06:31:10.271Z",
   "electron": "44.5.1",
   "node": "24.21.0",
   "asar": "app.asar",
@@ -141,7 +141,7 @@
         },
         {
           "path": "upstream/official/ffmpeg-SOURCE-OFFER.md",
-          "sha256": "afde71777daf70dc468d39fb44a08bfdb36f39cef41f7f2fb3879fcf2634242c"
+          "sha256": "79bef77d86d4926526708f87232558cb522fd6804bc2654bba2fffa6a34db7fc"
         }
       ],
       "artifacts": [
@@ -818,7 +818,7 @@
     },
     {
       "name": "Agent MCP bridge bundle（agent-bridge.mjs，内嵌 MCP SDK / zod 等 8 个 npm 包）",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "license": "MIT / BSD-3-Clause / ISC（逐包见 upstream/agent-bridge/THIRD-PARTY.md）",
       "ecosystem": "bundled",
       "kind": "mcp-bridge-bundle",
@@ -842,7 +842,7 @@
         {
           "path": "packages/agent-bridge/dist/agent-bridge.mjs",
           "bytes": 1478437,
-          "sha256": "2dd29853b6644fcdea3e13d093961051c6c1c1376e9c2306578ec63763e948ac"
+          "sha256": "c1a2c0c814d93d12d15ab64b4e4a8057c6f88b420e97e592da3cca9ee35e5743"
         },
         {
           "path": "packages/agent-bridge/dist/agent-bridge.mjs.meta.json",

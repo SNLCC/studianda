@@ -1,6 +1,6 @@
 # FFmpeg 对应源码书面要约
 
-本安装包（`Studianda-Setup-0.1.3.exe` 及其中的 `resources/ffmpeg.dll` 副本）内的
+本安装包（`Studianda-Setup-<版本号>.exe`，版本号见安装包文件名；其中的 `resources/ffmpeg.dll` 副本）内的
 `ffmpeg.dll` 来自 **Electron 44.5.1 官方发行物**（`apps/desktop/node_modules/electron/dist/ffmpeg.dll`），
 本项目**未修改**该文件，也未单独重新编译它。
 
@@ -15,7 +15,7 @@
 本要约是 LGPL 2.1 §6(c) 所要求的书面要约，**不要求接收方在收到安装包时预先作出回应**；
 接收方可在上述三年有效期内随时提出书面请求。
 
-要约所指的安装包版本为 **Studianda 0.1.3**（Windows x64）；该安装包文件的发布日期与
+要约所指的安装包是本文件随附的 Studianda Windows x64 安装包（版本号见安装包文件名 `Studianda-Setup-<版本号>.exe`）；该安装包文件的发布日期与
 SHA-256 见对应 GitHub Release 页面及其 `SHA256SUMS.txt` / `build-manifest.json`。上述发布
 页面由本项目长期维护，不依赖安装包内的额外文件。
 

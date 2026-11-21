@@ -188,7 +188,7 @@ electron-builder 的**旧版本** NSIS 模板曾在创建/迁移快捷方式时�
 没有源码，**不构成再分发授权**。
 
 本项目固定的 electron-builder / app-builder-lib **26.18.0** 的模板中已不存在任何 `WinShell` 调用，
-安装包既不内嵌也不调用该 DLL（7-Zip 实测 0.1.3 安装器 `$PLUGINSDIR` 无 `WinShell.dll`）。
+安装包既不内嵌也不调用该 DLL（7-Zip 实测 0.1.4 安装器 `$PLUGINSDIR` 无 `WinShell.dll`）。
 `scripts/package.mjs` 在编译 NSIS 之前仍运行 `scripts/patch-nsis-templates.mjs` 作为**幂等防回归**：
 若模板再次出现上述调用，就改写为 `apps/desktop/build/nsis/aumid.nsh` 里的宏。
 该宏用 NSIS 自带的 System 插件与官方 `Win\COM.nsh` / `Win\Propkey.nsh` 定义，调用 Windows 公开

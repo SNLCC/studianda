@@ -1,6 +1,6 @@
 # 许可证来源与哈希
 
-生成时间：2026-11-21T06:10:57.423Z
+生成时间：2026-11-21T06:31:10.271Z
 
 “官方仓库”列取自各包 `package.json` 的 repository/homepage；许可证文件哈希取自安装包内实际文件。
 
@@ -139,7 +139,7 @@
 | MPL-2.0 组件源码归档（cssparser / cssparser-macros / dtoa-short / selectors） | cssparser 0.38.0、cssparser-macros 0.7.0、dtoa-short 0.3.5、selectors 0.41.0 | 随包源码归档 | https://crates.io/api/v1/crates/cssparser/0.38.0/download | — | 已核对 | 5 |
 | tesseract.js-core WASM（内嵌 Tesseract / Leptonica / libjpeg-turbo / libpng / libtiff / libwebp / giflib / openlibm / zlib） | tesseract.js-core 7.0.0 | 内嵌 WASM | https://github.com/naptha/tesseract.js-core/tree/v7.0.0 | — | 已核对 | 6 |
 | PDF.js WASM 解码器（JBIG2 / OpenJPEG / QCMS） | 6.4.299（pdfjs-dist） | 内嵌 WASM | https://www.npmjs.com/package/pdfjs-dist/v/6.4.299 | — | 已核对 | 3 |
-| Agent MCP bridge bundle（agent-bridge.mjs，内嵌 MCP SDK / zod 等 8 个 npm 包） | 0.1.3 | mcp-bridge-bundle | https://github.com/SNLCC/studianda | — | 未核对 | 2 |
+| Agent MCP bridge bundle（agent-bridge.mjs，内嵌 MCP SDK / zod 等 8 个 npm 包） | 0.1.4 | mcp-bridge-bundle | https://github.com/SNLCC/studianda | — | 未核对 | 2 |
 
 **来源哈希核对说明**
 
@@ -213,8 +213,8 @@
   - `/node_modules/pdfjs-dist/wasm/jbig2.wasm`（容器 `apps/desktop/release/win-unpacked/resources/app.asar`） — 103671 B — SHA-256 `466f45c2a61a698152fb5400c27e56ff2ceb73dcb71fde3fc366a502308eaab0`
   - `/node_modules/pdfjs-dist/wasm/openjpeg.wasm`（容器 `apps/desktop/release/win-unpacked/resources/app.asar`） — 251131 B — SHA-256 `95e5002597af0824004aa57b1900fe019715db389e37640b1e58395e42f00cc5`
   - `/node_modules/pdfjs-dist/wasm/qcms_bg.wasm`（容器 `apps/desktop/release/win-unpacked/resources/app.asar`） — 96589 B — SHA-256 `663d86126d5f5fcb1c61490f94353e2a8375660b8c5498ab3ebab5a34b08800e`
-- **Agent MCP bridge bundle（agent-bridge.mjs，内嵌 MCP SDK / zod 等 8 个 npm 包）**（0.1.3）
-  - `packages/agent-bridge/dist/agent-bridge.mjs` — 1478437 B — SHA-256 `2dd29853b6644fcdea3e13d093961051c6c1c1376e9c2306578ec63763e948ac`
+- **Agent MCP bridge bundle（agent-bridge.mjs，内嵌 MCP SDK / zod 等 8 个 npm 包）**（0.1.4）
+  - `packages/agent-bridge/dist/agent-bridge.mjs` — 1478437 B — SHA-256 `c1a2c0c814d93d12d15ab64b4e4a8057c6f88b420e97e592da3cca9ee35e5743`
   - `packages/agent-bridge/dist/agent-bridge.mjs.meta.json` — 196991 B — SHA-256 `9af9a7351b123d97ef4170db12c8f6953a76958087152f712bb128245374df23`
 - **Noto Serif CJK SC**（2.003）
   - `packages/ui/src/styles/assets/fonts/StudiandaSerifSC-Regular.woff2` — 11168936 B — SHA-256 `5329e86415b45a98eb4fb9c78e4c053f79e4728f985feabab8b26f92328635be`

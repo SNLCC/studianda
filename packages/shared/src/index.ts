@@ -3170,7 +3170,7 @@ function yamlSingleQuote(value: string): string {
 
 export function agentBridgeBundleFiles(input: AgentBridgeBundleInput): AgentBridgeBundleFile[] {
   const serverName = input.serverName ?? 'studianda';
-  const version = input.version ?? '0.1.3';
+  const version = input.version ?? '0.1.4';
   const manifest = {
     name: '@studianda/dsh-mcp',
     version,
