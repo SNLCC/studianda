@@ -928,6 +928,12 @@ export interface OcrLanguageJob {
   total: number;
   /** 中文错误摘要；部分失败时保留已成功的包，error 里写清失败项。 */
   error: string;
+  /**
+   * 本次下载实际达到的核对级别（不固定语言数据版本）：
+   * - `size+git-blob-sha`：GitHub API 元数据可达，已核对 size 与 git blob sha；
+   * - `size-only`：元数据不可达或未下载新包，仅做体积检查。
+   */
+  integrity?: 'size+git-blob-sha' | 'size-only';
 }
 
 export interface OcrLanguageStatus {

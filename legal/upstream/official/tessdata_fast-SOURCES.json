@@ -14,7 +14,8 @@
     "The official raw URL and the GitHub Contents API both point to the same repository and file.",
     "No third-party mirror is used as a default download source.",
     "The download is initiated only by an explicit user action; Studianda does not redistribute the traineddata files.",
-    "Known hardening limitation: the app only checks that the downloaded file is >100KB; no SHA-256/signature verification is performed, and the upstream ref is the mutable main branch. This is a supply-chain hardening item, not a license gap.",
-    "Per-language file SHA-256 values are not recorded here; the license text hash is recorded above."
+    "Per-language file SHA-256 values are not recorded here; the license text hash is recorded above.",
+    "Language data versions are not pinned (the upstream repository updates models over time).",
+    "Before installing, the app requests the GitHub Contents API metadata (size and git blob sha) for the same file and compares it with the downloaded bytes when metadata is reachable; otherwise it falls back to a >100KB size check. No static per-language SHA-256 list is maintained."
   ]
 }

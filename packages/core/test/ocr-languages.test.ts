@@ -1,4 +1,5 @@
 import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { gzipSync } from 'node:zlib';
@@ -36,6 +37,14 @@ function newStore(): Store {
 
 function gzipData(bytes = 150_000): Buffer {
   return gzipSync(Buffer.alloc(bytes, 7));
+}
+
+/** 与 GitHub Contents API 的 `sha` 同算法的 git blob 哈希（用于构造元数据响应）。 */
+function gitBlobSha1(content: Buffer): string {
+  return createHash('sha1')
+    .update(`blob ${content.length}\0`)
+    .update(content)
+    .digest('hex');
 }
 
 async function waitForJob(store: Store, timeoutMs = 10_000) {
@@ -142,7 +151,12 @@ describe('缺语言数据不自动下载', () => {
 describe('显式下载语言包', () => {
   it('后台下载成功后 installed=true、bytes>0，文件为解压后的合法数据', async () => {
     const store = newStore();
-    const fetchMock = vi.fn(async () => new Response(gzipData(), { status: 200 }));
+    const data = Buffer.alloc(150_000, 7);
+    const meta = { sha: gitBlobSha1(data), size: data.length };
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes('/contents/')) return Response.json(meta);
+      return new Response(gzipSync(data), { status: 200 });
+    });
     vi.stubGlobal('fetch', fetchMock);
     const initial = downloadOcrLanguages(store, ['eng', 'jpn', 'jpn']);
     // 不阻塞请求：立即返回 running=true 的任务，codes 已去重。
@@ -152,6 +166,7 @@ describe('显式下载语言包', () => {
     const status = await waitForJob(store);
     expect(status.job?.error).toBe('');
     expect(status.job?.done).toBe(2);
+    expect(status.job?.integrity).toBe('size+git-blob-sha');
     const eng = status.packs.find((pack) => pack.code === 'eng')!;
     const jpn = status.packs.find((pack) => pack.code === 'jpn')!;
     expect(eng.installed).toBe(true);
@@ -160,7 +175,8 @@ describe('显式下载语言包', () => {
     const target = path.join(status.dataDir, 'eng.traineddata');
     expect(existsSync(target)).toBe(true);
     expect(statSync(target).size).toBe(150_000);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // 每个语言 2 次请求：元数据 + 下载。
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it('部分失败：job.error 写清失败项、已成功项保留、进程不崩', async () => {
@@ -216,12 +232,16 @@ describe('显式下载语言包', () => {
       })
     );
     downloadOcrLanguages(store, ['deu', 'rus']);
-    await waitForJob(store);
-    expect(urls).toEqual([
+    const status = await waitForJob(store);
+    const downloadUrls = urls.filter((url) => url.startsWith(OCR_LANGUAGE_BASE_URL));
+    expect(downloadUrls).toEqual([
       'https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/deu.traineddata',
       'https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/rus.traineddata'
     ]);
-    for (const url of urls) {
+    // 元数据请求也指向同一仓库的 Contents API（内容不是 JSON 时退化为体积检查）。
+    expect(urls.filter((url) => url.startsWith(OCR_LANGUAGE_API_URL))).toHaveLength(2);
+    expect(status.job?.integrity).toBe('size-only');
+    for (const url of downloadUrls) {
       // 必须是 https、官方仓库、main 分支、<code>.traineddata；不能退回 http 或第三方镜像。
       expect(url).toMatch(
         /^https:\/\/raw\.githubusercontent\.com\/tesseract-ocr\/tessdata_fast\/main\/[a-z_]+\.traineddata$/
@@ -231,29 +251,65 @@ describe('显式下载语言包', () => {
 
   it('raw 不可达时回退官方 GitHub Contents API（同仓库同文件、https、raw 媒体类型）', async () => {
     const store = newStore();
-    const calls: Array<{ url: string; headers?: unknown }> = [];
+    const data = Buffer.alloc(150_000, 7);
+    const meta = { sha: gitBlobSha1(data), size: data.length };
+    const calls: Array<{ url: string; accept?: string }> = [];
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string, init?: RequestInit) => {
-        calls.push({ url: String(url), headers: init?.headers });
+        const accept = (init?.headers as Record<string, string> | undefined)?.accept;
+        calls.push({ url: String(url), accept });
         if (String(url).startsWith(OCR_LANGUAGE_BASE_URL)) {
           throw new TypeError('fetch failed');
         }
-        return new Response(gzipData(), { status: 200 });
+        if (accept === 'application/vnd.github+json') return Response.json(meta);
+        return new Response(gzipSync(data), { status: 200 });
       })
     );
     downloadOcrLanguages(store, ['eng']);
     const status = await waitForJob(store);
     expect(status.job?.error).toBe('');
+    expect(status.job?.integrity).toBe('size+git-blob-sha');
     expect(status.packs.find((pack) => pack.code === 'eng')!.installed).toBe(true);
-    expect(calls).toHaveLength(2);
-    expect(calls[0]!.url).toBe(`${OCR_LANGUAGE_BASE_URL}/eng.traineddata`);
-    expect(calls[1]!.url).toBe(`${OCR_LANGUAGE_API_URL}/eng.traineddata?ref=main`);
-    expect(calls[1]!.url).toMatch(
-      /^https:\/\/api\.github\.com\/repos\/tesseract-ocr\/tessdata_fast\/contents\/eng\.traineddata\?ref=main$/
+    expect(calls).toHaveLength(3);
+    expect(calls[0]!.url).toBe(`${OCR_LANGUAGE_API_URL}/eng.traineddata?ref=main`);
+    expect(calls[0]!.accept).toBe('application/vnd.github+json');
+    expect(calls[1]!.url).toBe(`${OCR_LANGUAGE_BASE_URL}/eng.traineddata`);
+    expect(calls[2]!.url).toBe(`${OCR_LANGUAGE_API_URL}/eng.traineddata?ref=main`);
+    expect(calls[2]!.accept).toBe('application/vnd.github.raw');
+  });
+
+  it('元数据哈希不一致时拒绝写入并报错（动态核对，不固定版本）', async () => {
+    const store = newStore();
+    const data = Buffer.alloc(150_000, 7);
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes('/contents/')) {
+        return Response.json({ sha: '0'.repeat(40), size: data.length });
+      }
+      return new Response(gzipSync(data), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    downloadOcrLanguages(store, ['eng']);
+    const status = await waitForJob(store);
+    expect(status.job?.error).toContain('哈希与上游元数据不一致');
+    expect(status.packs.find((pack) => pack.code === 'eng')!.installed).toBe(false);
+    expect(existsSync(path.join(status.dataDir, 'eng.traineddata'))).toBe(false);
+  });
+
+  it('元数据不可达时退化为体积检查，不阻断下载', async () => {
+    const store = newStore();
+    const data = Buffer.alloc(150_000, 7);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (String(url).includes('/contents/')) return new Response('rate limited', { status: 403 });
+        return new Response(gzipSync(data), { status: 200 });
+      })
     );
-    expect((calls[1]!.headers as Record<string, string>).accept).toBe(
-      'application/vnd.github.raw'
-    );
+    downloadOcrLanguages(store, ['eng']);
+    const status = await waitForJob(store);
+    expect(status.job?.error).toBe('');
+    expect(status.job?.integrity).toBe('size-only');
+    expect(status.packs.find((pack) => pack.code === 'eng')!.installed).toBe(true);
   });
 });

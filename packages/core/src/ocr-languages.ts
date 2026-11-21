@@ -6,7 +6,11 @@
  * 2. 来源只用官方 `tesseract-ocr/tessdata_fast`（Apache-2.0），不用第三方镜像当默认。
  * 3. 下载写到 `<dataDir>/ocr-tessdata/langs/<code>.traineddata`，先写临时文件再 rename，
  *    避免半包被当成已安装；最多 1 个后台任务，重复请求返回当前任务。
+ * 4. **不固定语言数据版本**：语言模型由上游持续更新；下载时若 GitHub API 元数据可达，
+ *    用其 `size` 与 git blob `sha` 对下载内容做一致性核对（防截断/错包/缓存损坏），
+ *    元数据不可达时退化为体积检查。不维护静态 SHA-256 清单，也不把 ref 固定到某个 commit。
  */
+import { createHash } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -42,6 +46,8 @@ export const OCR_LANGUAGE_API_URL =
 export const OCR_LANGUAGE_LICENSE = 'Apache-2.0（tessdata_fast 仓库 LICENSE）';
 /** 安装判定阈值：小于 100KB 视为未装/半包。 */
 export const OCR_LANGUAGE_MIN_BYTES = 100_000;
+/** 下载内容的一致性核对结果（写入后台任务状态，仅用于诊断/展示，不作为版本固定）。 */
+export type OcrLanguageIntegrity = 'size+git-blob-sha' | 'size-only';
 /** 未配置选择时的默认语言（与旧行为一致）。 */
 export const DEFAULT_OCR_LANGUAGES = ['eng', 'chi_sim'] as const;
 
@@ -157,15 +163,80 @@ function errorText(error: unknown): string {
   return typeof message === 'string' ? message : String(error);
 }
 
-/** 把一份 `.traineddata`（可能是 gzip 压缩流）原子写入目标路径。 */
-function installLanguageData(target: string, payload: Buffer): void {
-  const data =
-    payload.length >= 2 && payload[0] === 0x1f && payload[1] === 0x8b
-      ? gunzipSync(payload)
-      : payload;
+/** 解出 gzip 压缩流（历史网络路径可能返回 gzip）；返回真正要落盘的 `.traineddata` 字节。 */
+function decodeLanguageData(payload: Buffer): Buffer {
+  return payload.length >= 2 && payload[0] === 0x1f && payload[1] === 0x8b
+    ? gunzipSync(payload)
+    : payload;
+}
+
+/** git 对象哈希：`sha1("blob <len>\0" + content)`，与 GitHub Contents API 的 `sha` 同一算法。 */
+function gitBlobSha1(content: Buffer): string {
+  return createHash('sha1')
+    .update(`blob ${content.length}\0`)
+    .update(content)
+    .digest('hex');
+}
+
+interface RemoteFileMeta {
+  sha: string;
+  size: number;
+}
+
+/**
+ * 取上游当前文件的元数据（Contents API JSON，不取内容本身）。
+ *
+ * 这是**动态**核对：不固定 commit/哈希，拿的是上游此刻对 `main` 的声明值；元数据不可达
+ * （网络阻断、限流、非 JSON 响应）时返回 null，下载流程退化为体积检查，不阻断用户。
+ */
+async function fetchRemoteFileMeta(code: string): Promise<RemoteFileMeta | null> {
+  try {
+    const response = await fetch(`${OCR_LANGUAGE_API_URL}/${code}.traineddata?ref=main`, {
+      headers: {
+        accept: 'application/vnd.github+json',
+        'user-agent': 'Studianda'
+      },
+      signal: AbortSignal.timeout(20_000)
+    });
+    if (!response.ok) return null;
+    const body = (await response.json()) as { sha?: unknown; size?: unknown };
+    if (
+      typeof body.sha === 'string' &&
+      /^[0-9a-f]{40}$/i.test(body.sha) &&
+      typeof body.size === 'number' &&
+      body.size > 0
+    ) {
+      return { sha: body.sha.toLowerCase(), size: body.size };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 写入前核对：体积门槛 →（元数据可达时）size 与 git blob sha 必须一致。
+ * 返回本次实际达到的核对级别，写入 job 状态供界面/排障展示。
+ */
+function verifyLanguageData(
+  data: Buffer,
+  meta: RemoteFileMeta | null
+): OcrLanguageIntegrity {
   if (data.length < OCR_LANGUAGE_MIN_BYTES) {
     throw new Error('语言数据不完整（小于 100KB）');
   }
+  if (!meta) return 'size-only';
+  if (data.length !== meta.size) {
+    throw new Error(`语言数据大小与上游元数据不一致（${data.length} != ${meta.size}）`);
+  }
+  if (gitBlobSha1(data) !== meta.sha) {
+    throw new Error('语言数据哈希与上游元数据不一致');
+  }
+  return 'size+git-blob-sha';
+}
+
+/** 把一份已解码并核对过的 `.traineddata` 原子写入目标路径。 */
+function installLanguageData(target: string, data: Buffer): void {
   mkdirSync(path.dirname(target), { recursive: true });
   const temp = `${target}.tmp-${process.pid}-${Date.now()}`;
   try {
@@ -198,9 +269,14 @@ function downloadSources(code: string): Array<{
   ];
 }
 
-async function downloadOne(store: Store, code: string): Promise<void> {
+/** 下载并安装一个语言包；已安装则跳过并返回 null。 */
+async function downloadOne(
+  store: Store,
+  code: string
+): Promise<OcrLanguageIntegrity | null> {
   const target = packPath(store, code);
-  if (existsSync(target) && statSync(target).size >= OCR_LANGUAGE_MIN_BYTES) return;
+  if (existsSync(target) && statSync(target).size >= OCR_LANGUAGE_MIN_BYTES) return null;
+  const meta = await fetchRemoteFileMeta(code);
   const failures: string[] = [];
   for (const source of downloadSources(code)) {
     try {
@@ -210,8 +286,10 @@ async function downloadOne(store: Store, code: string): Promise<void> {
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const payload = Buffer.from(await response.arrayBuffer());
-      installLanguageData(target, payload);
-      return;
+      const data = decodeLanguageData(payload);
+      const integrity = verifyLanguageData(data, meta);
+      installLanguageData(target, data);
+      return integrity;
     } catch (error) {
       failures.push(`${source.url}：${errorText(error)}`);
     }
@@ -222,16 +300,21 @@ async function downloadOne(store: Store, code: string): Promise<void> {
 /** 后台逐个下载；单项失败写进 job.error 但保留已成功的包，继续尝试其它项。 */
 async function runDownloadJob(store: Store, job: OcrLanguageJob): Promise<void> {
   const failures: string[] = [];
+  const integrities = new Set<OcrLanguageIntegrity>();
   try {
     for (const code of job.codes) {
       try {
-        await downloadOne(store, code);
+        const integrity = await downloadOne(store, code);
+        if (integrity) integrities.add(integrity);
       } catch (error) {
         failures.push(`${code}（${errorText(error)}）`);
       }
       job.done += 1;
     }
   } finally {
+    if (integrities.size > 0) {
+      job.integrity = integrities.has('size-only') ? 'size-only' : 'size+git-blob-sha';
+    }
     job.error =
       failures.length > 0
         ? `语言包下载失败：${failures.join('、')}；已成功的语言包保留，可稍后重试。`
