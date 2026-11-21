@@ -362,6 +362,9 @@ for (const entry of existsSync(path.join(desktopDir, 'out'))
 // 4) 先用 --dir 生成一次 app.asar，再据此重新生成 legal/，然后把 legal/ 同步进
 //    win-unpacked；安装包用 --prepackaged 基于同一目录生成，避免重复打包与下载。
 //    两处都显式 --publish never：发布只由 release workflow 负责。
+//    打包使用 electronDist=node_modules/electron/dist（见 electron-builder.yml），
+//    所以先逐字节校验该目录 = 官方 Electron 发行 zip，避免用错/被替换的本机 Electron。
+run('node', [path.join(root, 'scripts', 'verify-electron-dist.mjs')]);
 run(
   pnpm,
   ['exec', 'electron-builder', '--dir', '--publish', 'never', '--config', 'electron-builder.yml'],
