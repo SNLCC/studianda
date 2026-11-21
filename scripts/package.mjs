@@ -40,6 +40,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync
@@ -83,14 +84,12 @@ function run(command, args, cwd = root) {
  * electron-builder 只在 NSIS target 的 finalize 阶段把 elevate.exe 注入 resources，
  * `--dir` / `--prepackaged` 路径都不会有它；而 legal 清单要求记录这个随包文件。
  * 从 electron-builder 的 NSIS 工具缓存复制到 resources，保持 legal 审计可用。
+ *
+ * 干净 runner 上缓存可能还没有 NSIS 工具包：优先调用 app-builder-lib 官方的
+ * `getNsisElevatePath()`（它会按固定校验和下载/解包 nsis-3.0.4.1 工具包），
+ * 找不到内部模块时再退回手动扫描缓存目录。
  */
-function stageNsisElevate() {
-  const target = path.join(resourcesDir, 'elevate.exe');
-  if (existsSync(target)) return;
-  const cacheRoot = path.join(
-    process.env.ELECTRON_BUILDER_CACHE ??
-      path.join(process.env.LOCALAPPDATA ?? process.env.APPDATA ?? '', 'electron-builder', 'Cache')
-  );
+function findElevateInCache(cacheRoot) {
   const find = (dir, depth) => {
     if (depth > 3 || !existsSync(dir)) return null;
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -103,12 +102,41 @@ function stageNsisElevate() {
     }
     return null;
   };
-  const source = find(cacheRoot, 0);
+  return find(cacheRoot, 0);
+}
+
+async function resolveNsisElevatePath() {
+  // 官方解析（会触发 NSIS 工具包下载；版本/校验和由 pinned 的 app-builder-lib 固定）。
+  try {
+    const electronBuilderReal = realpathSync(path.join(desktopDir, 'node_modules', 'electron-builder'));
+    const appBuilderLibDir = path.join(path.dirname(electronBuilderReal), 'app-builder-lib');
+    const loadFromAppBuilderLib = createRequire(path.join(appBuilderLibDir, 'package.json'));
+    const toolsets = loadFromAppBuilderLib(
+      path.join(appBuilderLibDir, 'out', 'toolsets', 'windows.js')
+    );
+    const resolved = await toolsets.getNsisElevatePath(undefined, undefined);
+    if (typeof resolved === 'string' && existsSync(resolved)) return resolved;
+  } catch (error) {
+    console.warn(
+      `[package] app-builder-lib 未能解析 elevate.exe（${error instanceof Error ? error.message : error}），回退扫描缓存`
+    );
+  }
+  const cacheRoot = path.join(
+    process.env.ELECTRON_BUILDER_CACHE ??
+      path.join(process.env.LOCALAPPDATA ?? process.env.APPDATA ?? '', 'electron-builder', 'Cache')
+  );
+  return findElevateInCache(cacheRoot);
+}
+
+async function stageNsisElevate() {
+  const target = path.join(resourcesDir, 'elevate.exe');
+  if (existsSync(target)) return;
+  const source = await resolveNsisElevatePath();
   if (!source) {
-    fail(`缺少 resources/elevate.exe，且 electron-builder 缓存里找不到：${cacheRoot}`);
+    fail('缺少 resources/elevate.exe，且 electron-builder 的 NSIS 工具包无法解析/下载。');
   }
   copyFileSync(source, target);
-  console.log(`[package] 已从 NSIS 缓存 staging elevate.exe：${path.relative(root, target)}`);
+  console.log(`[package] 已从 NSIS 工具包 staging elevate.exe：${path.relative(root, target)}`);
 }
 
 function sha256(file) {
@@ -401,7 +429,7 @@ run(
   ['exec', 'electron-builder', '--dir', '--publish', 'never', '--config', 'electron-builder.yml'],
   desktopDir
 );
-stageNsisElevate();
+await stageNsisElevate();
 // legal/ 只会被整体复制进安装包；未跟踪/被忽略的文件（例如上游源码树里 .gitignore 掉的
 // Date.exe / Zip.exe）会进二进制发行物却不在源码发行物里，且可能带入未声明的上游工具。
 // 必须在复制前拦截，避免“工作区里多出来的东西悄悄随包发布”。
