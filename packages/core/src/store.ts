@@ -3897,7 +3897,12 @@ export class Store {
       'audit_cache',
       'retrieval_document_revision',
       // 27：历史遗留表，旧版本可能残留平台 API Key 密文；「清空全部本地数据」也要清掉。
-      'platform_connections'
+      'platform_connections',
+      // 28：MCP Agent 的共享授权、可撤销写操作审计（含已撤销记录）与长任务。
+      // 不清掉的话「最近变更」会一直残留旧 agent 的操作历史，清空后也还能看到已撤销条目。
+      'agent_grants',
+      'agent_operations',
+      'agent_jobs'
     ];
     this.db.exec('BEGIN IMMEDIATE');
     try {

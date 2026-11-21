@@ -181,6 +181,37 @@ beforeAll(async () => {
         'legacy-conn',
         JSON.stringify({ name: '旧平台', encrypted_key: 'AQAAANCM-should-be-cleared' })
       );
+    // schema 28：Agent 共享授权、写操作审计（含已撤销条目）与长任务也属于本机用户数据，
+    // 「清空全部本地数据」后「最近变更」不应再残留旧 agent 的记录。
+    residue
+      .prepare(
+        'INSERT INTO agent_grants(id, agent_name, kind, created) VALUES (?, ?, ?, ?)'
+      )
+      .run('grant-1', 'dsh-mcp-client', 'library', '2026-01-01T00:00:00.000Z');
+    residue
+      .prepare(
+        'INSERT INTO agent_operations(id, agent_name, tool, action, status, created) VALUES (?, ?, ?, ?, ?, ?)'
+      )
+      .run(
+        'op-undone-1',
+        'dsh-mcp-client',
+        'organize',
+        'tags',
+        'undone',
+        '2026-01-01T00:00:00.000Z'
+      );
+    residue
+      .prepare(
+        'INSERT INTO agent_jobs(id, agent_name, kind, status, created, updated) VALUES (?, ?, ?, ?, ?, ?)'
+      )
+      .run(
+        'job-1',
+        'dsh-mcp-client',
+        'ask',
+        'done',
+        '2026-01-01T00:00:00.000Z',
+        '2026-01-01T00:00:00.000Z'
+      );
   } finally {
     residue.close();
   }
@@ -282,6 +313,13 @@ describe('POST /api/v1/maintenance/clear-user-data', () => {
         .prepare('SELECT COUNT(*) AS n FROM platform_connections')
         .get() as { n?: number } | undefined;
       expect(Number(row?.n ?? 0)).toBe(0);
+      // Agent 审计/授权/任务表同样被清空（界面「最近变更」不再残留已撤销记录）。
+      for (const table of ['agent_grants', 'agent_operations', 'agent_jobs']) {
+        const count = cleared.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as
+          | { n?: number }
+          | undefined;
+        expect(Number(count?.n ?? 0), table).toBe(0);
+      }
     } finally {
       cleared.close();
     }
