@@ -58,8 +58,29 @@ if (!/^[0-9a-f]{64}$/.test(expectedZipSha256)) {
 // ---- 2) 本机安装的 Electron 版本 ------------------------------------------------
 const electronDir = path.join(root, 'apps', 'desktop', 'node_modules', 'electron');
 const distDir = path.join(electronDir, 'dist');
+const installScript = path.join(electronDir, 'install.js');
 if (!existsSync(distDir)) {
-  fail(`缺少 Electron 发行目录：${path.relative(root, distDir)}。先运行 pnpm install。`);
+  // electron@44 的 npm 包不带 postinstall（pnpm 10 也不会自动跑依赖脚本），
+  // `install.js` 是其官方安装入口：优先从 @electron/get 缓存取 zip 并解压到 dist，再校验。
+  if (!existsSync(installScript)) {
+    fail(
+      `缺少 Electron 发行目录：${path.relative(root, distDir)}，且找不到官方安装脚本 ` +
+        `${path.relative(root, installScript)}。先运行 pnpm install。`
+    );
+  }
+  console.log(
+    `[verify-electron-dist] 未找到 electron/dist，运行官方 install.js 获取 Electron 发行物…`
+  );
+  const install = spawnSync(process.execPath, [installScript], {
+    cwd: electronDir,
+    stdio: 'inherit'
+  });
+  if (install.error || install.status !== 0) {
+    fail(`Electron 官方 install.js 执行失败（status ${install.status ?? 'unknown'}）。`);
+  }
+}
+if (!existsSync(distDir)) {
+  fail(`Electron 官方 install.js 执行后仍未生成 ${path.relative(root, distDir)}。`);
 }
 const installedPkg = JSON.parse(readFileSync(path.join(electronDir, 'package.json'), 'utf8'));
 if (String(installedPkg.version) !== expectedVersion) {
