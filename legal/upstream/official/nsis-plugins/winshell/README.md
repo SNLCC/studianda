@@ -15,13 +15,15 @@ AUMID 行为。**
 - “Freeware”只说明可以免费取得，**不构成再分发授权**；在没有明示授权的情况下，版权默认保留
   （再分发权未授予）。
 
-electron-builder 的 NSIS 模板会在创建/迁移快捷方式时调用 `WinShell::SetLnkAUMI`、
+electron-builder 的**旧版本** NSIS 模板曾调用 `WinShell::SetLnkAUMI`、
 `WinShell::UninstShortcut` 与 `WinShell::UninstAppUserModelId`，从而把该 DLL 嵌进安装器。
+本项目固定的 `app-builder-lib@26.18.0` 的全包中 **“WinShell” 出现 0 次**（模板已不再调用该插件），
+`scripts/patch-nsis-templates.mjs` 在 pinned 版本上不会改动任何文件，属幂等防回归措施。
 
 ## 现在怎么实现
 
-`scripts/patch-nsis-templates.mjs` 在 electron-builder 编译 NSIS **之前**，把这些调用改写成
-`apps/desktop/build/nsis/aumid.nsh` 里的宏（由 `electron-builder.yml` 的 `nsis.include` 注入）：
+`scripts/patch-nsis-templates.mjs` 在 electron-builder 编译 NSIS **之前**，把（若再出现的）WinShell
+调用改写成 `apps/desktop/build/nsis/aumid.nsh` 里的宏（由 `electron-builder.yml` 的 `nsis.include` 注入）：
 
 | 原调用 | 现在的实现 |
 |---|---|

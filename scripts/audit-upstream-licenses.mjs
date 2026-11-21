@@ -233,6 +233,15 @@ const savedOfficial = new Map();
 function saveOfficial(repoKey, official) {
   if (!official?.text) return '';
   if (savedOfficial.has(repoKey)) return savedOfficial.get(repoKey);
+  // 复用已保存的原文路径：上游没有 LICENSE 的例外证据（如 NO-LICENSE.md）不能被改名/复制成
+  // 一个看似 LICENSE 的新文件，否则 legal/ 里会出现两份内容相同、语义相反的证据。
+  if (official.priorPath) {
+    const priorFile = path.join(legalDir, official.priorPath);
+    if (existsSync(priorFile)) {
+      savedOfficial.set(repoKey, official.priorPath);
+      return official.priorPath;
+    }
+  }
   const safe = repoKey.replace(/[^A-Za-z0-9_.-]/g, '_');
   const file = path.join(officialDir, `${safe}-LICENSE.txt`);
   const relative = path.relative(legalDir, file).split(path.sep).join('/');
@@ -287,7 +296,8 @@ const workers = Array.from({ length: 6 }, async () => {
             url: prior.officialUrl || '',
             text,
             spdx: detectLicense(text),
-            sha256: sha256(text)
+            sha256: sha256(text),
+            priorPath: prior.localPath
           };
         }
       }
@@ -304,6 +314,9 @@ const workers = Array.from({ length: 6 }, async () => {
           detected.includes(declared) ||
           declared.includes(detected) ||
           declared.split(' ').includes(detected));
+      // 上游明确没有 LICENSE 原文、只能靠 package.json 声明的已知例外：
+      // 不能因为补充文本里出现 "MIT" 就当成“官方原文已核对”，否则报告会假阴性。
+      const exception = record.name === 'lazy-val' && !official?.url.includes('/LICENSE');
       results.push({
         package: record.name,
         version: record.version,
@@ -315,11 +328,11 @@ const workers = Array.from({ length: 6 }, async () => {
         officialFile: evidence?.file ?? '',
         officialSha256: evidence?.sha256 ?? '',
         officialLocalPath: saveOfficial(key, official),
-        evidence: official ? 'github' : npmFallback ? 'npm' : 'none',
+        evidence: exception ? 'none' : official ? 'github' : npmFallback ? 'npm' : 'none',
         npmUrl: npmFallback?.url ?? '',
         npmFile: npmFallback?.file ?? '',
         npmSha256: npmFallback?.sha256 ?? '',
-        status: !evidence ? 'not-found' : matched ? 'matched' : 'review'
+        status: exception ? 'exception' : !evidence ? 'not-found' : matched ? 'matched' : 'review'
       });
     }
   }
@@ -345,12 +358,25 @@ for (const result of results) {
   const previous = previousSources.get(key);
   // raw.githubusercontent.com 不可达时脚本会退回 default-branch/HEAD。不能因此把
   // 已经按版本 tag 固定的记录降级；保留旧条目，等下次能按 tag 取时再更新。
-  const pinnedNew =
-    Boolean(result.npmSha256) ||
-    Boolean(
-      result.officialRef &&
-        !['default-branch', 'HEAD', 'README'].includes(result.officialRef)
-    );
+  const refValue = String(result.officialRef ?? '');
+  const tagPinned = Boolean(
+    refValue &&
+      !['default-branch', 'HEAD', 'README', 'saved'].includes(refValue) &&
+      (refValue.replace(/^v/, '').includes(result.version) ||
+        result.version.includes(refValue.replace(/^v/, '')))
+  );
+  const byNpm = Boolean(result.npmSha256);
+  const pinnedNew = tagPinned || byNpm;
+  const autoNote = (() => {
+    if (tagPinned) return '';
+    if (result.officialFile && /readme/i.test(String(result.officialFile))) {
+      return '上游仓库与 npm 包均无独立 LICENSE 文件，仅在 README 声明 MIT；按官方仓库 README 与 npm 精确版本发布物锚定。';
+    }
+    if (byNpm) {
+      return '官方仓库没有该包版本的 tag；许可证/声明原文按 npm 精确版本发布物锚定（npmSha256），并与仓库保存的当地原文哈希一致。';
+    }
+    return '官方仓库无该包版本 tag，上游未发布可锚定的版本化原文；本条只能以仓库保存的官方原文为准（见版本固定说明）。';
+  })();
   if (previous?.versionPinned && !pinnedNew) {
     sourceEntries.set(key, previous);
     continue;
@@ -365,7 +391,8 @@ for (const result of results) {
     sha256: result.officialSha256,
     localPath: result.officialLocalPath,
     versionPinned: pinnedNew,
-    versionPinNote: previous?.versionPinNote ?? '',
+    versionPinnedBy: tagPinned ? 'repo-tag' : byNpm ? 'npm-package' : 'none',
+    versionPinNote: previous?.versionPinNote || autoNote,
     npmUrl: result.npmUrl,
     npmFile: result.npmFile,
     npmSha256: result.npmSha256
@@ -394,6 +421,7 @@ const summary = {
   matched: results.filter((r) => r.status === 'matched').length,
   review: results.filter((r) => r.status === 'review').length,
   notFound: results.filter((r) => r.status === 'not-found').length,
+  exception: results.filter((r) => r.status === 'exception').length,
   githubEvidence: results.filter((r) => r.evidence === 'github').length,
   npmEvidence: results.filter((r) => r.evidence === 'npm').length,
   versionPinned: results.filter((r) => r.npmSha256).length,
@@ -409,7 +437,13 @@ const rows = results
   .map(
     (r) =>
       `| ${r.package} | ${r.version} | ${r.declared || '—'} | ${r.officialLicense || '—'} | ${
-        r.status === 'matched' ? '一致' : r.status === 'review' ? '需复核' : '未找到'
+        r.status === 'matched'
+          ? '一致'
+          : r.status === 'review'
+            ? '需复核'
+            : r.status === 'exception'
+              ? '例外（无官方许可原文）'
+              : '未找到'
       } | ${r.officialUrl || r.repository || '—'} |`
   )
   .join('\n');
@@ -423,6 +457,7 @@ const report = `# 官方仓库许可证核查
 - 官方 npm 发布物证据（版本精确）：${summary.npmEvidence}
 - 至少一种官方证据且声明一致：${summary.matched}
 - 需人工复核：${summary.review}
+- 例外（上游无许可原文）：${summary.exception}
 - 未取得许可证原文：${summary.notFound}
 
 | 包 | 版本 | 安装包声明 | 官方仓库检测 | 结果 | 官方链接 |
@@ -437,4 +472,4 @@ ${rows}
 - 安装包内的许可证原文仍是分发依据，见 \`legal/THIRD-PARTY.md\`。
 `;
 writeFileSync(path.join(auditDir, 'UPSTREAM-AUDIT.md'), report, 'utf8');
-console.log(JSON.stringify({ total: summary.totalPackages, repositories: summary.repositories, matched: summary.matched, review: summary.review, notFound: summary.notFound, github: summary.githubEvidence, npm: summary.npmEvidence, versionPinned: summary.versionPinned }));
+console.log(JSON.stringify({ total: summary.totalPackages, repositories: summary.repositories, matched: summary.matched, review: summary.review, exception: summary.exception, notFound: summary.notFound, github: summary.githubEvidence, npm: summary.npmEvidence, versionPinned: summary.versionPinned }));

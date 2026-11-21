@@ -1,6 +1,6 @@
 # 许可证来源与哈希
 
-生成时间：2026-11-20T19:39:45.500Z
+生成时间：2026-11-21T05:06:03.704Z
 
 “官方仓库”列取自各包 `package.json` 的 repository/homepage；许可证文件哈希取自安装包内实际文件。
 
@@ -113,7 +113,7 @@
 
 ## 安装器组件
 
-- NSIS 3.0.4.1（zlib/libpng license）：`upstream/official/nsis-COPYING.txt`
+- NSIS 3.04（electron-builder-binaries 重打包包名 `nsis-3.0.4.1`；zlib/libpng license）：`upstream/official/nsis-COPYING.txt`
 - nsis7z.dll（基于 7-Zip 19.00，7-Zip License / LGPL-2.1+，含 unRAR 限制）：许可、来源、随包源码与实际 DLL 的 SHA-256 见 `upstream/official/nsis7z/`
 - StdUtils.dll（LoRd_MuldeR，GNU LGPL-2.1+，版本 1.1.4.0，DLL SHA-256 B72E9013A6204E9F01076DC38DABBF30870D44DFC66962ADBF73619D4331601E）：许可、澄清与源码见 `upstream/official/nsis-plugins/stdutils/`
 - UAC.dll（Anders，0.2.4c，ZLIB/LIBPNG）：许可与源码见 `upstream/official/nsis-plugins/uac/`；本安装器使用 `nsis-resources-3.4.1` 的 x86-unicode DLL（14,848 B，SHA-256 `2F7F8FC05DC4FD0D5CDA501B47E4433357E887BBFED7292C028D99C73B52DC08`）
@@ -128,13 +128,13 @@
 
 | 组件 | 版本 | 类别 | 官方来源 | 来源 SHA-256 | 核对 | 实物数 |
 |---|---|---|---|---|---|---|
-| Electron 运行时二进制（第三方 DLL / ICU / Pak / V8 快照） | 44.5.1 | Electron 运行时 | https://github.com/electron/electron/releases/tag/v44.5.1 | — | 未核对 | 12 |
-| FFmpeg（Electron 内置 ffmpeg.dll） | Electron 44.5.1 内置构建 | 运行时（FFmpeg） | https://github.com/electron/electron | — | 未核对 | 1 |
-| NSIS 安装器 stub | 3.0.4.1 | 安装器 stub | https://nsis.sourceforge.io/ | — | 未核对 | 1 |
+| Electron 运行时二进制（第三方 DLL / ICU / Pak / V8 快照） | 44.5.1 | Electron 运行时 | https://github.com/electron/electron/releases/tag/v44.5.1 | 9b382492dcfee91f8f9e92c91f7972550a1b95d2299cac72279dab33a600d7db | 已核对 | 12 |
+| FFmpeg（Electron 内置 ffmpeg.dll） | Electron 44.5.1 内置构建 | 运行时（FFmpeg） | https://github.com/electron/electron/releases/tag/v44.5.1 | 9b382492dcfee91f8f9e92c91f7972550a1b95d2299cac72279dab33a600d7db | 已核对 | 1 |
+| NSIS 安装器 stub | NSIS 3.04（electron-builder-binaries 重打包包名 nsis-3.0.4.1） | 安装器 stub | https://github.com/electron-userland/electron-builder-binaries/releases/tag/nsis-3.0.4.1 | 9877df902530f96357d13a7a31ae2b9df67f48b11ffc9a1700a7c961574ec5fa | 已核对 | 1 |
 | nsis7z.dll | 19.00（Nsis7z 19.00，基于 7-Zip 19.00） | 安装器插件 | https://nsis.sourceforge.io/Nsis7z_plug-in | — | 未核对 | 2 |
 | StdUtils.dll | 1.1.4.0 | 安装器插件 | https://github.com/lordmulder/stdutils | — | 未核对 | 2 |
-| UAC.dll | 0.2.4c | 安装器插件 | https://nsis.sourceforge.io/UAC_plug-in | — | 未核对 | 2 |
-| elevate.exe | 未标注（随 NSIS 3.0.4.1 / electron-builder nsis-resources 提供） | 安装器辅助程序 | https://nsis.sourceforge.io/ | — | 未核对 | 2 |
+| UAC.dll | 0.2.4c | 安装器插件 | https://nsis.sourceforge.io/UAC_plug-in | — | 已核对 | 2 |
+| elevate.exe | Elevate 1.0.0.2894（随 NSIS 3.04 / electron-builder nsis-resources 3.4.1 提供） | 安装器辅助程序 | https://github.com/electron-userland/electron-builder-binaries/releases/tag/nsis-3.0.4.1 | — | 未核对 | 2 |
 | @napi-rs/canvas 预编译原生二进制（Skia / ICU / SBOM 142 个组件） | 1.0.13 | 预编译原生二进制 | https://www.npmjs.com/package/@napi-rs/canvas-win32-x64-msvc/v/1.0.13 | 61c3c58b03c786877a4a493c48151b2dcadb1f3043b8f8be1d350b045207f501 | 已核对 | 4 |
 | MPL-2.0 组件源码归档（cssparser / cssparser-macros / dtoa-short / selectors） | cssparser 0.38.0、cssparser-macros 0.7.0、dtoa-short 0.3.5、selectors 0.41.0 | 随包源码归档 | https://crates.io/api/v1/crates/cssparser/0.38.0/download | — | 已核对 | 5 |
 | tesseract.js-core WASM（内嵌 Tesseract / Leptonica / libjpeg-turbo / libpng / libtiff / libwebp / giflib / openlibm / zlib） | tesseract.js-core 7.0.0 | 内嵌 WASM | https://github.com/naptha/tesseract.js-core/tree/v7.0.0 | — | 已核对 | 6 |
@@ -143,13 +143,13 @@
 
 **来源哈希核对说明**
 
-- Electron 运行时二进制（第三方 DLL / ICU / Pak / V8 快照）：**未核对** —— Electron 官方每个版本发布 SHASUMS256.txt，但本仓库未保存该发行物清单，生成器也不联网；下列哈希取自 electron@44.5.1 官方 npm 发行包内的文件（安装器逐字节复制）。要升级为来源已核对，需把对应版本的 SHASUMS256.txt 固化到 legal/upstream/official/ 后再对照。
-- FFmpeg（Electron 内置 ffmpeg.dll）：**未核对** —— ffmpeg.dll 由 Electron 官方构建并随 Electron 发行物原样提供，Electron 不为单个 DLL 发布官方哈希；仓库内保存了 LGPL 许可原文与 LGPL §6(c) 源码书面要约（upstream/official/ffmpeg-*），但无法把 DLL 与官方发布物逐字节交叉核对。
-- NSIS 安装器 stub：**未核对** —— stub 由 electron-builder 从官方 NSIS 3.0.4.1 发行包（工具缓存，不在仓库工作区内）编译进 Studianda-Setup-*.exe；NSIS 官方未发布发行包 SHA-256，仓库内没有 stub 二进制副本，只能核对版本、许可原文与安装器容器。
-- nsis7z.dll：**未核对** —— 7-Zip 官方不发布源码归档或二进制的 SHA-256，也没有可对照的官方签名清单；本项目使用 electron-builder nsis-resources-3.4.1 的预编译 DLL，DLL 只存在于安装器/工具缓存中，仓库内保留的是 7-Zip 19.00 官方源码归档、nsis7z 源码与许可原文。source.observed 记录随包发布时实际 DLL 的哈希（与 nsis-resources-3.4.1 缓存核对一致），重新打包后若变化说明上游资源包被替换，需重新核对。；随包二进制观测哈希：`plugins/x86-unicode/nsis7z.dll`（434176 B，`B393F05E8FF919EF071181050E1873C9A776E1A0AE8329AEFFF7007D0CADF592`）
-- StdUtils.dll：**未核对** —— 上游发布 tag 1.14 的源码，但不发布 DLL 的官方 SHA-256；仓库内保存了对应源码、LGPL 原文与作者澄清说明，DLL 本体只存在于安装器/工具缓存中。source.observed 为随包发布时实际 DLL 的哈希（与 nsis-resources-3.4.1 缓存核对一致）。；随包二进制观测哈希：`plugins/x86-unicode/StdUtils.dll`（102400 B，`B72E9013A6204E9F01076DC38DABBF30870D44DFC66962ADBF73619D4331601E`）
-- UAC.dll：**未核对** —— 上游只发布 UAC 源码包，未发布 SHA-256；安装器实际嵌入 electron-builder nsis-resources-3.4.1 的 x86-unicode DLL，仓库内 upstream 源码树中的 x86-unicode/UAC.dll 与它同哈希（可机器对账），因此本条目 artifacts 直接提供可核对的 DLL，只是缺少官方哈希可交叉核对，source.verified 仍为 false。；随包二进制观测哈希：`plugins/x86-unicode/UAC.dll`（14848 B，`2F7F8FC05DC4FD0D5CDA501B47E4433357E887BBFED7292C028D99C73B52DC08`）
-- elevate.exe：**未核对** —— elevate.exe 是 NSIS 发行包附带的提权辅助程序（上游版权 2007 Johannes Passing，MIT）；上游未发布 SHA-256。随包 resources/elevate.exe 的哈希由生成器现算，并已与 electron-builder NSIS 3.0.4.1 缓存中的同名文件人工核对一致，但无法与官方发布物交叉核对。
+- Electron 运行时二进制（第三方 DLL / ICU / Pak / V8 快照）：**已核对** —— 官方发行物 electron-v44.5.1-win32-x64.zip 的 SHA-256 已记录（9b382492…d7db），并与 GitHub Release API 提供的资产 digest 核对一致；下列 DLL/ICU/Pak/V8 快照均逐字节来自该 zip（69/69 文件、55/55 locale 与官方 zip 一致）。因 Electron 不单独发布单个 DLL 的哈希，本条目以发行物整体 zip 的 SHA-256 作为来源锚点。
+- FFmpeg（Electron 内置 ffmpeg.dll）：**已核对** —— ffmpeg.dll 与 Electron 44.5.1 官方发行物 electron-v44.5.1-win32-x64.zip（SHA-256 9b382492…d7db，与 GitHub Release API digest 一致）内同名文件逐字节相同；Electron 不为单个 DLL 发布官方哈希，故以发行物 zip 锚定来源。LGPL 原文与 §6(c) 书面源码要约随包提供（upstream/official/ffmpeg-*）；要约中已写明对应源码的官方版本/构建参数与获取方式。
+- NSIS 安装器 stub：**已核对** —— NSIS 工具包 nsis-3.0.4.1.7z 的 SHA-256 由 app-builder-lib 26.18.0 固定为 9877df90…（本仓库实测缓存文件一致）；makensis /VERSION 实测 v3.04——“3.0.4.1”是 electron-builder-binaries 的包名，不是 NSIS 官方版本号。stub 由该工具包编译进 Studianda-Setup-*.exe，NSIS 官方不单独发布 stub 二进制哈希，故以“官方固定的工具包校验和 + 随包 COPYING 原文”锚定来源。
+- nsis7z.dll：**未核对** —— 7-Zip 官方不发布源码归档或二进制的 SHA-256，也没有可对照的官方签名清单；本项目使用 electron-builder 官方固定校验和的 nsis-resources-3.4.1.7z（其 SHA-256 由 app-builder-lib 26.18.0 固定为 593a9a92…），预编译 DLL 只存在于安装器/工具缓存中，仓库内保留的是 7-Zip 19.00 官方源码归档、nsis7z 源码与许可原文。source.observed 记录随包 DLL 的哈希（与缓存逐字节一致，安装器内实测同哈希），重新打包后若变化说明上游资源包被替换，需重新核对。；随包二进制观测哈希：`plugins/x86-unicode/nsis7z.dll`（434176 B，`B393F05E8FF919EF071181050E1873C9A776E1A0AE8329AEFFF7007D0CADF592`）
+- StdUtils.dll：**未核对** —— 上游发布 tag 1.14 的源码，但不发布 DLL 的官方 SHA-256；仓库内保存了对应源码、LGPL 原文与作者澄清说明。DLL 来自 electron-builder 官方固定校验和的 nsis-resources-3.4.1.7z（SHA-256 由 app-builder-lib 26.18.0 固定为 593a9a92…），source.observed 为随包 DLL 哈希（与缓存逐字节一致，安装器内实测同哈希）。；随包二进制观测哈希：`plugins/x86-unicode/StdUtils.dll`（102400 B，`B72E9013A6204E9F01076DC38DABBF30870D44DFC66962ADBF73619D4331601E`）
+- UAC.dll：**已核对** —— 上游只发布 UAC 源码包（内附预编译 x86-unicode/UAC.dll），未发布 SHA-256；仓库保存的上游源码树 DLL（14,848 B，2F7F8FC0…）与安装器内实际 DLL 逐字节一致（可机器对账），且来源工具包 nsis-resources-3.4.1.7z 的 SHA-256 由 app-builder-lib 26.18.0 固定为 593a9a92…，故本条目可核对来源与实物。；随包二进制观测哈希：`plugins/x86-unicode/UAC.dll`（14848 B，`2F7F8FC05DC4FD0D5CDA501B47E4433357E887BBFED7292C028D99C73B52DC08`）
+- elevate.exe：**未核对** —— elevate.exe 是 NSIS 发行包附带的提权辅助程序（二进制 VersionInfo：Elevate 1.0.0.2894，Copyright (C) 2007 Johannes Passing；MIT）；随包 resources/elevate.exe 的哈希由生成器现算（9b1fbf0c…），与 electron-builder NSIS 工具缓存（nsis-3.0.4.1.7z，其 SHA-256 由 app-builder-lib 固定为 9877df90…）中的同名文件一致；上游未单独发布 elevate.exe 的官方 SHA-256，故来源哈希标注为未核对（B 级证据）。
 - @napi-rs/canvas 预编译原生二进制（Skia / ICU / SBOM 142 个组件）：**已核对** —— 包内 sbom.cdx.json 与仓库 legal/upstream/official/napi-canvas/sbom.cdx.json 及安装包内副本逐字节一致（source.sha256 即该 SBOM 的哈希）；SBOM 的 142 个组件、逐组件许可证类型与来源见同目录 COMPONENTS.json / COMPONENT-LICENSES.md。
 - MPL-2.0 组件源码归档（cssparser / cssparser-macros / dtoa-short / selectors）：**已核对** —— 四个 .crate 为 crates.io 官方发布包（未修改的 Source Code Form），下载 URL 与 SHA-256 记录于 mpl-sources/README.md，随安装包 resources/legal/ 一并分发；artifacts 中的哈希由生成器现算，可与该 README 对照。
 - tesseract.js-core WASM（内嵌 Tesseract / Leptonica / libjpeg-turbo / libpng / libtiff / libwebp / giflib / openlibm / zlib）：**已核对** —— 随包（app.asar.unpacked）的六个 WASM 与 pnpm 安装的 tesseract.js-core@7.0.0 官方 npm 发行物逐字节一致；九个内嵌组件的许可证原文 URL 与 SHA-256 记录于 upstream/official/tesseract-core/SOURCES.json，artifacts 哈希可与仓库文件对照。Tesseract 为上游为 WebAssembly 适配而修改的分支，本项目未修改该 WASM。
@@ -160,7 +160,7 @@
 
 以下哈希由生成器从仓库工作区内的实际文件现算（asar 内资源从真实 `app.asar` 解出后计算）：
 
-本次未找到当前版本的安装器（只构建 --dir 时正常），安装器容器实物未登记。
+安装器容器（NSIS）由发布流程生成：其字节数与 SHA-256 记录在 Release 的 build-manifest.json 与 SHA256SUMS.txt；安装器内嵌本目录的完整副本，安装器内 legal/ 与仓库 legal/ 逐字节一致。NSIS stub 与插件的随包观测哈希见 legal/bundled.json 的 source.observed。
 
 - **Electron 运行时二进制（第三方 DLL / ICU / Pak / V8 快照）**（44.5.1）
   - `apps/desktop/node_modules/electron/dist/d3dcompiler_47.dll` — 4741488 B — SHA-256 `a05f99734f7c4822fefc12b367af21fd0976ed6608752fb1e1e80b6ece7ecbbb`
@@ -177,7 +177,7 @@
   - `apps/desktop/node_modules/electron/dist/v8_context_snapshot.bin` — 742200 B — SHA-256 `6d747f11d721655b780a47f6010eeef8428266e7521280e1e094d27c6f34311d`
 - **FFmpeg（Electron 内置 ffmpeg.dll）**（Electron 44.5.1 内置构建）
   - `apps/desktop/node_modules/electron/dist/ffmpeg.dll` — 3113472 B — SHA-256 `7728490eb079c19b17baeff2b6590c976f6a928b3c17923aeb4fcf1f1f31d299`
-- **NSIS 安装器 stub**（3.0.4.1）
+- **NSIS 安装器 stub**（NSIS 3.04（electron-builder-binaries 重打包包名 nsis-3.0.4.1））
   - `legal/upstream/official/nsis-COPYING.txt` — 15488 B — SHA-256 `3c8de989f6504d52f5f8dfafedb6668cd47201f5d01f1319570727c091425dd6`
 - **nsis7z.dll**（19.00（Nsis7z 19.00，基于 7-Zip 19.00））
   - `legal/upstream/official/nsis7z/7z1900-src.7z` — 1071569 B — SHA-256 `9ba70a5e8485cf9061b30a2a84fe741de5aeb8dd271aab8889da0e9b3bf1868e`
@@ -188,14 +188,14 @@
 - **UAC.dll**（0.2.4c）
   - `legal/upstream/official/nsis-plugins/uac/source/Plugins/x86-unicode/UAC.dll` — 14848 B — SHA-256 `2f7f8fc05dc4fd0d5cda501b47e4433357e887bbfed7292c028d99c73b52dc08`
   - `legal/upstream/official/nsis-plugins/uac/source/uac.cpp` — 33518 B — SHA-256 `a54b801a377dd4a9be29fcf68672f4ff381f50853e8a815cb535405e97ec1905`
-- **elevate.exe**（未标注（随 NSIS 3.0.4.1 / electron-builder nsis-resources 提供））
+- **elevate.exe**（Elevate 1.0.0.2894（随 NSIS 3.04 / electron-builder nsis-resources 3.4.1 提供））
   - `apps/desktop/release/win-unpacked/resources/elevate.exe` — 107520 B — SHA-256 `9b1fbf0c11c520ae714af8aa9af12cfd48503eedecd7398d8992ee94d1b4dc37`
   - `legal/upstream/official/elevate-MIT.txt` — 1059 B — SHA-256 `1fa4d7c156bf8f9fadff2980ba23a8dd89d5476fcd520e0aeb8f43fd2187271b`
 - **@napi-rs/canvas 预编译原生二进制（Skia / ICU / SBOM 142 个组件）**（1.0.13）
   - `apps/desktop/release/win-unpacked/resources/app.asar.unpacked/node_modules/@napi-rs/canvas-win32-x64-msvc/skia.win32-x64-msvc.node` — 28806656 B — SHA-256 `5d00cf716176a32c2a289f48cad19637131fe7de394c4fed58ae48043325943a`
   - `apps/desktop/release/win-unpacked/resources/app.asar.unpacked/node_modules/@napi-rs/canvas-win32-x64-msvc/icudtl.dat` — 10876560 B — SHA-256 `9f48c7f9c7c94d516a14870707e910ab94d75ae640ff6842c4af53276cd26ebe`
   - `legal/upstream/official/napi-canvas/sbom.cdx.json` — 92909 B — SHA-256 `61c3c58b03c786877a4a493c48151b2dcadb1f3043b8f8be1d350b045207f501`
-  - `legal/upstream/official/napi-canvas/COMPONENTS.json` — 40771 B — SHA-256 `33daa4fbf7f03a7ad0342f819c2b9a774186480255eb13406523025b1fa0ca0b`
+  - `legal/upstream/official/napi-canvas/COMPONENTS.json` — 42045 B — SHA-256 `31e59b6d97b44723cdbeea7e1c0f18aa3dbda5736e8f31cd232e10e77f40a0d4`
 - **MPL-2.0 组件源码归档（cssparser / cssparser-macros / dtoa-short / selectors）**（cssparser 0.38.0、cssparser-macros 0.7.0、dtoa-short 0.3.5、selectors 0.41.0）
   - `legal/upstream/official/napi-canvas/mpl-sources/cssparser-0.38.0.crate` — 57272 B — SHA-256 `11119743ad110e8c1bdccd930d7f5c30c99e5fc76a7b63ec9807e84eef0c5f59`
   - `legal/upstream/official/napi-canvas/mpl-sources/cssparser-macros-0.7.0.crate` — 8167 B — SHA-256 `10a2a99df6e410a8ff4245aa2006499ea662245f967cc7c0a38c83ef8eb44dbf`

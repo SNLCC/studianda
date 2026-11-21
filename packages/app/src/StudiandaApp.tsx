@@ -5972,7 +5972,7 @@ function OutlineList({
   );
 }
 
-// 实验原型：连续滚动来自 O修改建议.txtO，未纳入重构方案/parity 范围；保留待定。
+// 实验原型：连续滚动尚未纳入重构方案/parity 范围；保留待定。
 function matchesShortcut(event: KeyboardEvent, spec: string): boolean {
   const parts = spec
     .split('+')

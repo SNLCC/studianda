@@ -143,6 +143,25 @@ function describe(file) {
   };
 }
 
+/** 目录级汇总（win-unpacked 是一个目录，不能只哈希其中某个 exe）。 */
+function describeDirectory(dir) {
+  if (!existsSync(dir)) return null;
+  let files = 0;
+  let bytes = 0;
+  const walk = (current) => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile()) {
+        files += 1;
+        bytes += statSync(full).size;
+      }
+    }
+  };
+  walk(dir);
+  return { files, bytes };
+}
+
 function stripYamlQuotes(value) {
   return value.trim().replace(/^['"]|['"]$/g, '');
 }
@@ -349,6 +368,29 @@ run(
   desktopDir
 );
 stageNsisElevate();
+// legal/ 只会被整体复制进安装包；未跟踪/被忽略的文件（例如上游源码树里 .gitignore 掉的
+// Date.exe / Zip.exe）会进二进制发行物却不在源码发行物里，且可能带入未声明的上游工具。
+// 必须在复制前拦截，避免“工作区里多出来的东西悄悄随包发布”。
+function assertLegalTreeTracked() {
+  const list = (args) => {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+    if (result.status !== 0) return [];
+    return (result.stdout ?? '').split('\n').map((line) => line.trim()).filter(Boolean);
+  };
+  const stray = [
+    ...list(['ls-files', '--others', '--exclude-standard', '--', 'legal/']),
+    ...list(['ls-files', '--others', '--ignored', '--exclude-standard', '--', 'legal/'])
+  ];
+  if (stray.length > 0) {
+    fail('legal/ 下存在未纳入 Git 的文件；它们会随安装包分发，却不出现在源码发行物中。', [
+      ...stray.map((file) => `  ${file}`),
+      '  处理：删除它们；确属必需时先 git add，并在 legal 清单/说明中登记来源与许可。',
+      '  历史案例：stdutils 上游源码树里的 utils/Date.exe（GNU date，GPL）与 utils/Zip.exe（Info-ZIP）——'
+        + 'LGPL 源码义务不需要它们，已从 legal/ 删除。'
+    ]);
+  }
+}
+assertLegalTreeTracked();
 // 先移除同版本旧安装器：legal 在 NSIS 构建之前生成，若目录里残留上一次的安装包，
 // inventory.installer 会记录旧哈希，随后 --installer 构建出新文件时必然不一致。
 for (const name of [
@@ -567,7 +609,11 @@ const manifest = {
     deployed: describe(deployedCoreFile)
   },
   artifacts: {
-    winUnpacked: describe(path.join(unpackedDir, 'Studianda.exe')),
+    // win-unpacked 是目录：记录目录汇总 + 主程序哈希，避免把 Studianda.exe 的哈希误标成整个目录。
+    winUnpacked: {
+      ...describeDirectory(unpackedDir),
+      exe: describe(path.join(unpackedDir, 'Studianda.exe'))
+    },
     asar: describe(packagedAsar),
     appUpdateYml: describe(appUpdateFile),
     ...(installer

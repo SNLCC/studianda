@@ -1,10 +1,10 @@
 # 第三方组件与许可证声明
 
-生成时间：2026-11-20T19:39:45.500Z
+生成时间：2026-11-21T05:06:03.704Z
 
 本清单从**实际安装包** `resources/app.asar` 的依赖树生成，覆盖渲染器、Core 和生产依赖；不是仅根据源码清单推测。
 
-本项目的 Apache License 2.0 许可证仅适用于本项目原创代码；随包分发的第三方组件仍分别适用其自身许可证，本项目许可证不改变、不限制这些组件在其许可证下的权利。随包字体、PDF.js 包内的第三方资源（CMaps、标准字体、ICC、WASM 解码器）与 Electron 运行时文件（含 Chromium、FFmpeg、ICU 等）均分别按各自自身许可分发，均不属于本项目许可范围；逐项许可见 `legal/THIRD-PARTY.md`、`legal/upstream/official/pdfjs-wasm/` 与 `legal/upstream/official/electron-runtime-dlls.md`；随包字体的逐款许可、版权与保留名见 `legal/fonts.json` 与 `legal/font-licenses/`。
+本项目的 Apache License 2.0 许可证仅适用于本项目原创代码；随包分发的第三方组件仍分别适用其自身许可证，本项目许可证不改变、不限制这些组件在其许可证下的权利。随包字体、PDF.js 包内的第三方资源（CMaps、标准字体、ICC、WASM 解码器）与 Electron 运行时文件（含 Chromium、FFmpeg、ICU 等）均分别按各自自身许可分发，均不属于本项目许可范围；逐项许可见 `legal/NOTICE.html`、`legal/SOURCES.md`、`legal/upstream/official/pdfjs-wasm/` 与 `legal/upstream/official/electron-runtime-dlls.md`；随包字体的逐款许可、版权与保留名见 `legal/fonts.json` 与 `legal/font-licenses/`。
 
 ## Electron 与 Chromium
 
@@ -115,24 +115,24 @@
 
 ## 非 npm 随包组件（机器可读清单）
 
-以下组件不经过 npm 依赖树进入安装包，却实际随包分发：安装器 stub 与插件、Electron 运行时平台文件、FFmpeg、预编译原生二进制、内嵌 WASM、随包源码归档。逐条记录（含随包实物路径、字节数、SHA-256）在 `legal/inventory.json`：平台运行时条目在 `runtime[]`，其余在 `bundled[]`（本表来自同一批条目，组件名与版本即清单中的 `name`/`version`）。`source.verified` 为 `false` 的表示上游未发布可对照的官方哈希或二进制只在安装器/工具缓存中，原因写在该条目的 `source.reason`。
+以下组件不经过 npm 依赖树进入安装包，却实际随包分发：安装器 stub 与插件、Electron 运行时平台文件、FFmpeg、预编译原生二进制、内嵌 WASM、随包源码归档。逐条记录（含代表性随包实物路径、字节数、SHA-256）在 `legal/inventory.json`：平台运行时条目在 `runtime[]`，其余在 `bundled[]`（本表来自同一批条目，组件名与版本即清单中的 `name`/`version`）。PDF.js 的 CMaps/标准字体/ICC 属于 pdfjs-dist 包内资源，以「PDF.js WASM 解码器」条目整组声明（其逐文件哈希以官方 pdfjs-dist@6.4.299 包核对）；字体以 `fonts[].artifacts` 逐文件登记源文件，安装包内另有的 hash 名副本与源文件内容相同。`source.verified` 为 `false` 的表示上游未发布可对照的官方哈希或二进制只在安装器/工具缓存中，原因写在该条目的 `source.reason`。
 
 | 组件 | 版本 | 类别 | 许可证 | 来源核对 |
 |---|---|---|---|---|
-| Electron 运行时二进制（第三方 DLL / ICU / Pak / V8 快照） | 44.5.1 | Electron 运行时 | BSD-3-Clause 等（逐组件声明见 Chromium 第三方声明） | 来源哈希未核对（原因见 inventory.json 的 source.reason） |
-| FFmpeg（Electron 内置 ffmpeg.dll） | Electron 44.5.1 内置构建 | 运行时（FFmpeg） | LGPL-2.1-or-later | 来源哈希未核对（原因见 inventory.json 的 source.reason） |
-| NSIS 安装器 stub | 3.0.4.1 | 安装器 stub | zlib/libpng License | 来源哈希未核对（原因见 inventory.json 的 source.reason） |
+| Electron 运行时二进制（第三方 DLL / ICU / Pak / V8 快照） | 44.5.1 | Electron 运行时 | BSD-3-Clause 等（逐组件声明见 Chromium 第三方声明） | 来源哈希已核对 |
+| FFmpeg（Electron 内置 ffmpeg.dll） | Electron 44.5.1 内置构建 | 运行时（FFmpeg） | LGPL-2.1-or-later | 来源哈希已核对 |
+| NSIS 安装器 stub | NSIS 3.04（electron-builder-binaries 重打包包名 nsis-3.0.4.1） | 安装器 stub | zlib/libpng License | 来源哈希已核对 |
 | nsis7z.dll | 19.00（Nsis7z 19.00，基于 7-Zip 19.00） | 安装器插件 | 7-Zip License（GNU LGPL-2.1+ 及 BSD 条款，含 unRAR 限制） | 来源哈希未核对（原因见 inventory.json 的 source.reason） |
 | StdUtils.dll | 1.1.4.0 | 安装器插件 | GNU LGPL-2.1-or-later | 来源哈希未核对（原因见 inventory.json 的 source.reason） |
-| UAC.dll | 0.2.4c | 安装器插件 | ZLIB/LIBPNG License | 来源哈希未核对（原因见 inventory.json 的 source.reason） |
-| elevate.exe | 未标注（随 NSIS 3.0.4.1 / electron-builder nsis-resources 提供） | 安装器辅助程序 | MIT | 来源哈希未核对（原因见 inventory.json 的 source.reason） |
+| UAC.dll | 0.2.4c | 安装器插件 | ZLIB/LIBPNG License | 来源哈希已核对 |
+| elevate.exe | Elevate 1.0.0.2894（随 NSIS 3.04 / electron-builder nsis-resources 3.4.1 提供） | 安装器辅助程序 | MIT | 来源哈希未核对（原因见 inventory.json 的 source.reason） |
 | @napi-rs/canvas 预编译原生二进制（Skia / ICU / SBOM 142 个组件） | 1.0.13 | 预编译原生二进制 | MIT（@napi-rs/canvas）及 SBOM 内各组件自身许可证（BSD-3-Clause、MPL-2.0、Apache-2.0 等） | 来源哈希已核对 |
 | MPL-2.0 组件源码归档（cssparser / cssparser-macros / dtoa-short / selectors） | cssparser 0.38.0、cssparser-macros 0.7.0、dtoa-short 0.3.5、selectors 0.41.0 | 随包源码归档 | MPL-2.0 | 来源哈希已核对 |
 | tesseract.js-core WASM（内嵌 Tesseract / Leptonica / libjpeg-turbo / libpng / libtiff / libwebp / giflib / openlibm / zlib） | tesseract.js-core 7.0.0 | 内嵌 WASM | Apache-2.0（tesseract.js-core）及内嵌组件各自许可证 | 来源哈希已核对 |
 | PDF.js WASM 解码器（JBIG2 / OpenJPEG / QCMS） | 6.4.299（pdfjs-dist） | 内嵌 WASM | Apache-2.0 / BSD-3-Clause / MIT 等（逐组件见 PDFJS-WASM-THIRD-PARTY.md） | 来源哈希已核对 |
 | Agent MCP bridge bundle（agent-bridge.mjs，内嵌 MCP SDK / zod 等 8 个 npm 包） | 0.1.3 | mcp-bridge-bundle | MIT / BSD-3-Clause / ISC（逐包见 upstream/agent-bridge/THIRD-PARTY.md） | 来源哈希未核对（原因见 inventory.json 的 source.reason） |
 
-本次未找到当前版本的安装器（只构建 --dir 时正常），安装器容器实物未登记。
+安装器容器（NSIS）由发布流程生成：其字节数与 SHA-256 记录在 Release 的 build-manifest.json 与 SHA256SUMS.txt；安装器内嵌本目录的完整副本，安装器内 legal/ 与仓库 legal/ 逐字节一致。NSIS stub 与插件的随包观测哈希见 legal/bundled.json 的 source.observed。
 
 ## 随包字体
 
@@ -160,17 +160,17 @@
 - Tesseract.js-core WASM（`bundled[]` 中 name「tesseract.js-core WASM（内嵌 Tesseract / Leptonica / libjpeg-turbo / libpng / libtiff / libwebp / giflib / openlibm / zlib）」、version「tesseract.js-core 7.0.0」）：内嵌 Tesseract、Leptonica、giflib、libjpeg-turbo、libpng、libtiff、libwebp、openlibm、zlib；说明见 `upstream/Tesseract-core-THIRD-PARTY.md`，原文见 `upstream/official/tesseract-core/`。其 Tesseract 来自 `naptha/tesseract.js-core` 为 WebAssembly 适配而修改的上游分支（本项目未修改该 WASM），修改清单与源码地址见 `upstream/official/tesseract-core/README.md`。
 - PDF.js WASM / 资源（`bundled[]` 中 name「PDF.js WASM 解码器（JBIG2 / OpenJPEG / QCMS）」、version 6.4.299（pdfjs-dist））：JBIG2、OpenJPEG、QCMS、CMaps、标准字体、ICC；说明见 `upstream/official/pdfjs-wasm/PDFJS-WASM-THIRD-PARTY.md`。
 - tesseract.js 预构建 dist：内嵌 buffer 6.0.3（MIT）、ieee754 1.2.1（BSD-3-Clause）、regenerator-runtime（MIT）、zlib.js（MIT）；buffer/ieee754 原文见 `upstream/official/tesseract-embedded/`。
-- NSIS 安装器 stub（`bundled[]` 中 name「NSIS 安装器 stub」、version 3.0.4.1）：安装器 stub 使用 NSIS 3.0.4.1（zlib/libpng license），许可证原文见 `upstream/official/nsis-COPYING.txt`。
+- NSIS 安装器 stub（`bundled[]` 中 name「NSIS 安装器 stub」、version NSIS 3.04）：安装器 stub 使用 NSIS **3.04**（由 electron-builder-binaries 重打包为包名 `nsis-3.0.4.1`，`makensis /VERSION` 实测 v3.04；zlib/libpng license），许可证原文见 `upstream/official/nsis-COPYING.txt`。
 - nsis7z.dll（`bundled[]` 中 name「nsis7z.dll」、version「19.00（Nsis7z 19.00，基于 7-Zip 19.00）」）：NSIS 的 7z 解压插件（安装时解压 app-64.7z），基于 7-Zip 19.00 源码（Nik Medved / Igor Pavlov）；按 7-Zip License（GNU LGPL-2.1+，含 unRAR 限制）分发。许可原文、来源与完整对应源码见 `upstream/official/nsis7z/`；实际随包 DLL 的来源包与 SHA-256 见该目录 `README.md`。
 - StdUtils.dll（`bundled[]` 中 name「StdUtils.dll」、version 1.1.4.0）：NSIS 插件（electron-builder 模板使用），作者 LoRd_MuldeR；按 GNU LGPL-2.1-or-later 分发，许可、澄清说明与完整对应源码见 `upstream/official/nsis-plugins/stdutils/`。
 - electron-builder / app-builder-lib 26.18.0：构建期使用其 NSIS 模板生成安装器（MIT，Copyright (c) 2015 Loopline Systems）；不随包分发其源码或二进制，但安装器脚本由其模板生成，声明见 `upstream/official/electron-builder-NOTICE.md` 与 `upstream/official/repos/electron-userland_electron-builder-LICENSE.txt`。
 - UAC.dll（`bundled[]` 中 name「UAC.dll」、version 0.2.4c）：NSIS 提权插件，作者 Anders；按 ZLIB/LIBPNG License 分发，许可与源码见 `upstream/official/nsis-plugins/uac/`；本安装器使用 electron-builder `nsis-resources-3.4.1` 的 `x86-unicode/UAC.dll`（14,848 字节，SHA-256 `2F7F8FC05DC4FD0D5CDA501B47E4433357E887BBFED7292C028D99C73B52DC08`），未修改。
-- elevate.exe（`bundled[]` 中 name「elevate.exe」、version「未标注（随 NSIS 3.0.4.1 / electron-builder nsis-resources 提供）」）：NSIS 提权辅助程序（MIT，Copyright (c) 2007 Johannes Passing），原文见 `upstream/official/elevate-MIT.txt`。
+- elevate.exe（`bundled[]` 中 name「elevate.exe」、version「Elevate 1.0.0.2894（随 NSIS 3.04 / electron-builder nsis-resources 3.4.1 提供）」）：NSIS 提权辅助程序（MIT，Copyright (c) 2007 Johannes Passing），原文见 `upstream/official/elevate-MIT.txt`。
 - FFmpeg（`runtime[]` 中 name「FFmpeg（Electron 内置 ffmpeg.dll）」）：Electron 内置 `ffmpeg.dll`（LGPL-2.1-or-later，Electron 官方构建，未修改）；许可证见 `upstream/official/ffmpeg-LGPL-2.1.txt`，**LGPL 2.1 §6(c) 书面源码要约**见 `upstream/official/ffmpeg-SOURCE-OFFER.md`（三年有效，接收方无需预先回应），构建说明见 `legal/COMPATIBILITY.md`。
 - Electron 运行时二进制（`runtime[]` 中 name「Electron 运行时二进制（第三方 DLL / ICU / Pak / V8 快照）」、version 44.5.1，`ffmpeg.dll`、`d3dcompiler_47.dll`、`dxcompiler.dll`、`dxil.dll`、`vulkan-1.dll`、`vk_swiftshader.dll`、`icudtl.dat` 等）：由 Electron/Chromium 发行物原样提供、本项目未修改；版权与许可声明随 `electron/LICENSE.txt` 与 `electron/LICENSES.chromium.html` 分发，补充说明见 `upstream/official/electron-runtime-dlls.md`。
 - pako 的 zlib 兼容层：zlib 许可通知见 `upstream/official/pako-zlib-README.txt`（`NOTICE.html` 也收录全文）。
 
-> 安装器**不随包分发 WinShell 插件**，但保留其行为：该插件上游只有 "Freeware" 标注、没有许可文本或源码，不构成再分发授权；构建期由 `scripts/patch-nsis-templates.mjs` 把调用改写为 `apps/desktop/build/nsis/aumid.nsh` 的宏（NSIS 自带 System 插件 + Windows 公开 API），快捷方式 AUMID 仍照常写入/清除。证据见 `upstream/official/nsis-plugins/winshell/README.md`。
+> 安装器**不随包分发、也不调用 WinShell 插件**：该插件上游只有 "Freeware" 标注、没有许可文本或源码，不构成再分发授权。本项目固定的 electron-builder / app-builder-lib 26.18.0 的 NSIS 模板中已**不存在任何 WinShell 调用**，`scripts/patch-nsis-templates.mjs` 作为幂等防回归措施仍保留：如模板再出现该调用，就改写成 `apps/desktop/build/nsis/aumid.nsh` 的宏（NSIS 自带 System 插件 + Windows 公开 API），快捷方式 AUMID 仍照常写入/清除。实测安装器内 `$PLUGINSDIR` 无 `WinShell.dll`。证据见 `upstream/official/nsis-plugins/winshell/README.md`。
 
 ## 强制署名与特别声明
 
@@ -181,10 +181,10 @@
 
 ## 运行时下载、不随包分发的资源
 
-- Tesseract 语言训练数据（eng、chi_sim、chi_tra、jpn、kor、deu、fra、rus 等）：不包含在 npm 包中，也不随本安装包分发；用户在本机 OCR 设置里选择语言并点「下载所选语言包」后，才由主进程从 Tesseract 官方 tessdata_fast 发行物按需下载（Apache-2.0，官方仓库 https://github.com/tesseract-ocr/tessdata_fast ）；下载先走官方 raw（https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/<语言代码>.traineddata），该域名不可达时回退 GitHub 官方 Contents API（https://api.github.com/repos/tesseract-ocr/tessdata_fast/contents/<语言代码>.traineddata?ref=main，Accept: application/vnd.github.raw），两者都是 HTTPS、同一仓库同一文件，不用第三方镜像；官方许可证原文见 legal/upstream/Tesseract-tessdata-APACHE-2.0.txt，来源与哈希见 legal/upstream/official/tessdata_fast-SOURCES.json；缓存在用户数据目录 ocr-tessdata/langs/，删除数据目录即移除；这是用户主动触发的数据下载（只取模型文件，不上传文献或问题），首次下载会向 GitHub 下载域名暴露 IP/时间；
+- Tesseract 语言训练数据（eng、chi_sim、chi_tra、jpn、kor、deu、fra、rus 等）：**不内置、不随包分发**（安装包与 asar 内 `*.traineddata` 为 0）；用户在本机 OCR 设置里选择语言并点「下载所选语言包」后，才由主进程从 Tesseract 官方 tessdata_fast 发行物按需下载（Apache-2.0，官方仓库 https://github.com/tesseract-ocr/tessdata_fast ）；下载先走官方 raw（https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/<语言代码>.traineddata），该域名不可达时回退 GitHub 官方 Contents API（https://api.github.com/repos/tesseract-ocr/tessdata_fast/contents/<语言代码>.traineddata?ref=main，Accept: application/vnd.github.raw），两者都是 HTTPS、同一仓库同一文件，不用第三方镜像；官方许可证原文见 legal/upstream/Tesseract-tessdata-APACHE-2.0.txt，来源与许可证哈希见 legal/upstream/official/tessdata_fast-SOURCES.json；缓存在用户数据目录 ocr-tessdata/langs/，删除数据目录即移除；这是用户主动触发的数据下载（只取模型文件，不上传文献或问题），首次下载会向 GitHub 下载域名暴露 IP/时间；该下载属于用户从上游获取数据，本项目未随包再分发训练数据；已知加固项：下载内容目前只做 >100KB 完整性判断、未做哈希/签名校验，且上游 ref 为可变的 `main`（不构成许可缺失，但属供应链加固项）；
 - electron-builder / app-builder-lib 26.18.0（MIT）：仅构建期使用，安装器 NSIS 脚本由其模板生成；不随包分发其源码或构建二进制。声明见 legal/upstream/official/electron-builder-NOTICE.md 与 legal/upstream/official/repos/electron-userland_electron-builder-LICENSE.txt；
 - Tesseract.js-core 的 WASM 内嵌 Tesseract、Leptonica、giflib、libjpeg、libpng、libtiff、libwebp、openlibm、zlib；官方许可证已补入 legal/upstream/official/tesseract-core/，说明见 legal/upstream/Tesseract-core-THIRD-PARTY.md；其 Tesseract 为 naptha/tesseract.js-core 为 WebAssembly 适配而修改的上游分支（本项目未修改该 WASM），修改清单见 legal/upstream/official/tesseract-core/README.md；
-- @napi-rs/canvas 原生二进制（Node-API native addon）包含 Skia、ICU 和 Rust 组件；SBOM 与 Skia/ICU/MPL/各 Rust 组件许可证已补入 legal/upstream/official/napi-canvas/，SBOM 142 个组件的许可证类型已全部映射（0 个未覆盖）；具体版权行见该目录下对应组件原文；其中 MPL-2.0 组件（cssparser 0.38.0、cssparser-macros 0.7.0、dtoa-short 0.3.5、selectors 0.41.0）的源码可从 https://github.com/servo/rust-cssparser 、https://github.com/upsuper/dtoa-short 、https://github.com/servo/stylo 获取，许可证原文见 legal/upstream/official/napi-canvas/MPL-2.0.txt；
+- @napi-rs/canvas 原生二进制（Node-API native addon）包含 Skia、ICU 和 Rust 组件；SBOM 与 Skia/ICU/MPL/各 Rust 组件许可证已补入 legal/upstream/official/napi-canvas/，SBOM 142 个组件均已给出许可证认定；其中上游 SBOM 自身有 9 个组件 license 字段为空（skia 二进制、canvas、skia-fontations、clap 系列、anstyle、strsim、cxxbridge-cmd），已由本项目在 `COMPONENTS.json` 补注，依据与原文见 `NAPI-CANVAS-THIRD-PARTY.md`；具体版权行见该目录下对应组件原文；其中 MPL-2.0 组件（cssparser 0.38.0、cssparser-macros 0.7.0、dtoa-short 0.3.5、selectors 0.41.0）的源码可从 https://github.com/servo/rust-cssparser 、https://github.com/upsuper/dtoa-short 、https://github.com/servo/stylo 获取，许可证原文见 legal/upstream/official/napi-canvas/MPL-2.0.txt；
 - PDF.js 的 WASM 解码组件（JBIG2、OpenJPEG、QCMS）以及 CMaps、标准字体、ICC 随应用分发；它们属于 pdfjs-dist 包内资源，不是新增 npm 依赖，许可证和版权声明见 legal/upstream/official/pdfjs-wasm/；
 
 ## 清单范围
@@ -194,6 +194,8 @@
 ## 说明
 
 - 许可证文件来自安装包内的实际文件；缺失项用 `legal/upstream/` 中的上游原文补充，并在 `inventory.json` 标记来源；
+- **补充文本（非上游原文）已明确标注**：`abstract-logging@2.0.1` 上游仓库与 npm 包内均无独立 LICENSE 文件、仅在 README 声明 MIT，`legal/upstream/AbstractLogging-MIT.txt` 是按该声明补充的 MIT 文本；`lazy-val@1.0.5` 同理（`legal/upstream/LazyVal-MIT.txt`）；`tr46@0.0.3` 的 MIT 原文来自其官方仓库 LICENSE.md（见 `SOURCES.md`）；
+- 安装器容器与 NSIS stub/插件本体不单独存放在仓库：安装器容器的字节数与 SHA-256 由发布流程记录在 `build-manifest.json` / `SHA256SUMS.txt`；插件的随包观测哈希记录在 `inventory.json` 的 `source.observed`，并与 electron-builder 官方固定校验和的工具包交叉核对（属 B 级证据；上游未发布独立哈希的条目仍标 `verified:false` 并写明原因）；
 - `legal/SOURCES.md` 记录每个组件的官方仓库地址、许可证文件哈希与非 npm 组件的随包实物哈希；
 - 非 npm 组件的 `bytes`/`sha256` 由 `scripts/audit-packaged-legal.mjs` 从仓库工作区内的实际文件现算，不手写、不编造；`source.verified: false` 的条目在 `source.reason` 写明无法核对的原因；
 - 官方仓库许可证原文证据保存在 `legal/upstream/official/repos/`；

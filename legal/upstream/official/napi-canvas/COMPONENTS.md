@@ -6,7 +6,7 @@
 
 | 组件 | 版本 | 许可证 | 官方来源 |
 |---|---|---|---|
-| skia.win32-x64-msvc.node |  | 未标注 | [crates](pkg:npm/%40napi-rs/canvas-win32-x64-msvc@1.0.13#skia.win32-x64-msvc.node) |
+| skia.win32-x64-msvc.node |  | BSD-3-Clause | [crates](pkg:npm/%40napi-rs/canvas-win32-x64-msvc@1.0.13#skia.win32-x64-msvc.node) |
 | aho-corasick | 1.1.4 | Unlicense OR MIT | [github:BurntSushi/aho-corasick](https://github.com/BurntSushi/aho-corasick) / [crates](https://crates.io/crates/aho-corasick/1.1.4) |
 | anstyle | 1.0.14 | MIT OR Apache-2.0 | [github:rust-cli/anstyle.git](https://github.com/rust-cli/anstyle.git) / [crates](https://crates.io/crates/anstyle/1.0.14) |
 | anyhow | 1.0.104 | MIT OR Apache-2.0 | [github:dtolnay/anyhow](https://github.com/dtolnay/anyhow) / [crates](https://crates.io/crates/anyhow/1.0.104) |
@@ -15,7 +15,7 @@
 | bumpalo | 3.20.3 | MIT OR Apache-2.0 | [github:fitzgen/bumpalo](https://github.com/fitzgen/bumpalo) / [crates](https://crates.io/crates/bumpalo/3.20.3) |
 | bytemuck | 1.25.2 | Zlib OR Apache-2.0 OR MIT | [github:Lokathor/bytemuck](https://github.com/Lokathor/bytemuck) / [crates](https://crates.io/crates/bytemuck/1.25.2) |
 | bytemuck_derive | 1.12.1 | Zlib OR Apache-2.0 OR MIT | [github:Lokathor/bytemuck](https://github.com/Lokathor/bytemuck) / [crates](https://crates.io/crates/bytemuck_derive/1.12.1) |
-| canvas | 0.1.0 | 未标注 | [crates](https://crates.io/crates/canvas/0.1.0) |
+| canvas | 0.1.0 | MIT | [crates](https://crates.io/crates/canvas/0.1.0) |
 | cc | 1.4.0 | MIT OR Apache-2.0 | [github:rust-lang/cc-rs](https://github.com/rust-lang/cc-rs) / [crates](https://crates.io/crates/cc/1.4.0) |
 | cfb | 0.14.0 | MIT | [github:mdsteele/rust-cfb](https://github.com/mdsteele/rust-cfb) / [crates](https://crates.io/crates/cfb/0.14.0) |
 | cfg-if | 1.0.4 | MIT OR Apache-2.0 | [github:rust-lang/cfg-if](https://github.com/rust-lang/cfg-if) / [crates](https://crates.io/crates/cfg-if/1.0.4) |
@@ -108,7 +108,7 @@
 | servo_arc | 0.5.0 | MIT OR Apache-2.0 | [github:servo/stylo](https://github.com/servo/stylo) / [crates](https://crates.io/crates/servo_arc/0.5.0) |
 | shlex | 2.0.1 | MIT OR Apache-2.0 | [github:comex/rust-shlex](https://github.com/comex/rust-shlex) / [crates](https://crates.io/crates/shlex/2.0.1) |
 | siphasher | 1.0.3 | MIT/Apache-2.0 | [github:jedisct1/rust-siphash](https://github.com/jedisct1/rust-siphash) / [crates](https://crates.io/crates/siphasher/1.0.3) |
-| skia-fontations | 0.0.0 | 未标注 | [crates](https://crates.io/crates/skia-fontations/0.0.0) |
+| skia-fontations | 0.0.0 | Apache-2.0 | [crates](https://crates.io/crates/skia-fontations/0.0.0) |
 | skrifa | 0.43.2 | MIT OR Apache-2.0 | [github:googlefonts/fontations](https://github.com/googlefonts/fontations) / [crates](https://crates.io/crates/skrifa/0.43.2) |
 | slab | 0.4.12 | MIT | [github:tokio-rs/slab](https://github.com/tokio-rs/slab) / [crates](https://crates.io/crates/slab/0.4.12) |
 | smallvec | 1.15.2 | MIT OR Apache-2.0 | [github:servo/rust-smallvec](https://github.com/servo/rust-smallvec) / [crates](https://crates.io/crates/smallvec/1.15.2) |

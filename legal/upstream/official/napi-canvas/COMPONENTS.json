@@ -4,9 +4,10 @@
     {
       "name": "skia.win32-x64-msvc.node",
       "purl": "pkg:npm/%40napi-rs/canvas-win32-x64-msvc@1.0.13#skia.win32-x64-msvc.node",
-      "license": "",
+      "license": "BSD-3-Clause",
       "repository": "",
-      "source": "pkg:npm/%40napi-rs/canvas-win32-x64-msvc@1.0.13#skia.win32-x64-msvc.node"
+      "source": "pkg:npm/%40napi-rs/canvas-win32-x64-msvc@1.0.13#skia.win32-x64-msvc.node",
+      "licenseSource": "本项目补注（上游 SBOM 该组件 license 字段为空；依据见 NAPI-CANVAS-THIRD-PARTY.md）"
     },
     {
       "name": "aho-corasick",
@@ -20,9 +21,10 @@
       "name": "anstyle",
       "version": "1.0.14",
       "purl": "pkg:cargo/anstyle@1.0.14",
-      "license": "",
+      "license": "MIT OR Apache-2.0",
       "repository": "https://github.com/rust-cli/anstyle.git",
-      "source": "https://crates.io/crates/anstyle/1.0.14"
+      "source": "https://crates.io/crates/anstyle/1.0.14",
+      "licenseSource": "本项目补注（上游 SBOM 该组件 license 字段为空；依据见 NAPI-CANVAS-THIRD-PARTY.md）"
     },
     {
       "name": "anyhow",
@@ -76,9 +78,10 @@
       "name": "canvas",
       "version": "0.1.0",
       "purl": "pkg:cargo/canvas@0.1.0",
-      "license": "",
+      "license": "MIT",
       "repository": "",
-      "source": "https://crates.io/crates/canvas/0.1.0"
+      "source": "https://crates.io/crates/canvas/0.1.0",
+      "licenseSource": "本项目补注（上游 SBOM 该组件 license 字段为空；依据见 NAPI-CANVAS-THIRD-PARTY.md）"
     },
     {
       "name": "cc",
@@ -108,25 +111,28 @@
       "name": "clap",
       "version": "4.6.7",
       "purl": "pkg:cargo/clap@4.6.7",
-      "license": "",
+      "license": "MIT OR Apache-2.0",
       "repository": "https://github.com/clap-rs/clap",
-      "source": "https://crates.io/crates/clap/4.6.7"
+      "source": "https://crates.io/crates/clap/4.6.7",
+      "licenseSource": "本项目补注（上游 SBOM 该组件 license 字段为空；依据见 NAPI-CANVAS-THIRD-PARTY.md）"
     },
     {
       "name": "clap_builder",
       "version": "4.6.7",
       "purl": "pkg:cargo/clap_builder@4.6.7",
-      "license": "",
+      "license": "MIT OR Apache-2.0",
       "repository": "https://github.com/clap-rs/clap",
-      "source": "https://crates.io/crates/clap_builder/4.6.7"
+      "source": "https://crates.io/crates/clap_builder/4.6.7",
+      "licenseSource": "本项目补注（上游 SBOM 该组件 license 字段为空；依据见 NAPI-CANVAS-THIRD-PARTY.md）"
     },
     {
       "name": "clap_lex",
       "version": "1.1.1",
       "purl": "pkg:cargo/clap_lex@1.1.1",
-      "license": "",
+      "license": "MIT OR Apache-2.0",
       "repository": "https://github.com/clap-rs/clap",
-      "source": "https://crates.io/crates/clap_lex/1.1.1"
+      "source": "https://crates.io/crates/clap_lex/1.1.1",
+      "licenseSource": "本项目补注（上游 SBOM 该组件 license 字段为空；依据见 NAPI-CANVAS-THIRD-PARTY.md）"
     },
     {
       "name": "cmake",
@@ -212,9 +218,10 @@
       "name": "cxxbridge-cmd",
       "version": "1.0.205",
       "purl": "pkg:cargo/cxxbridge-cmd@1.0.205",
-      "license": "",
+      "license": "MIT OR Apache-2.0",
       "repository": "https://github.com/dtolnay/cxx",
-      "source": "https://crates.io/crates/cxxbridge-cmd/1.0.205"
+      "source": "https://crates.io/crates/cxxbridge-cmd/1.0.205",
+      "licenseSource": "本项目补注（上游 SBOM 该组件 license 字段为空；依据见 NAPI-CANVAS-THIRD-PARTY.md）"
     },
     {
       "name": "cxxbridge-flags",
@@ -820,9 +827,10 @@
       "name": "skia-fontations",
       "version": "0.0.0",
       "purl": "pkg:cargo/skia-fontations@0.0.0",
-      "license": "",
+      "license": "Apache-2.0",
       "repository": "",
-      "source": "https://crates.io/crates/skia-fontations/0.0.0"
+      "source": "https://crates.io/crates/skia-fontations/0.0.0",
+      "licenseSource": "本项目补注（上游 SBOM 该组件 license 字段为空；依据见 NAPI-CANVAS-THIRD-PARTY.md）"
     },
     {
       "name": "skrifa",
@@ -860,9 +868,10 @@
       "name": "strsim",
       "version": "0.11.1",
       "purl": "pkg:cargo/strsim@0.11.1",
-      "license": "",
+      "license": "MIT",
       "repository": "https://github.com/rapidfuzz/strsim-rs",
-      "source": "https://crates.io/crates/strsim/0.11.1"
+      "source": "https://crates.io/crates/strsim/0.11.1",
+      "licenseSource": "本项目补注（上游 SBOM 该组件 license 字段为空；依据见 NAPI-CANVAS-THIRD-PARTY.md）"
     },
     {
       "name": "syn",

@@ -1,6 +1,6 @@
 # electron-builder / app-builder-lib（构建期组件）
 
-安装包 `Studianda-Setup-*.exe` 由 **electron-builder 26.18.0**（含 `app-builder-lib` 26.18.0）的 NSIS 目标生成。本项目在构建期使用其 NSIS 模板，并用 `scripts/patch-nsis-templates.mjs` 将 WinShell 插件调用改写为项目自己的 `apps/desktop/build/nsis/aumid.nsh`。
+安装包 `Studianda-Setup-*.exe` 由 **electron-builder 26.18.0**（含 `app-builder-lib` 26.18.0）的 NSIS 目标生成。本项目在构建期使用其 NSIS 模板；当前 pinned 版本的模板不含 WinShell 调用，`scripts/patch-nsis-templates.mjs` 仅作为幂等防回归措施保留（若模板再出现调用，则改写为项目自己的 `apps/desktop/build/nsis/aumid.nsh`）。
 
 - 许可证：MIT License
 - 版权：Copyright (c) 2015 Loopline Systems；作者 Vladimir Krivosheev 及贡献者

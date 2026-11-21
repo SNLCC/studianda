@@ -22,7 +22,7 @@
 | Node.js | MIT | 保留 `runtime/Node-LICENSE.txt` |
 | electron-builder / app-builder-lib | MIT | 构建期 NSIS 模板；安装器脚本由其模板生成；保留 `upstream/official/electron-builder-NOTICE.md` 与 LICENSE |
 | FFmpeg（Electron 内置） | LGPL-2.1-or-later | 保留许可；源码与构建配置见 Electron 官方；书面源码要约见 `upstream/official/ffmpeg-SOURCE-OFFER.md` |
-| NSIS 安装器 stub | zlib/libpng | 保留许可声明 |
+| NSIS 安装器 stub | zlib/libpng | NSIS 3.04（electron-builder-binaries 重打包包名 nsis-3.0.4.1）；保留许可声明 |
 | StdUtils（NSIS 插件） | LGPL-2.1-or-later + 作者澄清 | 版本 1.1.4.0；逐字使用 DLL；保留许可、澄清、源码、DLL 哈希 |
 | UAC（NSIS 插件） | ZLIB/LIBPNG | 保留许可、来源与源码 |
 | nsis7z / 7-Zip | 7-Zip License（GNU LGPL-2.1+ 为主，含 unRAR 限制） | 保留许可；随包提供完整对应源码；记录随包 DLL 来源与哈希 |
@@ -63,17 +63,20 @@ MPL-2.0 §3.2(b) 要求可执行形式的条款不得限制接收方对源码的
 ## 快捷方式 AppUserModelID：WinShell 已由本项目脚本实现替代
 
 `WinShell.dll` 的上游页面只标注 "License: Freeware"，官方发行包内只有两个 DLL，没有许可文本、
-没有源码 —— 不构成再分发授权。electron-builder 的 NSIS 模板原本调用
+没有源码 —— 不构成再分发授权。历史上 electron-builder 的 NSIS 模板曾调用
 `WinShell::SetLnkAUMI` / `WinShell::UninstShortcut` / `WinShell::UninstAppUserModelId`，
 从而把该 DLL 嵌进安装器。
 
-本项目**不再随包分发该 DLL**，但**保留了原行为**：`scripts/patch-nsis-templates.mjs` 在打包前把
-这些调用改写为 `apps/desktop/build/nsis/aumid.nsh` 里的宏；该宏用 NSIS 自带的 System 插件与官方
+本项目**不随包分发、也不调用该 DLL**，但**保留了原行为**：本项目固定的
+electron-builder / app-builder-lib **26.18.0** 的 NSIS 模板中已不存在任何 `WinShell` 调用；
+`scripts/patch-nsis-templates.mjs` 作为**幂等防回归措施**保留：一旦模板再次出现该调用，就改写为
+`apps/desktop/build/nsis/aumid.nsh` 里的宏；该宏用 NSIS 自带的 System 插件与官方
 `Win\COM.nsh` / `Win\Propkey.nsh` 定义，调用 Windows 公开 API（`CLSID_ShellLink` →
 `IPersistFile` → `IPropertyStore` → `PKEY_AppUserModel_ID`）写入/清除快捷方式属性，并调用
 `IPersistFile::Save` 落盘。
 
-- 不包含任何第三方插件，也没有自编译 DLL：全部是安装器脚本；
+- 不包含任何第三方插件，也没有自编译 DLL：全部是安装器脚本；对 2026-11-21 构建的
+  `Studianda-Setup-0.1.3.exe` 用 7-Zip 实测 `$PLUGINSDIR`，其中**没有 `WinShell.dll`**；
 - 安装时仍会像以前一样，在开始菜单/桌面快捷方式上写入 `com.studianda.app` 这个 AUMID；
 - 卸载与快捷方式迁移时仍会清除旧快捷方式的该属性；
 - 应用启动时也仍调用 `app.setAppUserModelId(...)`，与快捷方式属性一致。

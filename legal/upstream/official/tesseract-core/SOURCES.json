@@ -55,5 +55,10 @@
       "sha256": "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2",
       "size": 1002
     }
+  ],
+  "limitations": [
+    "URLs were captured on 2026-10-28 from upstream master/main branches (license text files), not from commit/tag-pinned URLs; the sha256 values anchor the captured bytes. This is evidence level B/C.",
+    "These are license/copyright texts only; they are not sources of the compiled WASM. tesseract.js-core README describes the upstream modifications to Tesseract.",
+    "Tesseract upstream has no NOTICE file, so Apache-2.0 section 4(d) is not triggered; the Apache-2.0 license text is shipped."
   ]
 }

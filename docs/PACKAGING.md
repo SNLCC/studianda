@@ -152,7 +152,7 @@ apps/desktop/release/win-unpacked/Studianda.exe
 - 安装包通过 `extraResources` 携带**完整**的法律文件集合：`LICENSE`、`NOTICE`、`legal/`（第三方清单、许可证原文、Electron/Chromium/Node 声明）与 `legal/USAGE-NOTICE.md`（完整版使用须知）；
 - 源码仓库同样保留**完整**集合：`LICENSE`、`NOTICE`、`legal/` 与 `docs/USAGE-NOTICE.md`；安装包与仓库不是互补关系，两侧各自都应完整且内容一致；
 - `pnpm check:legal` 校验仓库内部一致性；`scripts/package.mjs` 在写出 build-manifest 后会自动以 `--package` 再跑一次，逐文件比对安装包与仓库两侧集合，缺项或内容不一致会让打包失败。
-- `electron-builder` 在构建时下载的 `7za.exe` 只用于生成产物，**不进入** `app.asar`、`resources/` 或安装包；但 NSIS 安装器内嵌了运行期解压插件 `nsis7z.dll`（基于 7-Zip 源码）及 StdUtils/UAC/WinShell 等 NSIS 插件，它们会随安装包分发。`legal/upstream/official/nsis7z/` 与 `legal/upstream/official/nsis-plugins/` 因此必须保留各自的许可、来源与源码；兼容性说明见 `legal/COMPATIBILITY.md`。
+- `electron-builder` 在构建时下载的 `7za.exe` 只用于生成产物，**不进入** `app.asar`、`resources/` 或安装包；但 NSIS 安装器内嵌了运行期解压插件 `nsis7z.dll`（基于 7-Zip 源码）及 StdUtils/UAC 等 NSIS 插件，它们会随安装包分发。`legal/upstream/official/nsis7z/` 与 `legal/upstream/official/nsis-plugins/` 因此必须保留各自的许可、来源与源码；兼容性说明见 `legal/COMPATIBILITY.md`。WinShell 既不随包也不被调用（见下文）。
 
 ## 安装与资料位置
 
@@ -182,13 +182,15 @@ apps/desktop/release/win-unpacked/Studianda.exe
 
 ## 安装器插件许可（WinShell 已由脚本实现替代）
 
-electron-builder 的 NSIS 模板默认会在创建/迁移快捷方式时调用 `WinShell::SetLnkAUMI`、
+electron-builder 的**旧版本** NSIS 模板曾在创建/迁移快捷方式时调用 `WinShell::SetLnkAUMI`、
 `WinShell::UninstShortcut` 与 `WinShell::UninstAppUserModelId`，从而把 `WinShell.dll` 嵌进
 安装包。该插件上游只有 "Freeware" 标注，官方发行包 `WinShell.zip` 内只有两个 DLL，没有许可文本、
 没有源码，**不构成再分发授权**。
 
-本项目不再随包分发该 DLL，但保留原行为：`scripts/package.mjs` 在编译 NSIS 之前运行
-`scripts/patch-nsis-templates.mjs`，把上述调用改写为 `apps/desktop/build/nsis/aumid.nsh` 里的宏。
+本项目固定的 electron-builder / app-builder-lib **26.18.0** 的模板中已不存在任何 `WinShell` 调用，
+安装包既不内嵌也不调用该 DLL（7-Zip 实测 0.1.3 安装器 `$PLUGINSDIR` 无 `WinShell.dll`）。
+`scripts/package.mjs` 在编译 NSIS 之前仍运行 `scripts/patch-nsis-templates.mjs` 作为**幂等防回归**：
+若模板再次出现上述调用，就改写为 `apps/desktop/build/nsis/aumid.nsh` 里的宏。
 该宏用 NSIS 自带的 System 插件与官方 `Win\COM.nsh` / `Win\Propkey.nsh` 定义，调用 Windows 公开
 API（`CLSID_ShellLink` → `IPersistFile` → `IPropertyStore` → `PKEY_AppUserModel_ID`）写入/清除
 快捷方式属性，并调用 `IPersistFile::Save` 落盘。改写脚本幂等，可单独执行：

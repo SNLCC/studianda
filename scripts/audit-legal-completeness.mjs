@@ -12,6 +12,7 @@
  * Electron/Chromium/Node 运行时、字体等非 npm 来源按显式分类跳过（见 6.5 节）。
  */
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -189,6 +190,35 @@ if (existsSync(sevenZipLicenseText)) {
   for (const needle of ['GNU LGPL', 'unRAR license restriction']) {
     if (!text.includes(needle)) fail(`${nsis7zDir}/LICENSE.txt 缺少「${needle}」说明`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// 1.7) legal/ 必须只由 Git 跟踪的文件组成：未跟踪/被忽略的文件会进入安装包（legal/ 被整体
+//      复制为 extraResources），却不出现在源码发行物（git archive）里，造成两侧不一致，
+//      并可能带入未登记来源的第三方二进制（例如上游源码树里的构建工具 .exe）。
+// ---------------------------------------------------------------------------
+try {
+  const listLegal = (args) => {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+    if (result.status !== 0) return [];
+    return (result.stdout ?? '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+  };
+  const strayLegalFiles = [
+    ...listLegal(['ls-files', '--others', '--exclude-standard', '--', 'legal/']),
+    ...listLegal(['ls-files', '--others', '--ignored', '--exclude-standard', '--', 'legal/'])
+  ];
+  if (strayLegalFiles.length > 0) {
+    fail(
+      `legal/ 下存在 ${strayLegalFiles.length} 个未纳入 Git 的文件（会随安装包分发但不在源码发行物中）：` +
+        strayLegalFiles.slice(0, 10).join('、') +
+        (strayLegalFiles.length > 10 ? ' 等' : '')
+    );
+  }
+} catch {
+  // 非 Git 工作区（例如只拿到源码 zip）跳过；安装包侧的一致性仍由 --package 检查覆盖。
 }
 
 // ---------------------------------------------------------------------------

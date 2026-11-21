@@ -21,6 +21,8 @@
 
 ## 未标注组件的许可证认定
 
+上游 `sbom.cdx.json`（由 `@napi-rs/canvas` 官方生成）中有 **9 个组件的 `licenses` 字段为空**；本目录的 `COMPONENTS.json` 已由本项目按下列依据补注（保留 `licenseSource` 字段说明其为补注值，上游 SBOM 文件本身未改动）。`audit-napi-canvas-sbom.mjs` 以同一映射统计，故“142/142 已认定”指**本项目补注后的认定**，不是上游 SBOM 的原始字段完整率。
+
 | SBOM 组件 | 认定许可证 | 依据 |
 |---|---|---|
 | `skia.win32-x64-msvc.node` | BSD-3-Clause（Skia） | `Skia-LICENSE.txt` |

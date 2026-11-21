@@ -80,9 +80,9 @@ win:
     - nsis
 nsis:
   license: build/INSTALLER-NOTICE.txt
-  # 用本项目自己的脚本实现替换 electron-builder 模板里的 WinShell 插件调用
-  # （WinShell 上游无许可文本，不能随包再分发）。见 build/nsis/aumid.nsh
-  # 与 scripts/patch-nsis-templates.mjs。
+  # WinShell 上游无许可文本，不能随包再分发。当前固定的 app-builder-lib 26.18.0 模板
+  # 已不再调用该插件；scripts/patch-nsis-templates.mjs 作为幂等防回归，若模板再出现调用
+  # 就改写为 build/nsis/aumid.nsh 的宏。见 build/nsis/aumid.nsh。
   include: nsis/aumid.nsh
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico

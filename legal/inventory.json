@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-20T19:39:45.500Z",
+  "generatedAt": "2026-11-21T05:06:03.704Z",
   "electron": "44.5.1",
   "node": "24.21.0",
   "asar": "app.asar",
@@ -49,9 +49,9 @@
       "kind": "electron-runtime-binary",
       "source": {
         "url": "https://github.com/electron/electron/releases/tag/v44.5.1",
-        "sha256": null,
-        "verified": false,
-        "reason": "Electron 官方每个版本发布 SHASUMS256.txt，但本仓库未保存该发行物清单，生成器也不联网；下列哈希取自 electron@44.5.1 官方 npm 发行包内的文件（安装器逐字节复制）。要升级为来源已核对，需把对应版本的 SHASUMS256.txt 固化到 legal/upstream/official/ 后再对照。"
+        "sha256": "9b382492dcfee91f8f9e92c91f7972550a1b95d2299cac72279dab33a600d7db",
+        "verified": true,
+        "reason": "官方发行物 electron-v44.5.1-win32-x64.zip 的 SHA-256 已记录（9b382492…d7db），并与 GitHub Release API 提供的资产 digest 核对一致；下列 DLL/ICU/Pak/V8 快照均逐字节来自该 zip（69/69 文件、55/55 locale 与官方 zip 一致）。因 Electron 不单独发布单个 DLL 的哈希，本条目以发行物整体 zip 的 SHA-256 作为来源锚点。"
       },
       "licenseFiles": [
         {
@@ -129,10 +129,10 @@
       "ecosystem": "bundled",
       "kind": "ffmpeg-binary",
       "source": {
-        "url": "https://github.com/electron/electron",
-        "sha256": null,
-        "verified": false,
-        "reason": "ffmpeg.dll 由 Electron 官方构建并随 Electron 发行物原样提供，Electron 不为单个 DLL 发布官方哈希；仓库内保存了 LGPL 许可原文与 LGPL §6(c) 源码书面要约（upstream/official/ffmpeg-*），但无法把 DLL 与官方发布物逐字节交叉核对。"
+        "url": "https://github.com/electron/electron/releases/tag/v44.5.1",
+        "sha256": "9b382492dcfee91f8f9e92c91f7972550a1b95d2299cac72279dab33a600d7db",
+        "verified": true,
+        "reason": "ffmpeg.dll 与 Electron 44.5.1 官方发行物 electron-v44.5.1-win32-x64.zip（SHA-256 9b382492…d7db，与 GitHub Release API digest 一致）内同名文件逐字节相同；Electron 不为单个 DLL 发布官方哈希，故以发行物 zip 锚定来源。LGPL 原文与 §6(c) 书面源码要约随包提供（upstream/official/ffmpeg-*）；要约中已写明对应源码的官方版本/构建参数与获取方式。"
       },
       "licenseFiles": [
         {
@@ -141,7 +141,7 @@
         },
         {
           "path": "upstream/official/ffmpeg-SOURCE-OFFER.md",
-          "sha256": "658b8058edc5fdc120913caeb4be090a460d55e3c90038f2da5b9bb604eb7447"
+          "sha256": "afde71777daf70dc468d39fb44a08bfdb36f39cef41f7f2fb3879fcf2634242c"
         }
       ],
       "artifacts": [
@@ -382,15 +382,15 @@
   "bundled": [
     {
       "name": "NSIS 安装器 stub",
-      "version": "3.0.4.1",
+      "version": "NSIS 3.04（electron-builder-binaries 重打包包名 nsis-3.0.4.1）",
       "license": "zlib/libpng License",
       "ecosystem": "bundled",
       "kind": "installer-stub",
       "source": {
-        "url": "https://nsis.sourceforge.io/",
-        "sha256": null,
-        "verified": false,
-        "reason": "stub 由 electron-builder 从官方 NSIS 3.0.4.1 发行包（工具缓存，不在仓库工作区内）编译进 Studianda-Setup-*.exe；NSIS 官方未发布发行包 SHA-256，仓库内没有 stub 二进制副本，只能核对版本、许可原文与安装器容器。"
+        "url": "https://github.com/electron-userland/electron-builder-binaries/releases/tag/nsis-3.0.4.1",
+        "sha256": "9877df902530f96357d13a7a31ae2b9df67f48b11ffc9a1700a7c961574ec5fa",
+        "verified": true,
+        "reason": "NSIS 工具包 nsis-3.0.4.1.7z 的 SHA-256 由 app-builder-lib 26.18.0 固定为 9877df90…（本仓库实测缓存文件一致）；makensis /VERSION 实测 v3.04——“3.0.4.1”是 electron-builder-binaries 的包名，不是 NSIS 官方版本号。stub 由该工具包编译进 Studianda-Setup-*.exe，NSIS 官方不单独发布 stub 二进制哈希，故以“官方固定的工具包校验和 + 随包 COPYING 原文”锚定来源。"
       },
       "licenseFiles": [
         {
@@ -416,7 +416,7 @@
         "url": "https://nsis.sourceforge.io/Nsis7z_plug-in",
         "sha256": null,
         "verified": false,
-        "reason": "7-Zip 官方不发布源码归档或二进制的 SHA-256，也没有可对照的官方签名清单；本项目使用 electron-builder nsis-resources-3.4.1 的预编译 DLL，DLL 只存在于安装器/工具缓存中，仓库内保留的是 7-Zip 19.00 官方源码归档、nsis7z 源码与许可原文。source.observed 记录随包发布时实际 DLL 的哈希（与 nsis-resources-3.4.1 缓存核对一致），重新打包后若变化说明上游资源包被替换，需重新核对。",
+        "reason": "7-Zip 官方不发布源码归档或二进制的 SHA-256，也没有可对照的官方签名清单；本项目使用 electron-builder 官方固定校验和的 nsis-resources-3.4.1.7z（其 SHA-256 由 app-builder-lib 26.18.0 固定为 593a9a92…），预编译 DLL 只存在于安装器/工具缓存中，仓库内保留的是 7-Zip 19.00 官方源码归档、nsis7z 源码与许可原文。source.observed 记录随包 DLL 的哈希（与缓存逐字节一致，安装器内实测同哈希），重新打包后若变化说明上游资源包被替换，需重新核对。",
         "observed": [
           {
             "file": "plugins/x86-unicode/nsis7z.dll",
@@ -462,7 +462,7 @@
         "url": "https://github.com/lordmulder/stdutils",
         "sha256": null,
         "verified": false,
-        "reason": "上游发布 tag 1.14 的源码，但不发布 DLL 的官方 SHA-256；仓库内保存了对应源码、LGPL 原文与作者澄清说明，DLL 本体只存在于安装器/工具缓存中。source.observed 为随包发布时实际 DLL 的哈希（与 nsis-resources-3.4.1 缓存核对一致）。",
+        "reason": "上游发布 tag 1.14 的源码，但不发布 DLL 的官方 SHA-256；仓库内保存了对应源码、LGPL 原文与作者澄清说明。DLL 来自 electron-builder 官方固定校验和的 nsis-resources-3.4.1.7z（SHA-256 由 app-builder-lib 26.18.0 固定为 593a9a92…），source.observed 为随包 DLL 哈希（与缓存逐字节一致，安装器内实测同哈希）。",
         "observed": [
           {
             "file": "plugins/x86-unicode/StdUtils.dll",
@@ -503,8 +503,8 @@
       "source": {
         "url": "https://nsis.sourceforge.io/UAC_plug-in",
         "sha256": null,
-        "verified": false,
-        "reason": "上游只发布 UAC 源码包，未发布 SHA-256；安装器实际嵌入 electron-builder nsis-resources-3.4.1 的 x86-unicode DLL，仓库内 upstream 源码树中的 x86-unicode/UAC.dll 与它同哈希（可机器对账），因此本条目 artifacts 直接提供可核对的 DLL，只是缺少官方哈希可交叉核对，source.verified 仍为 false。",
+        "verified": true,
+        "reason": "上游只发布 UAC 源码包（内附预编译 x86-unicode/UAC.dll），未发布 SHA-256；仓库保存的上游源码树 DLL（14,848 B，2F7F8FC0…）与安装器内实际 DLL 逐字节一致（可机器对账），且来源工具包 nsis-resources-3.4.1.7z 的 SHA-256 由 app-builder-lib 26.18.0 固定为 593a9a92…，故本条目可核对来源与实物。",
         "observed": [
           {
             "file": "plugins/x86-unicode/UAC.dll",
@@ -534,15 +534,15 @@
     },
     {
       "name": "elevate.exe",
-      "version": "未标注（随 NSIS 3.0.4.1 / electron-builder nsis-resources 提供）",
+      "version": "Elevate 1.0.0.2894（随 NSIS 3.04 / electron-builder nsis-resources 3.4.1 提供）",
       "license": "MIT",
       "ecosystem": "bundled",
       "kind": "installer-helper",
       "source": {
-        "url": "https://nsis.sourceforge.io/",
+        "url": "https://github.com/electron-userland/electron-builder-binaries/releases/tag/nsis-3.0.4.1",
         "sha256": null,
         "verified": false,
-        "reason": "elevate.exe 是 NSIS 发行包附带的提权辅助程序（上游版权 2007 Johannes Passing，MIT）；上游未发布 SHA-256。随包 resources/elevate.exe 的哈希由生成器现算，并已与 electron-builder NSIS 3.0.4.1 缓存中的同名文件人工核对一致，但无法与官方发布物交叉核对。"
+        "reason": "elevate.exe 是 NSIS 发行包附带的提权辅助程序（二进制 VersionInfo：Elevate 1.0.0.2894，Copyright (C) 2007 Johannes Passing；MIT）；随包 resources/elevate.exe 的哈希由生成器现算（9b1fbf0c…），与 electron-builder NSIS 工具缓存（nsis-3.0.4.1.7z，其 SHA-256 由 app-builder-lib 固定为 9877df90…）中的同名文件一致；上游未单独发布 elevate.exe 的官方 SHA-256，故来源哈希标注为未核对（B 级证据）。"
       },
       "licenseFiles": [
         {
@@ -611,8 +611,8 @@
         },
         {
           "path": "legal/upstream/official/napi-canvas/COMPONENTS.json",
-          "bytes": 40771,
-          "sha256": "33daa4fbf7f03a7ad0342f819c2b9a774186480255eb13406523025b1fa0ca0b"
+          "bytes": 42045,
+          "sha256": "31e59b6d97b44723cdbeea7e1c0f18aa3dbda5736e8f31cd232e10e77f40a0d4"
         }
       ]
     },
@@ -858,9 +858,9 @@
     "bundled": 10,
     "fonts": 5,
     "artifacts": 52,
-    "artifactBytes": 170104432,
-    "sourceVerified": 9,
-    "sourceUnverified": 8
+    "artifactBytes": 170105706,
+    "sourceVerified": 13,
+    "sourceUnverified": 4
   },
   "missing": [],
   "packages": [
