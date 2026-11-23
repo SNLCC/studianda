@@ -12,6 +12,7 @@ import {
   statSync,
   copyFileSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
   type Dirent
 } from 'node:fs';
@@ -114,6 +115,7 @@ import type {
 import {
   REFERENCE_GRAPH_ALL_NODE_LIMIT,
   documentCategoryOf,
+  extractNoteAssetFilenames,
   markdownPlainText,
   parseMarkdownInternalLink
 } from '@studianda/shared';
@@ -7158,7 +7160,8 @@ export class Store {
   }
 
   /**
-   * 从旧版 data 目录迁移文档/批注/笔记/消息/设置/向量缓存。源库只读。
+   * 从旧版 data 目录迁移文档/批注/笔记/消息/设置/向量缓存，并复制笔记图片/附件
+   * （旧目录的 `note-assets/`）。源库只读。
    *
    * 源目录允许直接传入 reader.sqlite3 文件。PDF 按以下顺序查找：Zotero 外部路径、
    * `documents.path`（相对源目录，兼容新版本资料目录）、`papers/<sha256>.pdf`、
@@ -7192,6 +7195,8 @@ export class Store {
       structures: 0,
       connections: 0,
       skippedDocuments: 0,
+      noteAssets: 0,
+      noteAssetsMissing: 0,
       warnings: []
     };
 
@@ -7219,6 +7224,8 @@ export class Store {
         )
       );
     const hasTable = (name: string): boolean => hasTableIn(legacy, name);
+    // 迁移过来的笔记/批注实际引用的图片/附件文件名（用于统计「源目录缺了哪些」）。
+    const legacyAssetRefs = new Set<string>();
 
     const value = (row: Record<string, unknown>, key: string, fallback: unknown): unknown =>
       row[key] ?? fallback;
@@ -7359,6 +7366,11 @@ export class Store {
       for (const row of rows) {
         const documentId = String(value(row, 'document_id', ''));
         if (documentId && !migratedDocuments.has(documentId)) continue;
+        if (table !== 'messages') {
+          for (const filename of extractNoteAssetFilenames(String(value(row, 'content', '')))) {
+            legacyAssetRefs.add(filename);
+          }
+        }
         if (table === 'annotations') {
           const result = this.db
             .prepare(
@@ -7617,10 +7629,80 @@ export class Store {
     }
 
     legacy.close();
+    // 先复制旧目录的图片/附件，再重建引用表：文件当天就被登记为「被引用」，
+    // 下次启动的自动 GC 不会把它们当成无主孤儿删掉。
+    this.copyLegacyNoteAssets(sourceDir, report, legacyAssetRefs);
     // 旧库复制过来的笔记/批注内容可能带图片引用：重建一次资源引用表。
     noteAssets.rebuildRefs(this.db, this.noteAssetDeps);
     this.invalidateReferenceGraphCache();
     return report;
+  }
+
+  /**
+   * 复制旧版资料目录的 `note-assets/`（笔记/批注粘贴的图片、导入的附件）到当前资料目录。
+   *
+   * 为什么必须复制文件：笔记内容里存的是 `studianda-asset://note-assets/<文件>` 这种
+   * 相对资料目录的磁盘引用。只迁移 SQLite 会让迁移后的图片全部加载失败，并且在下一次
+   * 自动 GC 时被当作「没有引用的孤儿文件」清掉（数据不可恢复）。文件名由内容 sha256
+   * 或原始附件名生成，同名视为同一份内容，不覆盖；源目录只读，绝不修改。
+   */
+  private copyLegacyNoteAssets(
+    sourceDir: string,
+    report: LegacyMigrationReport,
+    referenced: Set<string>
+  ): void {
+    const sourceAssets = path.join(sourceDir, NOTE_ASSET_DIR);
+    const targetAssets = path.join(this.dataDir, NOTE_ASSET_DIR);
+    let entries: Dirent[] = [];
+    if (existsSync(sourceAssets)) {
+      try {
+        entries = readdirSync(sourceAssets, { withFileTypes: true });
+      } catch {
+        report.warnings.push('旧版 note-assets 目录无法读取，笔记图片/附件未迁移');
+      }
+    }
+    if (entries.some((entry) => entry.isFile())) mkdirSync(targetAssets, { recursive: true });
+    let failed = 0;
+    // 复制不保证刷新 mtime（Windows 的 CopyFile 会连旧时间戳一起带过来）。
+    // 迁移若在复制与重建引用之间中断，旧时间戳的副本会被下次启动的自动 GC 当孤儿删掉；
+    // 这里统一把落盘时间刷成现在，让 24h 宽限期兜住这个窗口。
+    const now = new Date();
+    for (const entry of entries) {
+      // 只处理目录下的普通文件；子目录/符号链接一律跳过（与 GC 口径一致）。
+      if (!entry.isFile()) continue;
+      const filename = entry.name;
+      if (!filename || filename !== path.basename(filename)) continue;
+      const target = path.join(targetAssets, filename);
+      if (existsSync(target)) continue;
+      try {
+        copyFileSync(path.join(sourceAssets, filename), target);
+        try {
+          utimesSync(target, now, now);
+        } catch {
+          // 刷新时间失败不影响复制结果；引用重建后仍由 note_assets 保活。
+        }
+        report.noteAssets += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    if (failed > 0) {
+      report.warnings.push(
+        `旧版 note-assets 有 ${failed} 个图片/附件复制失败，请检查目录权限或磁盘空间`
+      );
+    }
+    // 只统计迁移过来的笔记/批注确实引用、但源目录里找不到的文件。
+    let missing = 0;
+    for (const filename of referenced) {
+      if (!existsSync(path.join(targetAssets, filename))) missing += 1;
+    }
+    report.noteAssetsMissing = missing;
+    if (missing > 0) {
+      report.warnings.push(
+        `旧版资料目录缺少 ${missing} 个笔记图片/附件，这些图片在笔记里会显示为加载失败；` +
+          '若能找到旧目录，可再执行一次「从旧版迁移数据」补齐'
+      );
+    }
   }
 
   /**

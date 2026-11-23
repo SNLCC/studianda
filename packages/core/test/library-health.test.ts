@@ -103,6 +103,26 @@ describe('diagnostics package', () => {
     expect(text).toContain('after rotation');
   });
 
+  it('never packs a secrets.json placed in the data directory', () => {
+    const secretsFile = path.join(dataDir, 'secrets.json');
+    writeFileSync(
+      secretsFile,
+      JSON.stringify({ version: 1, values: { 'search.api_key': 'v10-diagnostics-secret' } }),
+      'utf8'
+    );
+    try {
+      const created = createDiagnosticsPackage(store, { name: 'studianda', version: 'test-1.0' });
+      const entries = unzipSync(new Uint8Array(readFileSync(created.path)));
+      const text = Object.values(entries)
+        .map((bytes) => strFromU8(bytes))
+        .join('\n');
+      expect(text).not.toContain('diagnostics-secret');
+      expect(text).not.toContain('search.api_key');
+    } finally {
+      rmSync(secretsFile, { force: true });
+    }
+  });
+
   it('keeps at most 5 packages', async () => {
     for (let index = 0; index < 6; index += 1) {
       await wait(3);

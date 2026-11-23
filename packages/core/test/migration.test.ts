@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -24,6 +32,9 @@ async function makePdf(): Promise<Uint8Array> {
 
 function setupLegacy(): void {
   writeFileSync(path.join(legacyDir, 'legacy-doc.pdf'), LEGACY_PDF);
+  // 旧版资料目录里的笔记图片（note-assets）：迁移必须连文件一起复制。
+  mkdirSync(path.join(legacyDir, 'note-assets'), { recursive: true });
+  writeFileSync(path.join(legacyDir, 'note-assets', 'legacy-image.png'), Buffer.from('legacy-image'));
 
   const db = new DatabaseSync(path.join(legacyDir, 'reader.sqlite3'));
   db.exec(`
@@ -60,7 +71,15 @@ function setupLegacy(): void {
   ).run('ann-1', 'legacy-doc', 1, 'Legacy page', '旧批注', '', 'yellow', 'highlight');
   db.prepare(
     'INSERT INTO notes(id, document_id, page, quote, content, created) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run('note-1', 'legacy-doc', 1, 'quote', '旧笔记', '2026-01-01T00:00:00Z');
+  ).run(
+    'note-1',
+    'legacy-doc',
+    1,
+    'quote',
+    '旧笔记\n![旧图](studianda-asset://note-assets/legacy-image.png)\n' +
+      '![缺图](studianda-asset://note-assets/legacy-missing.png)',
+    '2026-01-01T00:00:00Z'
+  );
   db.prepare(
     'INSERT INTO messages(id, document_id, role, content, sources) VALUES (?, ?, ?, ?, ?)'
   ).run(7, 'legacy-doc', 'user', '旧消息', '[]');
@@ -157,6 +176,20 @@ describe('legacy migration', () => {
     expect(report.structures).toBe(2);
     // 27：platform_connections 可能含旧版 API Key 密文，旧库迁移不再复制该表。
     expect(report.connections).toBe(0);
+    // 笔记图片/附件：文件要复制，找不到的要计入 noteAssetsMissing 并给出可读提示。
+    expect(report.noteAssets).toBe(1);
+    expect(report.noteAssetsMissing).toBe(1);
+    expect(report.warnings.some((warning) => warning.includes('缺少 1 个笔记图片/附件'))).toBe(true);
+    const migratedImage = path.join(newDir, 'note-assets', 'legacy-image.png');
+    expect(existsSync(migratedImage)).toBe(true);
+    // 复制后要刷新 mtime：迁移中断时旧时间戳的副本会被启动自动 GC 当孤儿删掉。
+    expect(Date.now() - statSync(migratedImage).mtimeMs).toBeLessThan(60_000);
+    expect(store.getNoteAssetUsage().activeReferencedFiles).toBe(1);
+    // 迁移重建索引后图片是被引用的资源：即使文件很旧，自动 GC 也不能当孤儿删掉。
+    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    utimesSync(migratedImage, threeDaysAgo, threeDaysAgo);
+    store.autoGcNoteAssets();
+    expect(existsSync(migratedImage)).toBe(true);
     expect(report.backupPath).toBeTruthy();
     expect(existsSync(report.backupPath as string)).toBe(true);
 

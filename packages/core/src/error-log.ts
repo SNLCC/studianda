@@ -37,6 +37,8 @@ export function redactSensitive(text: string): string {
       )
       .replace(/("(?:token|api_key|secret|password)"\s*:\s*")[^"]+(")/gi, '$1[redacted]$2')
       .replace(/(x-studianda-token\s*[:=]\s*)[^\s,;]+/gi, '$1[redacted]')
+      // 不带 sk- 前缀的厂商密钥（Zotero / 各类 x-api-key）只能靠请求头名识别。
+      .replace(/([A-Za-z0-9-]*api[-_]key\s*[:=]\s*)[^\s,;]+/gi, '$1[redacted]')
       .replace(/(authorization\s*[:=]\s*bearer\s+)[^\s,;]+/gi, '$1[redacted]')
       .replace(/sk-[A-Za-z0-9_-]{8,}/g, '[redacted-key]')
       .replace(/Bearer\s+[A-Za-z0-9._-]{8,}/gi, 'Bearer [redacted]')

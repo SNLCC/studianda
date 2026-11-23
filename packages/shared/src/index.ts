@@ -2456,6 +2456,10 @@ export interface LegacyMigrationReport {
   structures: number;
   connections: number;
   skippedDocuments: number;
+  /** 从旧版目录复制过来的笔记图片/附件（note-assets）数量。 */
+  noteAssets: number;
+  /** 旧版笔记/批注引用了、但旧版目录里找不到的图片/附件数量。 */
+  noteAssetsMissing: number;
   warnings: string[];
   backupPath?: string;
 }

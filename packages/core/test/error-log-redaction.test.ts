@@ -20,7 +20,9 @@ describe('error log redaction', () => {
       dataDir,
       `GET /api/v1/markdown/events?token=${secret}&x=1`,
       new Error(
-        `Authorization: Bearer abcdefghijklmnop x-studianda-token: ${secret} ${fakeKey} "token":"${secret}"`
+        `Authorization: Bearer abcdefghijklmnop x-studianda-token: ${secret} ${fakeKey} ` +
+          `Zotero-API-Key: 0123456789abcdef0123456789abcdef x-api-key: another-secret-value ` +
+          `"token":"${secret}"`
       )
     );
 
@@ -28,6 +30,8 @@ describe('error log redaction', () => {
     expect(raw).not.toContain(secret);
     expect(raw).not.toContain('abcdefghijklmnop');
     expect(raw).not.toContain(fakeKey);
+    expect(raw).not.toContain('0123456789abcdef0123456789abcdef');
+    expect(raw).not.toContain('another-secret-value');
     expect(raw).toContain('[redacted]');
     expect(raw).toContain('token=');
   });

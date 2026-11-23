@@ -28,6 +28,11 @@ import type { Store } from './store.js';
 const PREFIX = 'studianda-data-';
 const EXCLUDED_DIRS = new Set(['backups', 'diagnostics', 'cache', 'migration-backups']);
 const EXCLUDED_PREFIXES = ['.pre-restore-', '.restore-staging-', '.studianda-lock'];
+/**
+ * 密钥文件无论出现在哪一层都不能进备份：`secrets.json` 只允许存在于 userData，
+ * 这里再做一次硬排除，防止用户/旧版本把它误放进资料目录后被备份带走。
+ */
+const EXCLUDED_FILE_NAMES = new Set(['secrets.json']);
 const MARKER_NAME = 'restore-pending.json';
 /**
  * Core 运行期文件：含本地 HTTP 鉴权 token（明文）。与 `restore-pending.json` 一样只在
@@ -315,6 +320,7 @@ function collectRelativePaths(
         continue;
       }
       if (!entry.isFile()) continue;
+      if (EXCLUDED_FILE_NAMES.has(entry.name.toLowerCase())) continue;
       if (entry.name === MARKER_NAME) continue;
       // runtime.json 是 Core 的明文本地 token，只在资料目录根部；不进备份。
       if (relativeBase === '' && entry.name === RUNTIME_FILE_NAME) continue;

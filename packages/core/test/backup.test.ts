@@ -51,6 +51,24 @@ describe('backup snapshots', () => {
     }
   });
 
+  it('excludes secrets.json even when it is placed inside the data directory', async () => {
+    const secretsFile = path.join(dataDir, 'secrets.json');
+    writeFileSync(
+      secretsFile,
+      JSON.stringify({ version: 1, values: { 'search.api_key': 'v10-fake-ciphertext' } }),
+      'utf8'
+    );
+    try {
+      const result = await createSnapshot(store);
+      expect(result.entries).not.toContain('secrets.json');
+      const archive = unzipSync(new Uint8Array(readFileSync(result.backup.path)));
+      expect(archive['secrets.json']).toBeUndefined();
+      expect(Object.keys(archive).some((name) => name.endsWith('secrets.json'))).toBe(false);
+    } finally {
+      rmSync(secretsFile, { force: true });
+    }
+  });
+
   it('lists only completed backup zips', () => {
     const listed = listBackups(dataDir);
     expect(listed.length).toBeGreaterThan(0);

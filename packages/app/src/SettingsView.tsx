@@ -1727,9 +1727,12 @@ function SettingsViewContent({
           `笔记 ${report.notes}、会话 ${report.messages}、设置 ${report.settings}、向量缓存 ${report.embeddings}、` +
           `翻译 ${report.translations}、页面编辑 ${report.pageEdits}、导航 ${report.navigation}、` +
           `页面遮罩 ${report.pageMasks}、阅读任务 ${report.readingTasks}、结构 ${report.structures}、` +
-          `平台连接 ${report.connections}。` +
+          `平台连接 ${report.connections}、笔记图片/附件 ${report.noteAssets}。` +
           (report.backupPath ? ` 迁移前备份：${report.backupPath}。` : '') +
           (report.skippedDocuments ? ` 跳过 ${report.skippedDocuments} 个找不到 PDF 的文档。` : '') +
+          (report.noteAssetsMissing
+            ? ` 有 ${report.noteAssetsMissing} 个笔记图片/附件在旧目录里找不到。`
+            : '') +
           (report.warnings.length ? ` 提示：${report.warnings.join('；')}` : '')
       );
       void queryClient.invalidateQueries({ queryKey: ['documents'] });
@@ -3659,7 +3662,7 @@ function SettingsViewContent({
       <section className="kr-settings__section">
         <SectionHeading
           title="从旧版迁移数据"
-          hint="选择含 reader.sqlite3 的旧版资料目录：旧 Python 版的 PDF 在 data 目录根部，新版本的在 papers/ 下。迁移会复制文档、片段、批注、笔记、会话、译文、页面编辑与向量缓存；旧版 API Key 无法迁移，需要在这里重新填写。"
+          hint="选择含 reader.sqlite3 的旧版资料目录：旧 Python 版的 PDF 在 data 目录根部，新版本的在 papers/ 下。迁移会复制文档、片段、批注、笔记、会话、译文、页面编辑、向量缓存，以及笔记里粘贴的图片/附件（旧目录的 note-assets/）；旧版 API Key 无法迁移，需要在这里重新填写。"
         />
         <p className="kr-muted">从旧版 data 目录复制资料。</p>
         <p className="kr-muted">源目录不会被修改。</p>
