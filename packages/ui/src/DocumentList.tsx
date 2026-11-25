@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type React from 'react';
+import { createPortal } from 'react-dom';
 import { documentTypeLabel, type BookOcrJobRecord, type DocumentSummary } from '@studianda/shared';
 import { onHostKeyDown } from './host-scope.js';
 
@@ -215,23 +216,45 @@ export function DocumentList({
 
   // 行级操作统一收进「⋯」菜单：同一时刻只开一个；点空白处或 Esc 关闭。
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  // 菜单浮层位置（fixed 坐标）：渲染到 body，避免被 .kr-app-content 的滚动容器裁掉。
+  const [menuPos, setMenuPos] = useState<{
+    top?: number;
+    bottom?: number;
+    right: number;
+    maxHeight: number;
+  } | null>(null);
   const menuTriggerRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
     if (!openMenuId) return undefined;
+    const close = (): void => {
+      setOpenMenuId(null);
+      setMenuPos(null);
+    };
     const closeOnOutside = (event: Event): void => {
       const target = event.target;
-      if (target instanceof Element && target.closest('.kr-doc-menu')) return;
-      setOpenMenuId(null);
+      if (target instanceof Element && target.closest('.kr-doc-menu, .kr-doc-menu__items')) {
+        return;
+      }
+      close();
     };
     const closeOnEscape = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return;
-      setOpenMenuId(null);
+      close();
       menuTriggerRef.current?.focus();
     };
+    // 页面滚动/窗口拉伸后 fixed 菜单会脱锚：直接关掉，避免菜单悬在错误位置。
+    const closeOnViewportChange = (event: Event): void => {
+      if (event.target instanceof Element && event.target.closest('.kr-doc-menu__items')) return;
+      close();
+    };
     document.addEventListener('pointerdown', closeOnOutside);
+    window.addEventListener('scroll', closeOnViewportChange, true);
+    window.addEventListener('resize', closeOnViewportChange);
     const removeKeyDown = onHostKeyDown(closeOnEscape);
     return () => {
       document.removeEventListener('pointerdown', closeOnOutside);
+      window.removeEventListener('scroll', closeOnViewportChange, true);
+      window.removeEventListener('resize', closeOnViewportChange);
       removeKeyDown();
     };
   }, [openMenuId]);
@@ -432,6 +455,32 @@ export function DocumentList({
 
   // 行级操作统一收进「⋯」菜单（卡片右上角 / 列表行尾）。
   // 附件缺失的「重新连接」仍单独可见：它是"继续读"的主路径，不藏进菜单。
+  const toggleDocMenu = (
+    document: DocumentSummary,
+    event: React.MouseEvent<HTMLElement>
+  ): void => {
+    if (openMenuId === document.id) {
+      setOpenMenuId(null);
+      setMenuPos(null);
+      return;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    const gap = 6;
+    const estimatedHeight = 360;
+    const spaceBelow = window.innerHeight - rect.bottom - gap - 8;
+    const spaceAbove = rect.top - gap - 8;
+    // 下方放不下且上方更宽裕时向上展开；两种方向都用 maxHeight + 滚动兜底。
+    const placeAbove = spaceBelow < Math.min(estimatedHeight, 260) && spaceAbove > spaceBelow;
+    setMenuPos({
+      ...(placeAbove
+        ? { bottom: window.innerHeight - rect.top + gap }
+        : { top: rect.bottom + gap }),
+      right: Math.max(8, window.innerWidth - rect.right),
+      maxHeight: Math.max(160, Math.min(estimatedHeight, placeAbove ? spaceAbove : spaceBelow))
+    });
+    setOpenMenuId(document.id);
+  };
+
   const renderDocMenu = (
     document: DocumentSummary,
     translatingLabel: string | undefined
@@ -513,40 +562,50 @@ export function DocumentList({
           ref={open ? menuTriggerRef : undefined}
           onClick={(event) => {
             event.stopPropagation();
-            setOpenMenuId(open ? null : document.id);
+            toggleDocMenu(document, event);
           }}
         >
           ⋯
         </button>
-        {open ? (
-          <span
-            className="kr-doc-menu__items"
-            role="menu"
-            aria-label={`《${document.name}》的操作`}
-          >
-            {items.map((item) => (
-              <button
-                key={item.key}
-                type="button"
-                role="menuitem"
-                disabled={item.disabled}
-                className={
-                  item.danger
-                    ? `is-danger${item.separatorBefore ? ' is-separated' : ''}`
-                    : undefined
-                }
-                onClick={(event) => {
-                  event.stopPropagation();
-                  if (item.disabled) return;
-                  setOpenMenuId(null);
-                  item.onSelect?.(document);
+        {open && menuPos
+          ? createPortal(
+              <span
+                className="kr-doc-menu__items is-portal"
+                role="menu"
+                aria-label={`《${document.name}》的操作`}
+                style={{
+                  top: menuPos.top,
+                  bottom: menuPos.bottom,
+                  right: menuPos.right,
+                  maxHeight: menuPos.maxHeight
                 }}
               >
-                {item.label}
-              </button>
-            ))}
-          </span>
-        ) : null}
+                {items.map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    role="menuitem"
+                    disabled={item.disabled}
+                    className={
+                      item.danger
+                        ? `is-danger${item.separatorBefore ? ' is-separated' : ''}`
+                        : undefined
+                    }
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (item.disabled) return;
+                      setOpenMenuId(null);
+                      setMenuPos(null);
+                      item.onSelect?.(document);
+                    }}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </span>,
+              globalThis.document.body
+            )
+          : null}
       </span>
     );
   };

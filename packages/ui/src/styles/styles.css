@@ -14248,3 +14248,16 @@ details.kr-outline2__card > summary::-webkit-details-marker {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ---- 文献「⋯」菜单浮层：portal 到 body，脱离滚动容器裁剪；视口不够时向上展开并可滚动 ---- */
+.kr-doc-menu__items.is-portal {
+  position: fixed;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  min-width: 200px;
+  max-width: min(320px, calc(100vw - 16px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  z-index: var(--kr-z-dropdown, 1200);
+}

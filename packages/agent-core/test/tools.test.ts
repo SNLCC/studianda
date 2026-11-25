@@ -390,14 +390,14 @@ describe('compute 异步任务', () => {
     });
     await executeTool(
       'compute',
-      { action: 'web_search', kind: 'web_search', query: '韦伯 责任伦理' },
+      { action: 'web_search', kind: 'web_search', query: '示例检索词' },
       {
         scope: { kind: 'documents', documentIds: ['doc-1'], caps: ['read'] },
         api
       }
     );
     expect(calls[0]?.path).toBe('/web-search/search');
-    expect(calls[0]?.body).toEqual({ query: '韦伯 责任伦理' });
+    expect(calls[0]?.body).toEqual({ query: '示例检索词' });
   });
 });
 
@@ -522,14 +522,14 @@ describe('独立笔记与参考文献', () => {  it('create 省略 document_id �
       {
         action: 'reference_add',
         document_id: 'doc-1',
-        entry: { title: '责任伦理', authors: ['韦伯'] }
+        entry: { title: '示例条目', authors: ['示例作者'] }
       },
       {
         scope: { kind: 'documents', documentIds: ['doc-1'], caps: ['read', 'write'] },
         api
       }
     );
-    expect(calls[0]?.body).toEqual({ title: '责任伦理', authors: ['韦伯'] });
+    expect(calls[0]?.body).toEqual({ title: '示例条目', authors: ['示例作者'] });
   });
 });
 
