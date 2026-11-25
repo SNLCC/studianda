@@ -309,6 +309,10 @@ export function updateAnnotation(
     fields.push('content = ?');
     values.push(input.content);
   }
+  if (input.quote != null) {
+    fields.push('quote = ?');
+    values.push(input.quote);
+  }
   if (input.color != null) {
     fields.push('color = ?');
     values.push(input.color);

@@ -1,7 +1,7 @@
 <!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <title>勘读 Studianda 第三方声明</title>
 <style>body{max-width:1000px;margin:40px auto;padding:0 20px;font:14px/1.7 system-ui,"Microsoft YaHei",sans-serif;color:#2c2a24;background:#f4eedf}h1,h2,h3{font-family:Georgia,serif}table{border-collapse:collapse;width:100%;font-size:12px}td,th{border:1px solid #d8cdb8;padding:5px 7px;text-align:left;vertical-align:top}pre{white-space:pre-wrap;word-break:break-word;background:#fbf7ed;border:1px solid #e3d9c5;padding:10px;font-size:11px;max-height:420px;overflow:auto}a{color:#4f765e}</style></head><body>
-<h1>勘读 Studianda 第三方组件与许可证声明</h1><p>生成时间：2026-11-24T17:46:29.657Z</p>
+<h1>勘读 Studianda 第三方组件与许可证声明</h1><p>生成时间：2026-11-25T12:41:39.922Z</p>
 <p>本项目的 Apache License 2.0 许可证仅适用于本项目原创代码；随包分发的第三方组件仍分别适用其自身许可证，本项目许可证不改变、不限制这些组件在其许可证下的权利。随包字体、PDF.js 包内的第三方资源（CMaps、标准字体、ICC、WASM 解码器）与 Electron 运行时文件（含 Chromium、FFmpeg、ICU 等）均分别按各自自身许可分发，均不属于本项目许可范围；逐项许可见 <a href="upstream/official/pdfjs-wasm/PDFJS-WASM-THIRD-PARTY.md">PDF.js 资源声明</a>、<a href="upstream/official/electron-runtime-dlls.md">Electron 运行时说明</a> 与本文件下方清单；随包字体的逐款许可、版权与保留名见 <a href="fonts.json">fonts.json</a> 与 <a href="font-licenses/README.md">font-licenses/README.md</a>。</p>
 <p>Electron 44.5.1 / Chromium：许可证见 <a href="electron/LICENSE.txt">electron/LICENSE.txt</a> 与 <a href="electron/LICENSES.chromium.html">Chromium 第三方声明</a>；Node.js 24.21.0：<a href="runtime/Node-LICENSE.txt">Node-LICENSE.txt</a>。</p>
 <table><thead><tr><th>组件</th><th>版本</th><th>许可证</th><th>许可证文件</th></tr></thead><tbody>
@@ -11745,6 +11745,8 @@ bundle 进该文件（依据 `packages/agent-bridge/dist/agent-bridge.mjs.meta.j
 | `zod` | 4.6.7 | MIT | git+https://github.com/colinhacks/zod.git |
 
 各许可证原文按包保存在 `licenses/` 下。
+licenses/ 内文本优先取官方仓库原文；官方原文缺失时才回退 npm 包内 LICENSE。
+官方仓库 URL、ref 与 SHA-256 见同目录 SOURCES.json。
 
 ## @modelcontextprotocol/sdk@1.32.2
 
@@ -11991,6 +11993,10 @@ SOFTWARE.
       "repository": "git+https://github.com/modelcontextprotocol/typescript-sdk.git",
       "licenseFile": "LICENSE",
       "licenseText": "MIT License\n\nCopyright (c) 2024 Anthropic, PBC\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.",
+      "licenseSource": "official",
+      "officialUrl": "https://github.com/modelcontextprotocol/typescript-sdk/blob/1.32.2/LICENSE",
+      "officialRef": "1.32.2",
+      "officialSha256": "8694aa57bec3f3e9ad0559e91c63a795904e967104efb9d6fc9d153e56f567c2",
       "safe": "modelcontextprotocol_sdk",
       "copied": "upstream/agent-bridge/licenses/modelcontextprotocol_sdk@1.32.2-LICENSE"
     },
@@ -12001,6 +12007,10 @@ SOFTWARE.
       "repository": "git+https://github.com/ajv-validator/ajv-formats.git",
       "licenseFile": "LICENSE",
       "licenseText": "MIT License\n\nCopyright (c) 2020 Evgeny Poberezkin\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.",
+      "licenseSource": "official",
+      "officialUrl": "https://github.com/ajv-validator/ajv-formats/blob/v3.0.1/LICENSE",
+      "officialRef": "v3.0.1",
+      "officialSha256": "0eb7e0538bf86badc8cc36fc66164d495630f21f6998529188406fb00c782a5e",
       "safe": "ajv-formats",
       "copied": "upstream/agent-bridge/licenses/ajv-formats@3.0.1-LICENSE"
     },
@@ -12011,6 +12021,10 @@ SOFTWARE.
       "repository": "ajv-validator/ajv",
       "licenseFile": "LICENSE",
       "licenseText": "The MIT License (MIT)\n\nCopyright (c) 2015-2021 Evgeny Poberezkin\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.",
+      "licenseSource": "official",
+      "officialUrl": "https://github.com/ajv-validator/ajv/blob/v8.20.0/LICENSE",
+      "officialRef": "v8.20.0",
+      "officialSha256": "f2fde84e6c1f177681e152a4459f025a87e855c0aa374238ba79b2e72a15b57c",
       "safe": "ajv",
       "copied": "upstream/agent-bridge/licenses/ajv@8.20.0-LICENSE"
     },
@@ -12021,6 +12035,10 @@ SOFTWARE.
       "repository": "git+https://github.com/epoberezkin/fast-deep-equal.git",
       "licenseFile": "LICENSE",
       "licenseText": "MIT License\n\nCopyright (c) 2017 Evgeny Poberezkin\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.",
+      "licenseSource": "official",
+      "officialUrl": "https://github.com/epoberezkin/fast-deep-equal/blob/v3.1.3/LICENSE",
+      "officialRef": "v3.1.3",
+      "officialSha256": "aa407ee69b3f646286f5162d0679256a0fe5b7fcc51f104ffb647efe167715ea",
       "safe": "fast-deep-equal",
       "copied": "upstream/agent-bridge/licenses/fast-deep-equal@3.1.3-LICENSE"
     },
@@ -12031,6 +12049,10 @@ SOFTWARE.
       "repository": "git+https://github.com/fastify/fast-uri.git",
       "licenseFile": "LICENSE",
       "licenseText": "Copyright (c) 2011-2021, Gary Court until https://github.com/garycourt/uri-js/commit/a1acf730b4bba3f1097c9f52e7d9d3aba8cdcaae\nCopyright (c) 2021-present The Fastify team &lt;https://github.com/fastify/fastify#team&gt;\nAll rights reserved.\n\nRedistribution and use in source and binary forms, with or without\nmodification, are permitted provided that the following conditions are met:\n    * Redistributions of source code must retain the above copyright\n      notice, this list of conditions and the following disclaimer.\n    * Redistributions in binary form must reproduce the above copyright\n      notice, this list of conditions and the following disclaimer in the\n      documentation and/or other materials provided with the distribution.\n    * The names of any contributors may not be used to endorse or promote\n      products derived from this software without specific prior written\n      permission.\n\nTHIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS \"AS IS\" AND\nANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED\nWARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE\nDISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS AND CONTRIBUTORS BE LIABLE FOR ANY\nDIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES\n(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;\nLOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND\nON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT\n(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS\nSOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n\n                                  *   *   *\n\nThe complete list of contributors can be found at:\n- https://github.com/garycourt/uri-js/graphs/contributors",
+      "licenseSource": "official",
+      "officialUrl": "https://github.com/fastify/fast-uri/blob/v3.1.9/LICENSE",
+      "officialRef": "v3.1.9",
+      "officialSha256": "b010b0dfdfdb23d7396e03b82cd4621fc9bb8f95d6b0aea70b9c24e12074c786",
       "safe": "fast-uri",
       "copied": "upstream/agent-bridge/licenses/fast-uri@3.1.9-LICENSE"
     },
@@ -12041,6 +12063,10 @@ SOFTWARE.
       "repository": "git+https://github.com/epoberezkin/json-schema-traverse.git",
       "licenseFile": "LICENSE",
       "licenseText": "MIT License\n\nCopyright (c) 2017 Evgeny Poberezkin\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.",
+      "licenseSource": "official",
+      "officialUrl": "https://github.com/epoberezkin/json-schema-traverse/blob/v1.0.0/LICENSE",
+      "officialRef": "v1.0.0",
+      "officialSha256": "aa407ee69b3f646286f5162d0679256a0fe5b7fcc51f104ffb647efe167715ea",
       "safe": "json-schema-traverse",
       "copied": "upstream/agent-bridge/licenses/json-schema-traverse@1.0.0-LICENSE"
     },
@@ -12051,6 +12077,10 @@ SOFTWARE.
       "repository": "https://github.com/StefanTerdell/zod-to-json-schema",
       "licenseFile": "LICENSE",
       "licenseText": "ISC License\n\nCopyright (c) 2020, Stefan Terdell\n\nPermission to use, copy, modify, and/or distribute this software for any\npurpose with or without fee is hereby granted, provided that the above\ncopyright notice and this permission notice appear in all copies.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\" AND THE AUTHOR DISCLAIMS ALL WARRANTIES\nWITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF\nMERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR\nANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES\nWHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN\nACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF\nOR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.",
+      "licenseSource": "official",
+      "officialUrl": "https://github.com/StefanTerdell/zod-to-json-schema/blob/master/LICENSE",
+      "officialRef": "master",
+      "officialSha256": "80d3168ad2f70f6f5bb2ab22b23414707abf6f0a392034891481ae36a1a429d4",
       "safe": "zod-to-json-schema",
       "copied": "upstream/agent-bridge/licenses/zod-to-json-schema@3.25.2-LICENSE"
     },
@@ -12061,6 +12091,10 @@ SOFTWARE.
       "repository": "git+https://github.com/colinhacks/zod.git",
       "licenseFile": "LICENSE",
       "licenseText": "MIT License\n\nCopyright (c) 2025 Colin McDonnell\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.",
+      "licenseSource": "official",
+      "officialUrl": "https://github.com/colinhacks/zod/blob/v4.6.7/LICENSE",
+      "officialRef": "v4.6.7",
+      "officialSha256": "f61cacc2acb8b71aa79a128b3e732bf25e02aab40747bbbd5bf00c97c9cda28d",
       "safe": "zod",
       "copied": "upstream/agent-bridge/licenses/zod@4.6.7-LICENSE"
     }

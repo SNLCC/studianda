@@ -16,6 +16,8 @@ bundle 进该文件（依据 `packages/agent-bridge/dist/agent-bridge.mjs.meta.j
 | `zod` | 4.6.7 | MIT | git+https://github.com/colinhacks/zod.git |
 
 各许可证原文按包保存在 `licenses/` 下。
+licenses/ 内文本优先取官方仓库原文；官方原文缺失时才回退 npm 包内 LICENSE。
+官方仓库 URL、ref 与 SHA-256 见同目录 SOURCES.json。
 
 ## @modelcontextprotocol/sdk@1.32.2
 

@@ -256,6 +256,9 @@ export function MarkdownEditor({
 
   // 源码 / 富文本模式。默认源码；本次会话内记住（sessionEditorMode）。
   const [editorMode, setEditorMode] = useState<EditorMode>(() => sessionEditorMode);
+  // 紧凑编辑器（阅读伙伴的批注/笔记输入框）默认收起格式工具栏，只留「源码 / 富文本 / 格式」一行，
+  // 需要加粗、颜色、表格时再展开，避免工具栏常驻占掉半个侧栏。
+  const [toolbarOpen, setToolbarOpen] = useState(!compact);
   const editorModeRef = useRef<EditorMode>(editorMode);
   editorModeRef.current = editorMode;
   const richRef = useRef<HTMLDivElement | null>(null);
@@ -1397,7 +1400,20 @@ export function MarkdownEditor({
         >
           富文本
         </button>
+        {compact ? (
+          <button
+            type="button"
+            className={`kr-md-modebar__format${toolbarOpen ? ' is-active' : ''}`}
+            aria-expanded={toolbarOpen}
+            disabled={disabled}
+            title={toolbarOpen ? '收起格式工具栏' : '展开格式工具栏（加粗、颜色、表格、内部引用等）'}
+            onClick={() => setToolbarOpen((current) => !current)}
+          >
+            格式
+          </button>
+        ) : null}
       </div>
+      {toolbarOpen ? (
       <div className="kr-md-toolbar" role="toolbar" aria-label="Markdown 工具栏">
         {TOOLBAR_GROUPS.map((group, groupIndex) => (
           <span className="kr-md-toolbar__group" key={groupIndex}>
@@ -1570,6 +1586,7 @@ export function MarkdownEditor({
           [[ ]]
         </button>
       </div>
+      ) : null}
       {editorMode === 'rich' ? (
         <div className="kr-md-table-tools" role="group" aria-label="表格行列编辑">
           <span className="kr-md-table-tools__label">表格</span>

@@ -13766,3 +13766,429 @@ details.kr-outline2__card > summary::-webkit-details-marker {
     max-height: 46%;
   }
 }
+
+/* ---- 阅读伙伴：说明文字折叠 + 紧凑编辑器（隐藏常驻格式工具栏） ---- */
+.kr-reader-hint {
+  margin: 0;
+  padding: 0;
+  color: var(--kr-ink-soft);
+  font-size: var(--kr-fs-caption);
+}
+
+.kr-reader-hint > summary {
+  padding: 2px 0;
+  color: var(--kr-ink-faint);
+  font-size: var(--kr-fs-micro);
+  line-height: 1.5;
+  cursor: pointer;
+  user-select: none;
+}
+
+.kr-reader-hint > summary:hover {
+  color: var(--kr-ink);
+}
+
+.kr-reader-hint[open] > summary {
+  margin-bottom: 2px;
+}
+
+.kr-reader-hint p {
+  margin: 3px 0 0;
+  line-height: 1.6;
+}
+
+.kr-md-modebar .kr-md-modebar__format {
+  margin-left: 2px;
+  padding-left: 8px;
+  border-left: 1px solid var(--kr-line);
+  border-radius: 0 5px 5px 0;
+}
+
+/* ---- 文献库：长标题不再把行/卡片撑出窗口（悬停由元素 title 显示全文） ---- */
+.kr-doc-row {
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.kr-doc-row__main {
+  max-width: 100%;
+}
+
+.kr-doc-row__title {
+  max-width: 100%;
+}
+
+.kr-doc-card {
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.kr-doc-card .kr-doc-card__title {
+  overflow-wrap: anywhere;
+}
+
+/* ---- 独立笔记：文件夹与笔记同树（打开文件夹即看到笔记条目） ---- */
+.kr-standalone__tagbar {
+  flex: none;
+  margin: 0;
+  padding: 0;
+  font-size: var(--kr-fs-micro);
+}
+
+.kr-standalone__tagbar > summary {
+  padding: 2px 2px;
+  color: var(--kr-ink-faint);
+  line-height: 1.5;
+  cursor: pointer;
+  user-select: none;
+}
+
+.kr-standalone__tagbar > summary:hover {
+  color: var(--kr-ink);
+}
+
+.kr-standalone__tagbar-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 92px;
+  overflow: auto;
+  padding: 3px 2px 4px 0;
+}
+
+.kr-standalone__tagbar-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  height: 22px;
+  min-height: 0;
+  padding: 0 7px;
+  border: 1px solid var(--kr-line);
+  border-radius: 999px;
+  background: var(--kr-paper);
+  color: var(--kr-ink-soft);
+  font: inherit;
+  font-size: var(--kr-fs-micro);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.kr-standalone__tagbar-chip:hover {
+  border-color: var(--kr-celadon);
+  background: var(--kr-celadon-soft);
+  color: var(--kr-ink);
+}
+
+.kr-standalone__tagbar-chip.is-active {
+  border-color: var(--kr-celadon-deep);
+  background: var(--kr-celadon-soft);
+  color: var(--kr-celadon-deep);
+  font-weight: 600;
+}
+
+.kr-standalone__tagbar-count {
+  color: var(--kr-ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.kr-standalone__tagbar-chip.is-active .kr-standalone__tagbar-count {
+  color: var(--kr-celadon-deep);
+}
+
+.kr-standalone__tagbar-more {
+  height: 22px;
+  min-height: 0;
+  padding: 0 7px;
+  border: 1px dashed var(--kr-line-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--kr-ink-faint);
+  font: inherit;
+  font-size: var(--kr-fs-micro);
+  cursor: pointer;
+}
+
+.kr-standalone__tree-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 2px;
+  border-bottom: 1px solid var(--kr-line);
+  color: var(--kr-ink-soft);
+  font-size: var(--kr-fs-micro);
+}
+
+.kr-standalone__tree-all {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+}
+
+.kr-standalone__tree-all input {
+  width: 12px;
+  height: 12px;
+  margin: 0;
+}
+
+.kr-standalone__tree-total {
+  color: var(--kr-ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.kr-standalone__tree-addfolder {
+  flex: none;
+  min-height: 0;
+  margin-left: auto;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--kr-celadon-deep);
+  font: inherit;
+  font-size: var(--kr-fs-micro);
+  cursor: pointer;
+}
+
+.kr-standalone__tree-addfolder:hover {
+  text-decoration: underline;
+}
+
+.kr-standalone__tree {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+  margin: 0;
+  padding: 2px 2px 4px 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.kr-standalone__tree-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.kr-standalone__tree-folder {
+  min-width: 0;
+}
+
+.kr-standalone__tree-row {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  border-radius: 6px;
+}
+
+.kr-standalone__tree-row:hover {
+  background: var(--kr-celadon-soft);
+}
+
+.kr-standalone__tree-row.is-drop-target {
+  outline: 1px dashed var(--kr-celadon-deep);
+  outline-offset: -1px;
+}
+
+.kr-standalone__tree-caret {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 24px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--kr-ink-soft);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.kr-standalone__tree-caret:hover {
+  color: var(--kr-ink);
+}
+
+.kr-standalone__tree-caret.is-spacer {
+  visibility: hidden;
+}
+
+.kr-standalone__tree-name {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 24px;
+  padding: 1px 4px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--kr-ink-soft);
+  font: inherit;
+  font-size: var(--kr-fs-caption);
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.kr-standalone__tree-name:hover {
+  color: var(--kr-ink);
+}
+
+.kr-standalone__tree-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kr-standalone__tree-count {
+  flex: none;
+  color: var(--kr-ink-faint);
+  font-size: var(--kr-fs-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.kr-standalone__tree-actions {
+  display: flex;
+  flex: none;
+  gap: 1px;
+  padding-right: 2px;
+  opacity: 0;
+}
+
+.kr-standalone__tree-row:hover .kr-standalone__tree-actions,
+.kr-standalone__tree-row:focus-within .kr-standalone__tree-actions {
+  opacity: 1;
+}
+
+.kr-standalone__tree-actions button {
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--kr-ink-faint);
+  font-size: var(--kr-fs-micro);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.kr-standalone__tree-actions button:hover {
+  border-color: var(--kr-line-strong);
+  background: var(--kr-paper-raised);
+  color: var(--kr-ink);
+}
+
+/* ---- 独立笔记页：压缩页头，把顶部空白让给编辑面板 ---- */
+.kr-workspace-heading.is-notes {
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.kr-workspace-heading.is-notes p {
+  display: none;
+}
+
+.kr-workspace-heading.is-notes h1 {
+  font-size: var(--kr-fs-h2);
+}
+
+/* ---- 整本 OCR：工作台进度 + 阅读页进度/暂停/停止 ---- */
+.kr-doc-card__ocr,
+.kr-doc-row__ocr {
+  flex: none;
+  color: var(--kr-celadon-deep);
+  font-size: var(--kr-fs-micro);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.kr-doc-row__ocr {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kr-reader__book-ocr {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.kr-reader__book-ocr-progress {
+  color: var(--kr-celadon-deep);
+  font-size: var(--kr-fs-micro);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.kr-reader__book-ocr-btn {
+  min-height: 24px;
+  padding: 0 6px;
+  font-size: var(--kr-fs-micro);
+  line-height: 1;
+}
+
+/* ---- OCR 结果可修改：本页原文编辑器 + 批注原文校对 ---- */
+.kr-page-text-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(760px, 92vw);
+  max-height: 88vh;
+}
+
+.kr-page-text-modal .kr-modal__field {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+}
+
+.kr-page-text-modal__input {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 260px;
+  padding: 8px 10px;
+  resize: vertical;
+  font-family: var(--kr-font-reading);
+  font-size: var(--kr-fs-body);
+  line-height: 1.7;
+}
+
+.kr-annotation__quote-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.kr-annotation__quote-edit > span {
+  color: var(--kr-ink-faint);
+  font-size: var(--kr-fs-micro);
+}
+
+.kr-annotation__quote-edit textarea {
+  width: 100%;
+  min-height: 48px;
+  padding: 6px 8px;
+  resize: vertical;
+  font-size: var(--kr-fs-caption);
+  line-height: 1.5;
+}

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
-import { API_PREFIX, type OcrJobRecord } from '@studianda/shared';
+import { API_PREFIX, type BookOcrJobRecord, type BookOcrJobState, type OcrJobRecord } from '@studianda/shared';
 import { recognizePage, recognizeRegion } from '../ocr.js';
 import type { SecretStore } from '../secrets.js';
 import type { Store } from '../store.js';
@@ -210,5 +210,250 @@ export function registerOcrRoutes(
       ocrJobAborts.get(jobId)?.abort();
     }
     return record;
+  });
+
+  // ---- 整本书 OCR：逐页识别并写入 page_edits（扫描版文献可检索、可问答） ----
+  type BookOcrControl = {
+    record: BookOcrJobRecord;
+    controller: AbortController;
+    paused: boolean;
+    cancelled: boolean;
+    untrack: () => void;
+  };
+  const bookJobs = new Map<string, BookOcrControl>();
+  const bookJobByDocument = new Map<string, string>();
+  /** 每篇文献最近一次整本 OCR 任务：结束后仍可让界面显示结果（30 分钟后随 bookJobs 一起过期）。 */
+  const bookJobLastByDocument = new Map<string, string>();
+  const nowIso = (): string => new Date().toISOString();
+  const sleep = (ms: number): Promise<void> =>
+    new Promise((resolve) => {
+      const timer = setTimeout(resolve, ms);
+      timer.unref?.();
+    });
+  const isActiveBookState = (state: BookOcrJobState): boolean =>
+    state === 'queued' || state === 'running' || state === 'paused' || state === 'cancelling';
+
+  const finishBookJob = (
+    control: BookOcrControl,
+    state: BookOcrJobState,
+    error?: BookOcrJobRecord['error']
+  ): void => {
+    const { record } = control;
+    record.state = state;
+    record.stage = state;
+    record.error = error;
+    record.updatedAt = nowIso();
+    record.finishedAt = record.updatedAt;
+    const current = bookJobByDocument.get(record.documentId);
+    if (current === record.id) bookJobByDocument.delete(record.documentId);
+    bookJobLastByDocument.set(record.documentId, record.id);
+    control.untrack();
+    // 任务记录保留 30 分钟：刷新界面/回到工作台后还能看到上次结果；过期后释放。
+    const cleanup = setTimeout(() => {
+      bookJobs.delete(record.id);
+      if (bookJobLastByDocument.get(record.documentId) === record.id) {
+        bookJobLastByDocument.delete(record.documentId);
+      }
+    }, 30 * 60 * 1000);
+    cleanup.unref?.();
+  };
+
+  const runBookOcr = async (control: BookOcrControl): Promise<void> => {
+    const { record, controller } = control;
+    if (!store.getDocument(record.documentId)) {
+      finishBookJob(control, 'failed', {
+        code: 'document_deleted',
+        message: '文献已删除，整本 OCR 已中止'
+      });
+      return;
+    }
+    record.state = 'running';
+    record.stage = 'ocr';
+    record.updatedAt = nowIso();
+    let consecutiveFailures = 0;
+    for (let page = record.currentPage; page <= record.total; page += 1) {
+      if (control.cancelled || controller.signal.aborted) {
+        finishBookJob(control, 'cancelled');
+        return;
+      }
+      // 暂停只在两页之间生效：正在识别的一页先完成并落库，避免半页结果。
+      while (control.paused && !control.cancelled) {
+        record.state = 'paused';
+        record.stage = 'paused';
+        record.updatedAt = nowIso();
+        await sleep(200);
+      }
+      if (control.cancelled) {
+        finishBookJob(control, 'cancelled');
+        return;
+      }
+      record.state = 'running';
+      record.stage = `ocr:${page}`;
+      record.currentPage = page;
+      record.updatedAt = nowIso();
+      try {
+        const cached = store.getPageEdit(record.documentId, page);
+        if (cached?.origin === 'ocr' && cached.text.trim()) {
+          record.skipped += 1;
+        } else {
+          const result = await recognizePage(
+            store,
+            secrets,
+            record.documentId,
+            page,
+            record.scale,
+            { signal: controller.signal }
+          );
+          record.engine = result.engine;
+          record.done += 1;
+        }
+        consecutiveFailures = 0;
+      } catch (error) {
+        if (control.cancelled || controller.signal.aborted) {
+          finishBookJob(control, 'cancelled');
+          return;
+        }
+        record.failed += 1;
+        consecutiveFailures += 1;
+        // 连续 5 页失败通常是引擎/语言包/网络问题：中止并给出可读原因，不把整本耗完。
+        if (consecutiveFailures >= 5) {
+          finishBookJob(control, 'failed', {
+            code: 'ocr_failed',
+            message: error instanceof Error ? error.message : '整本 OCR 连续失败'
+          });
+          return;
+        }
+      }
+      record.updatedAt = nowIso();
+    }
+    finishBookJob(control, 'done');
+  };
+
+  /** 所有整本 OCR 任务（按更新时间倒序）：工作台与阅读页共用，用于显示进度。 */
+  app.get(`${API_PREFIX}/ocr/book-jobs`, async () => ({
+    jobs: [...bookJobs.values()]
+      .map((control) => control.record)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+  }));
+
+  app.get(`${API_PREFIX}/documents/:id/ocr/book`, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const document = store.getDocument(id);
+    if (!document) return notFound(reply, '文献不存在');
+    const jobId = bookJobByDocument.get(id);
+    const control = jobId ? bookJobs.get(jobId) : undefined;
+    if (control) return control.record;
+    const lastId = bookJobLastByDocument.get(id);
+    const last = lastId ? bookJobs.get(lastId) : undefined;
+    if (last) return last.record;
+    const idle: BookOcrJobRecord = {
+      id: '',
+      documentId: id,
+      state: 'idle',
+      total: document.pages,
+      done: 0,
+      skipped: 0,
+      failed: 0,
+      currentPage: 0,
+      stage: 'idle',
+      scale: 2,
+      startedAt: '',
+      updatedAt: ''
+    };
+    return idle;
+  });
+
+  app.post(`${API_PREFIX}/documents/:id/ocr/book/start`, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const document = store.getDocument(id);
+    if (!document) return notFound(reply, '文献不存在');
+    const body = (request.body ?? {}) as { fromPage?: unknown; scale?: unknown };
+    const existingJobId = bookJobByDocument.get(id);
+    const existing = existingJobId ? bookJobs.get(existingJobId) : undefined;
+    // 同一篇文献同时只跑一个整本任务：重复点击开始返回正在跑的那个。
+    if (existing && isActiveBookState(existing.record.state)) return existing.record;
+
+    const total = Math.max(1, document.pages);
+    const fromPage =
+      typeof body.fromPage === 'number' && Number.isInteger(body.fromPage)
+        ? Math.min(Math.max(1, body.fromPage), total)
+        : 1;
+    const scale =
+      typeof body.scale === 'number' && Number.isFinite(body.scale)
+        ? Math.min(3, Math.max(1, body.scale))
+        : 2;
+    const controller = new AbortController();
+    const record: BookOcrJobRecord = {
+      id: randomUUID(),
+      documentId: id,
+      state: 'queued',
+      total,
+      done: 0,
+      skipped: 0,
+      failed: 0,
+      currentPage: fromPage,
+      stage: 'queued',
+      scale,
+      startedAt: nowIso(),
+      updatedAt: nowIso()
+    };
+    const control: BookOcrControl = {
+      record,
+      controller,
+      paused: false,
+      cancelled: false,
+      untrack: documentRequests.track([id], controller)
+    };
+    bookJobs.set(record.id, control);
+    bookJobByDocument.set(id, record.id);
+    bookJobLastByDocument.set(id, record.id);
+    void runBookOcr(control);
+    return record;
+  });
+
+  app.post(`${API_PREFIX}/documents/:id/ocr/book/:jobId/pause`, async (request, reply) => {
+    const { id, jobId } = request.params as { id: string; jobId: string };
+    const control = bookJobs.get(jobId);
+    if (!control || control.record.documentId !== id) {
+      return notFound(reply, '整本 OCR 任务不存在或已过期');
+    }
+    if (control.record.state === 'running' || control.record.state === 'queued') {
+      control.paused = true;
+      control.record.state = 'paused';
+      control.record.stage = 'paused';
+      control.record.updatedAt = nowIso();
+    }
+    return control.record;
+  });
+
+  app.post(`${API_PREFIX}/documents/:id/ocr/book/:jobId/resume`, async (request, reply) => {
+    const { id, jobId } = request.params as { id: string; jobId: string };
+    const control = bookJobs.get(jobId);
+    if (!control || control.record.documentId !== id) {
+      return notFound(reply, '整本 OCR 任务不存在或已过期');
+    }
+    if (control.record.state === 'paused') {
+      control.paused = false;
+      control.record.state = 'running';
+      control.record.stage = 'ocr';
+      control.record.updatedAt = nowIso();
+    }
+    return control.record;
+  });
+
+  app.post(`${API_PREFIX}/documents/:id/ocr/book/:jobId/cancel`, async (request, reply) => {
+    const { id, jobId } = request.params as { id: string; jobId: string };
+    const control = bookJobs.get(jobId);
+    if (!control || control.record.documentId !== id) {
+      return notFound(reply, '整本 OCR 任务不存在或已过期');
+    }
+    if (isActiveBookState(control.record.state)) {
+      control.cancelled = true;
+      control.record.state = 'cancelling';
+      control.record.stage = 'cancelling';
+      control.record.updatedAt = nowIso();
+      control.controller.abort();
+    }
+    return control.record;
   });
 }

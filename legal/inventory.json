@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-24T17:46:29.657Z",
+  "generatedAt": "2026-11-25T12:41:39.922Z",
   "electron": "44.5.1",
   "node": "24.21.0",
   "asar": "app.asar",
@@ -831,11 +831,11 @@
       "licenseFiles": [
         {
           "path": "upstream/agent-bridge/THIRD-PARTY.md",
-          "sha256": "afeba702bee4fcdded44938a22f083d94cd10f606d221449210820fc73ff7117"
+          "sha256": "789015dc940498753cdc682ddf9e4e95213757f561bc3bf2aa9ee91b9741c418"
         },
         {
           "path": "upstream/agent-bridge/deps.json",
-          "sha256": "122c6d25e6b3a0db98528d50b52e95c2d68c973d87a4af192099436367371f82"
+          "sha256": "5beef36851a1be44dd75261de04ded4c86faaf9dfad407ae77f248d03df55bdb"
         }
       ],
       "artifacts": [

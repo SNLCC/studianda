@@ -929,11 +929,13 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     const { id } = request.params as { id: string };
     const body = (request.body ?? {}) as {
       content?: unknown;
+      quote?: unknown;
       color?: unknown;
       style?: unknown;
     };
     const annotation = options.store.updateAnnotation(id, {
       content: typeof body.content === 'string' ? body.content : undefined,
+      quote: typeof body.quote === 'string' ? body.quote : undefined,
       color: typeof body.color === 'string' ? body.color : undefined,
       style: typeof body.style === 'string' ? body.style : undefined
     });

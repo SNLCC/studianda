@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type React from 'react';
-import { documentTypeLabel, type DocumentSummary } from '@studianda/shared';
+import { documentTypeLabel, type BookOcrJobRecord, type DocumentSummary } from '@studianda/shared';
 import { onHostKeyDown } from './host-scope.js';
 
 export interface DocumentTranslationStatus {
@@ -119,6 +119,12 @@ export interface DocumentListProps {
   folderNames?: Record<string, string>;
   /** 「编辑分类」入口：同时修改文献类型与所属文件夹。 */
   onEditClassification?(document: DocumentSummary): void;
+  /** documentId -> 整本 OCR 任务（显示进度、决定菜单文案）。 */
+  ocrJobs?: Record<string, BookOcrJobRecord>;
+  /** 启动整本 OCR；已有任务时由上层决定继续/忽略。 */
+  onStartOcr?(document: DocumentSummary): void;
+  onPauseOcr?(document: DocumentSummary): void;
+  onCancelOcr?(document: DocumentSummary): void;
 }
 
 function ViewToggle({
@@ -182,7 +188,11 @@ export function DocumentList({
   typeLabel = '',
   onClearFilters,
   folderNames,
-  onEditClassification
+  onEditClassification,
+  ocrJobs = {},
+  onStartOcr,
+  onPauseOcr,
+  onCancelOcr
 }: DocumentListProps): React.JSX.Element {
   const searching = searchQuery.length > 0;
   const filterActive = categoryLabel.length > 0 || typeLabel.length > 0;
@@ -368,10 +378,36 @@ export function DocumentList({
   const sortHint =
     sort === 'manual'
       ? '默认排序：拖动卡片/列表可调整顺序，其它排序只是浏览'
-      : '仅浏览排序，不改变默认顺序；拖拽请切回「默认排序」';
+      : '当前是浏览排序；拖动卡片/列表会自动切回「默认排序」并保存新顺序';
   const dragHint = searching
     ? '拖动 ⋮⋮ 可在当前搜索结果内调整默认顺序'
     : '拖动 ⋮⋮ 调整默认顺序';
+
+  // 整本 OCR：任务进度文案与菜单动作（工作台卡片/行共用）。
+  const ocrProcessed = (job: BookOcrJobRecord): number => job.done + job.skipped + job.failed;
+  const ocrActive = (job: BookOcrJobRecord | undefined): boolean =>
+    job?.state === 'queued' ||
+    job?.state === 'running' ||
+    job?.state === 'paused' ||
+    job?.state === 'cancelling';
+  const ocrProgressLabel = (job: BookOcrJobRecord): string => {
+    const processed = Math.min(job.total, ocrProcessed(job));
+    if (job.state === 'paused') return `OCR 已暂停 ${processed}/${job.total}`;
+    if (job.state === 'cancelling') return `OCR 停止中 ${processed}/${job.total}`;
+    if (job.state === 'done') return `OCR 已完成 ${processed}/${job.total}`;
+    if (job.state === 'failed') return `OCR 失败 ${processed}/${job.total}`;
+    return `OCR ${processed}/${job.total}`;
+  };
+  const ocrMenuLabel = (job: BookOcrJobRecord | undefined): string => {
+    if (!job) return '整本 OCR（逐页识别）';
+    if (job.state === 'paused') return `继续整本 OCR（${ocrProcessed(job)}/${job.total}）`;
+    if (job.state === 'running' || job.state === 'queued') {
+      return `整本 OCR 进行中（${ocrProcessed(job)}/${job.total}）`;
+    }
+    if (job.state === 'cancelling') return '整本 OCR 停止中…';
+    if (job.state === 'done') return '重新整本 OCR';
+    return '重试整本 OCR';
+  };
 
   // 卡片与列表共用的类型/文件夹徽标。
   const renderBadges = (
@@ -422,6 +458,31 @@ export function DocumentList({
           disabled: Boolean(translatingLabel),
           onSelect: onTranslate
         });
+      }
+      if (onStartOcr) {
+        const ocrJob = ocrJobs[document.id];
+        items.push({
+          key: 'ocr',
+          label: ocrMenuLabel(ocrJob),
+          disabled: Boolean(
+            ocrJob &&
+              (ocrJob.state === 'running' ||
+                ocrJob.state === 'queued' ||
+                ocrJob.state === 'cancelling')
+          ),
+          onSelect: onStartOcr
+        });
+        if (ocrJob && (ocrJob.state === 'running' || ocrJob.state === 'queued') && onPauseOcr) {
+          items.push({ key: 'ocr-pause', label: '暂停整本 OCR', onSelect: onPauseOcr });
+        }
+        if (ocrJob && ocrActive(ocrJob) && onCancelOcr) {
+          items.push({
+            key: 'ocr-cancel',
+            label: '停止整本 OCR',
+            onSelect: onCancelOcr,
+            danger: true
+          });
+        }
       }
       if (onRename) items.push({ key: 'rename', label: '重命名', onSelect: onRename });
       if (onEditAuthor) items.push({ key: 'author', label: '编辑作者', onSelect: onEditAuthor });
@@ -585,7 +646,7 @@ export function DocumentList({
                 ⋮⋮
               </span>
             ) : null}
-            <span className="kr-doc-card__title">{document.name}</span>
+            <span className="kr-doc-card__title" title={document.name}>{document.name}</span>
             {missing ? renderMissingChip() : null}
             {renderRelinkButton(document)}
           </div>
@@ -593,6 +654,11 @@ export function DocumentList({
           <span className="kr-doc-card__meta">
             {document.pages} 页 · 读至第 {Math.min(document.currentPage, document.pages)} 页
           </span>
+          {ocrJobs[document.id] && ocrActive(ocrJobs[document.id]) ? (
+            <span className="kr-doc-card__ocr" role="status">
+              {ocrProgressLabel(ocrJobs[document.id]!)}
+            </span>
+          ) : null}
           {translation && translation.status !== 'none' ? (
             <span className="kr-doc-card__state">{translationStatusLabel(translation)}</span>
           ) : null}
@@ -685,7 +751,7 @@ export function DocumentList({
           </span>
         ) : null}
         <div className="kr-doc-row__main">
-          <span className="kr-doc-row__title">{document.name}</span>
+          <span className="kr-doc-row__title" title={document.name}>{document.name}</span>
           <span className="kr-doc-row__badges">
             {renderBadges(typeBadge, typeUnfiled, folderLabel)}
             {missing ? renderMissingChip() : null}
@@ -695,6 +761,11 @@ export function DocumentList({
         <span className="kr-doc-row__meta">
           {document.pages} 页 · 读至第 {Math.min(document.currentPage, document.pages)} 页
         </span>
+        {ocrJobs[document.id] && ocrActive(ocrJobs[document.id]) ? (
+          <span className="kr-doc-row__ocr" role="status">
+            {ocrProgressLabel(ocrJobs[document.id]!)}
+          </span>
+        ) : null}
         {translation && translation.status !== 'none' ? (
           <span className="kr-doc-row__state">{translationStatusLabel(translation)}</span>
         ) : null}

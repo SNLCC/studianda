@@ -135,10 +135,13 @@ export function NotesPanel({
           {showTrash ? '返回笔记' : '回收站'}
         </button>
       </div>
-      <p className="kr-muted">笔记可以关联当前页，也可以写成整篇文献的笔记；支持 Markdown 与内部引用。</p>
-      <p className="kr-muted kr-notes__hint">
-        删除的笔记/批注会进入回收站，可恢复或彻底删除；只有彻底删除才会清理仅被它引用的图片。
-      </p>
+      <details className="kr-reader-hint">
+        <summary>说明与回收站规则</summary>
+        <p className="kr-muted">笔记可以关联当前页，也可以写成整篇文献的笔记；支持 Markdown 与内部引用。</p>
+        <p className="kr-muted">
+          删除的笔记/批注会进入回收站，可恢复或彻底删除；只有彻底删除才会清理仅被它引用的图片。
+        </p>
+      </details>
       {!showTrash ? (
       <form onSubmit={submit} className="kr-notes__form">
         <MarkdownEditor

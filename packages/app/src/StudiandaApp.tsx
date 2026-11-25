@@ -41,6 +41,7 @@ import type {
   NoteFolderRecord,
   ImportJobRecord,
   OcrJobRecord,
+  BookOcrJobRecord,
   ProjectSearchResult,
   ProjectSummary,
   ReadingTaskSummary,
@@ -1038,6 +1039,67 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     queryKey: ['documents', showTrash],
     queryFn: () => api.listDocuments(showTrash)
   });
+
+  // 整本 OCR 任务：工作台卡片/行上显示进度，并从这里启动/继续/停止。
+  const bookOcrJobsQuery = useQuery({
+    queryKey: ['book-ocr-jobs'],
+    queryFn: () => api.listBookOcrJobs(),
+    refetchInterval: (query) => {
+      const jobs = query.state.data?.jobs ?? [];
+      const running = jobs.some(
+        (job) =>
+          job.state === 'queued' ||
+          job.state === 'running' ||
+          job.state === 'paused' ||
+          job.state === 'cancelling'
+      );
+      return running ? 1500 : 15000;
+    }
+  });
+  const bookOcrByDocument = useMemo(() => {
+    const map: Record<string, BookOcrJobRecord> = {};
+    for (const job of bookOcrJobsQuery.data?.jobs ?? []) {
+      const current = map[job.documentId];
+      if (!current || job.updatedAt > current.updatedAt) map[job.documentId] = job;
+    }
+    return map;
+  }, [bookOcrJobsQuery.data]);
+  const startBookOcrForDocument = (document: DocumentSummary): void => {
+    const job = bookOcrByDocument[document.id];
+    const inFlight =
+      job &&
+      (job.state === 'queued' ||
+        job.state === 'running' ||
+        job.state === 'paused' ||
+        job.state === 'cancelling');
+    const request = !inFlight
+      ? api.startBookOcr(document.id)
+      : job.state === 'paused'
+        ? api.resumeBookOcr(document.id, job.id)
+        : Promise.resolve(job);
+    void request
+      .then(() => {
+        void queryClient.invalidateQueries({ queryKey: ['book-ocr-jobs'] });
+        setLibraryNotice(`已开始整本 OCR《${document.name}》；进度可在卡片上查看，也可在阅读页暂停/停止。`);
+      })
+      .catch((error: Error) => setLibraryNotice(`启动整本 OCR 失败：${error.message}`));
+  };
+  const pauseBookOcrForDocument = (document: DocumentSummary): void => {
+    const job = bookOcrByDocument[document.id];
+    if (!job?.id) return;
+    void api
+      .pauseBookOcr(document.id, job.id)
+      .then(() => queryClient.invalidateQueries({ queryKey: ['book-ocr-jobs'] }))
+      .catch((error: Error) => setLibraryNotice(`暂停整本 OCR 失败：${error.message}`));
+  };
+  const cancelBookOcrForDocument = (document: DocumentSummary): void => {
+    const job = bookOcrByDocument[document.id];
+    if (!job?.id) return;
+    void api
+      .cancelBookOcr(document.id, job.id)
+      .then(() => queryClient.invalidateQueries({ queryKey: ['book-ocr-jobs'] }))
+      .catch((error: Error) => setLibraryNotice(`停止整本 OCR 失败：${error.message}`));
+  };
 
   // 设置：用于首次重建图片资源索引后的一次性提示（不阻塞界面）。
   const settingsQuery = useQuery({
@@ -2312,7 +2374,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowProjects(false);
     setShowCorpus(false);
     setFolderId(null);
-    resetLibraryFilters();
     setShowStandaloneNotes(true);
     setLibraryNotice('');
   };
@@ -2325,7 +2386,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowProjects(false);
     setShowCorpus(false);
     setFolderId(null);
-    resetLibraryFilters();
     setShowReferenceGraph(true);
     // 每次打开都回到「默认一屏看整体」：清空服务端筛选、回到第一页。
     const hadFilter = referenceGraphKinds.length > 0 || referenceGraphSearch.length > 0;
@@ -2493,7 +2553,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowFlows(false);
     setShowCorpus(false);
     setFolderId(null);
-    resetLibraryFilters();
     setFolderNotice('');
     setLibraryNotice('');
   };
@@ -2508,7 +2567,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowFlows(false);
     setShowCorpus(false);
     setFolderId(id);
-    resetLibraryFilters();
     setFolderNotice('');
     setLibraryNotice('');
   };
@@ -2522,7 +2580,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowCorpus(false);
     setShowTrash(true);
     setFolderId(null);
-    resetLibraryFilters();
     setLibraryNotice('');
   };
 
@@ -2535,7 +2592,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowCorpus(false);
     setShowZotero(true);
     setFolderId(null);
-    resetLibraryFilters();
     setLibraryNotice('');
   };
 
@@ -2549,7 +2605,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowProjects(true);
     setShowCorpus(false);
     setFolderId(null);
-    resetLibraryFilters();
     setLibraryNotice('');
   };
 
@@ -2578,7 +2633,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setShowFlows(true);
     setShowCorpus(false);
     setFolderId(null);
-    resetLibraryFilters();
     setLibraryNotice('');
   };
 
@@ -2605,7 +2659,6 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
     setCorpusCreateRequested(Boolean(options?.create));
     setCorpusProjectSource(options?.project ?? null);
     setFolderId(null);
-    resetLibraryFilters();
     setLibraryNotice('');
   };
 
@@ -3451,7 +3504,11 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
               </button>
             </div>
           ) : null}
-          <div className={`kr-workspace-heading${compactHeader ? ' is-compact' : ''}`}>
+          <div
+            className={`kr-workspace-heading${compactHeader ? ' is-compact' : ''}${
+              showStandaloneNotes ? ' is-notes' : ''
+            }`}
+          >
             <div>
               <h1>{workspaceTitle}</h1>
               <p>
@@ -3946,11 +4003,14 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
         onSortChange={setSortMode}
         view={libraryView}
         onViewChange={setLibraryView}
-        reorderable={sortMode === 'manual' && !showTrash}
+        reorderable={!showTrash}
         reorderPending={moveDocumentMutation.isPending}
-        onReorder={(documentId, target) =>
-          moveDocumentMutation.mutate({ id: documentId, ...target })
-        }
+        onReorder={(documentId, target) => {
+          // 拖动排序只在「默认排序」下有明确语义：别的排序里拖动时自动切回默认排序，
+          // 否则拖动看起来毫无反应（用户会以为卡片不能拖了）。
+          if (sortMode !== 'manual') setSortMode('manual');
+          moveDocumentMutation.mutate({ id: documentId, ...target });
+        }}
         tags={availableTags}
         tagFilter={tagFilter}
         onTagFilterChange={setTagFilter}
@@ -3996,6 +4056,10 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
           setSelected({ document });
         }}
         onRelink={(document) => relinkMutation.mutate(document)}
+        ocrJobs={bookOcrByDocument}
+        onStartOcr={startBookOcrForDocument}
+        onPauseOcr={pauseBookOcrForDocument}
+        onCancelOcr={cancelBookOcrForDocument}
       />
       )}
       {translationNotice ? (
@@ -5578,22 +5642,42 @@ function ReaderPage({
                 <span className="kr-selection-actions__hint">框选区域</span>
               ) : null}
               {draft.isRegion ? (
-                <button
-                  type="button"
-                  title="识别这块区域的文字，并以它作为引用向阅读伙伴提问（不会创建批注）"
-                  onClick={() => {
-                    const rect = draft.rects[0];
-                    onAskRegion?.({
-                      page: pageNumber,
-                      x0: rect?.[0] ?? 0,
-                      y0: rect?.[1] ?? 0,
-                      x1: rect?.[2] ?? 1,
-                      y1: rect?.[3] ?? 1
-                    });
-                    setDraft(null);
-                    setSelectionRects([]);
-                  }}
-                >对此处提问</button>
+                <>
+                  <button
+                    type="button"
+                    title="识别这块区域的文字（只识别，不创建批注）"
+                    onClick={() => {
+                      const rect = draft.rects[0];
+                      onRecognizeRegion?.({
+                        page: pageNumber,
+                        x0: rect?.[0] ?? 0,
+                        y0: rect?.[1] ?? 0,
+                        x1: rect?.[2] ?? 1,
+                        y1: rect?.[3] ?? 1
+                      });
+                      setDraft(null);
+                      setSelectionRects([]);
+                    }}
+                  >
+                    识别文字
+                  </button>
+                  <button
+                    type="button"
+                    title="识别这块区域的文字，并以它作为引用向阅读伙伴提问（不会创建批注）"
+                    onClick={() => {
+                      const rect = draft.rects[0];
+                      onAskRegion?.({
+                        page: pageNumber,
+                        x0: rect?.[0] ?? 0,
+                        y0: rect?.[1] ?? 0,
+                        x1: rect?.[2] ?? 1,
+                        y1: rect?.[3] ?? 1
+                      });
+                      setDraft(null);
+                      setSelectionRects([]);
+                    }}
+                  >对此处提问</button>
+                </>
               ) : (
                 <>
                   <button type="button" onClick={() => onQuickAction?.('translate', draft.quote)}>翻译</button>
@@ -6531,6 +6615,74 @@ function ReaderView({
   onBack(): void;
 }): JSX.Element {
   const queryClient = useQueryClient();
+  // 整本 OCR：逐页识别扫描版文献；进度、暂停/继续、停止都在阅读工具栏里完成。
+  const bookOcrQuery = useQuery({
+    queryKey: ['book-ocr-job', document.id],
+    queryFn: () => api.getBookOcrJob(document.id),
+    refetchInterval: (query) => {
+      const state = query.state.data?.state;
+      return state === 'queued' ||
+        state === 'running' ||
+        state === 'paused' ||
+        state === 'cancelling'
+        ? 1000
+        : false;
+    }
+  });
+  const bookOcrJob = bookOcrQuery.data;
+  const bookOcrActive =
+    bookOcrJob?.state === 'queued' ||
+    bookOcrJob?.state === 'running' ||
+    bookOcrJob?.state === 'paused' ||
+    bookOcrJob?.state === 'cancelling';
+  const applyBookOcrJob = (job: BookOcrJobRecord): void => {
+    queryClient.setQueryData(['book-ocr-job', document.id], job);
+    if (job.state === 'done' || job.state === 'cancelled' || job.state === 'failed') {
+      void queryClient.invalidateQueries({ queryKey: ['book-ocr-jobs'] });
+    }
+    if (job.state === 'done') {
+      void queryClient.invalidateQueries({ queryKey: ['page-text', document.id] });
+    }
+  };
+  const startBookOcr = async (): Promise<void> => {
+    try {
+      applyBookOcrJob(await api.startBookOcr(document.id));
+    } catch (error) {
+      appDialogs.alert(
+        `启动整本 OCR 失败：${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  };
+  const pauseBookOcr = async (): Promise<void> => {
+    if (!bookOcrJob?.id) return;
+    try {
+      applyBookOcrJob(await api.pauseBookOcr(document.id, bookOcrJob.id));
+    } catch (error) {
+      appDialogs.alert(
+        `暂停整本 OCR 失败：${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  };
+  const resumeBookOcr = async (): Promise<void> => {
+    if (!bookOcrJob?.id) return;
+    try {
+      applyBookOcrJob(await api.resumeBookOcr(document.id, bookOcrJob.id));
+    } catch (error) {
+      appDialogs.alert(
+        `继续整本 OCR 失败：${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  };
+  const cancelBookOcr = async (): Promise<void> => {
+    if (!bookOcrJob?.id) return;
+    try {
+      applyBookOcrJob(await api.cancelBookOcr(document.id, bookOcrJob.id));
+    } catch (error) {
+      appDialogs.alert(
+        `停止整本 OCR 失败：${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  };
   // 译文栏「版式」呈现用：按需拉当前页页面图像（服务端渲染并带缓存，不改原 PDF）。
   const loadTranslationPageImage = useCallback(
     (targetPage: number, width: number) =>
@@ -6762,6 +6914,43 @@ function ReaderView({
     fallback_from?: string;
   } | null>(null);
   const [ocrRegionCopyMessage, setOcrRegionCopyMessage] = useState('');
+  const [ocrRegionSaving, setOcrRegionSaving] = useState(false);
+  /** 把区域识别结果（可先在上方文本框里改）写回本页原文：替换整页或追加到末尾。 */
+  const saveRegionAsPageText = async (mode: 'replace' | 'append'): Promise<void> => {
+    if (!ocrRegionResult) return;
+    const text = ocrRegionResult.textReflowed.trim();
+    if (!text) {
+      setOcrRegionCopyMessage('识别结果为空，没有可保存的文字。');
+      return;
+    }
+    if (
+      mode === 'replace' &&
+      !appDialogs.confirm(
+        `用识别结果替换第 ${ocrRegionResult.page} 页原文？本页原有文字会被覆盖，问答与检索将使用新文字。`
+      )
+    ) {
+      return;
+    }
+    setOcrRegionSaving(true);
+    try {
+      let next = text;
+      if (mode === 'append') {
+        const current = await api.getPageText(document.id, ocrRegionResult.page);
+        next = current.text?.trim() ? `${current.text.trim()}\n\n${text}` : text;
+      }
+      await api.savePageText(document.id, ocrRegionResult.page, next);
+      void queryClient.invalidateQueries({ queryKey: ['page-text'] });
+      void queryClient.invalidateQueries({ queryKey: ['translation-page'] });
+      void queryClient.invalidateQueries({ queryKey: ['translation-summary'] });
+      setOcrRegionCopyMessage(mode === 'append' ? '已追加到本页原文。' : '已替换本页原文。');
+    } catch (error) {
+      setOcrRegionCopyMessage(
+        `保存失败：${error instanceof Error ? error.message : String(error)}`
+      );
+    } finally {
+      setOcrRegionSaving(false);
+    }
+  };
   /**
    * 区域识别完成后做什么：'result' = 弹出识别结果（原 OCR 框选按钮的流程）；
    * 'ask' = 不弹结果，直接把识别出的文字作为引用打开阅读伙伴提问。
@@ -7370,14 +7559,36 @@ function ReaderView({
   };
 
   const createAnnotation = useMutation({
-    mutationFn: (input: {
+    mutationFn: async (input: {
       page: number;
       content?: string;
       quote?: string;
       rects?: string;
       color?: string;
       style?: string;
-    }) => api.createAnnotation({ documentId: document.id, ...input }),
+    }) => {
+      // 框选批注没有文字层（扫描件）时先自动识别这块区域，把原文写进 quote：
+      // 批注条目、检索与后续问答都需要这段原文；识别失败不阻止批注本身。
+      let quote = input.quote ?? '';
+      if (!quote && input.rects) {
+        try {
+          const rects = JSON.parse(input.rects) as number[][];
+          const bbox = Array.isArray(rects) ? rects[0] : null;
+          if (Array.isArray(bbox) && bbox.length >= 4) {
+            const region = await api.recognizeRegion(document.id, input.page, {
+              x0: bbox[0]!,
+              y0: bbox[1]!,
+              x1: bbox[2]!,
+              y1: bbox[3]!
+            });
+            quote = (region.textReflowed || region.text || '').trim();
+          }
+        } catch {
+          // 识别不可用（未下载语言包/服务未配置）时保持空 quote，批注照常保存。
+        }
+      }
+      return api.createAnnotation({ documentId: document.id, ...input, quote });
+    },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['annotations', document.id] });
     }
@@ -7426,7 +7637,7 @@ function ReaderView({
       input
     }: {
       id: string;
-      input: { content: string; color: string; style: string };
+      input: { content: string; quote?: string; color: string; style: string };
     }) => api.updateAnnotation(id, input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['annotations', document.id] });
@@ -8863,6 +9074,37 @@ function ReaderView({
       void queryClient.invalidateQueries({ queryKey: ['translation-overview'] });
     }
   });
+  // 本页原文校对：OCR 结果（含整本 OCR）允许直接改，保存后问答/检索用修改后的文字。
+  const [pageTextEditorOpen, setPageTextEditorOpen] = useState(false);
+  const [pageTextDraft, setPageTextDraft] = useState('');
+  const [pageTextEditorNotice, setPageTextEditorNotice] = useState('');
+  useEffect(() => {
+    // 换页时关闭编辑器，避免把上一页的草稿存到新页。
+    setPageTextEditorOpen(false);
+  }, [page]);
+  const openPageTextEditor = (): void => {
+    setPageTextDraft(pageTextQuery.data?.text ?? '');
+    setPageTextEditorNotice('');
+    setPageTextEditorOpen(true);
+    // 整本 OCR 可能刚处理过这一页：打开时再拉一次，避免拿旧缓存校对。
+    void pageTextQuery.refetch().then((result) => {
+      if (result.data) setPageTextDraft(result.data.text ?? '');
+    });
+  };
+  const submitPageTextDraft = (): void => {
+    const text = pageTextDraft.trim();
+    if (!text) {
+      setPageTextEditorNotice('原文不能为空。');
+      return;
+    }
+    savePageText.mutate(text, {
+      onSuccess: () => {
+        setPageTextEditorNotice('已保存；阅读伙伴与检索会使用修改后的原文。');
+        setPageTextEditorOpen(false);
+      },
+      onError: (error: Error) => setPageTextEditorNotice(`保存失败：${error.message}`)
+    });
+  };
   const startTranslation = useMutation<
     TranslationJobRecord,
     Error,
@@ -9142,9 +9384,46 @@ function ReaderView({
     return () => window.cancelAnimationFrame(frame);
   }, [pdf]);
 
+  /**
+   * 把当前页同步进文献库列表缓存：从阅读页返回文献库后再次打开，
+   * `document.currentPage` 必须是最新页，否则会跳回上次刷新列表时的旧页。
+   */
+  const syncLibraryCurrentPage = (nextPage: number): void => {
+    queryClient.setQueriesData<DocumentSummary[]>({ queryKey: ['documents'] }, (list) =>
+      Array.isArray(list)
+        ? list.map((item) =>
+            item.id === document.id ? { ...item, currentPage: nextPage } : item
+          )
+        : list
+    );
+  };
+
+  // 翻页后 400ms 落库（避免快速滚动刷一屏请求），同时更新列表缓存。
   useEffect(() => {
-    void api.updateDocument(document.id, { currentPage: page });
-  }, [api, document.id, page]);
+    if (!pdf || !restoredPageRef.current) return;
+    const next = page;
+    const timer = window.setTimeout(() => {
+      void api
+        .updateDocument(document.id, { currentPage: next })
+        .then(() => syncLibraryCurrentPage(next))
+        .catch(() => {
+          // 页码保存失败不影响阅读；离开阅读页时还会再补一次。
+        });
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [api, document.id, page, pdf]);
+
+  // 离开阅读页（返回文献库/切换文献）时补一次：debounce 可能还没触发，避免"读到的页没记住"。
+  useEffect(() => {
+    return () => {
+      if (!restoredPageRef.current) return;
+      const last = pageRef.current;
+      void api
+        .updateDocument(document.id, { currentPage: last })
+        .then(() => syncLibraryCurrentPage(last))
+        .catch(() => undefined);
+    };
+  }, [api, document.id]);
 
   useEffect(() => {
     return () => {
@@ -9942,25 +10221,54 @@ function ReaderView({
           >
             <IconMask />
           </button>
+          <span className="kr-reader__book-ocr">
+            {bookOcrJob && bookOcrActive ? (
+              <>
+                <span
+                  className="kr-reader__book-ocr-progress"
+                  role="status"
+                  title={`整本 OCR：已处理 ${bookOcrJob.done + bookOcrJob.skipped + bookOcrJob.failed}/${bookOcrJob.total} 页（识别 ${bookOcrJob.done}、跳过 ${bookOcrJob.skipped}、失败 ${bookOcrJob.failed}）`}
+                >
+                  OCR {bookOcrJob.done + bookOcrJob.skipped + bookOcrJob.failed}/{bookOcrJob.total}
+                  {bookOcrJob.state === 'paused' ? ' · 暂停' : ''}
+                </span>
+                <button
+                  type="button"
+                  className="kr-reader__book-ocr-btn"
+                  onClick={() =>
+                    void (bookOcrJob.state === 'paused' ? resumeBookOcr() : pauseBookOcr())
+                  }
+                >
+                  {bookOcrJob.state === 'paused' ? '继续' : '暂停'}
+                </button>
+                <button
+                  type="button"
+                  className="kr-reader__book-ocr-btn"
+                  onClick={() => void cancelBookOcr()}
+                  disabled={bookOcrJob.state === 'cancelling'}
+                >
+                  {bookOcrJob.state === 'cancelling' ? '停止中…' : '停止'}
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="kr-icon-btn"
+                aria-label="整本 OCR"
+                title="整本 OCR：逐页识别这本扫描版文献，完成后可检索、可问答（可暂停/停止）"
+                onClick={() => void startBookOcr()}
+              >
+                <IconOcr />
+              </button>
+            )}
+          </span>
           <button
             type="button"
-            className={ocrRegionMode ? 'kr-icon-btn is-active' : 'kr-icon-btn'}
-            aria-pressed={ocrRegionMode}
-            disabled={ocrRegionPending}
-            aria-label="识别区域"
-            title={
-              ocrRegionPending
-                ? `区域识别中… ${ocrJob?.progress ?? 0}%（已用时 ${ocrRegionElapsed} 秒）`
-                : '框选一块区域做 OCR 识别'
-            }
-            onClick={() => {
-              setOcrRegionMode((value) => !value);
-              setRegionMode(false);
-              setMaskMode(false);
-              setOcrRegionError(null);
-            }}
+            className="kr-reader__book-ocr-btn"
+            title="查看 / 修改本页原文：OCR 结果可逐字校对，保存后阅读伙伴与检索使用修改后的文字"
+            onClick={openPageTextEditor}
           >
-            {ocrRegionPending ? '识别中…' : <IconOcr />}
+            原文
           </button>
           {ocrRegionPending ? (
             <button
@@ -11412,6 +11720,64 @@ function ReaderView({
           </aside>
         ) : null}
       </div>
+      {pageTextEditorOpen ? (
+        <div
+          className="kr-modal-backdrop"
+          role="presentation"
+          onClick={() => setPageTextEditorOpen(false)}
+        >
+          <div
+            className="kr-modal kr-page-text-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="修改本页原文"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2>修改本页原文</h2>
+            <p className="kr-muted">
+              第 {page} 页 · 来源：
+              {pageTextQuery.data?.origin === 'ocr'
+                ? 'OCR 识别'
+                : pageTextQuery.data?.origin === 'user'
+                  ? '人工校对'
+                  : 'PDF 文本层'}
+              。保存后阅读伙伴、检索与翻译都会使用这里的文字。
+            </p>
+            <label className="kr-modal__field">
+              本页原文（可编辑）
+              <textarea
+                className="kr-page-text-modal__input"
+                value={pageTextDraft}
+                rows={16}
+                onChange={(event) => setPageTextDraft(event.target.value)}
+                placeholder="本页还没有可用的原文；可粘贴或输入校对后的文字"
+              />
+            </label>
+            {pageTextEditorNotice ? (
+              <p className="kr-settings__message" role="status">
+                {pageTextEditorNotice}
+              </p>
+            ) : null}
+            <div className="kr-modal__actions">
+              <button
+                type="button"
+                className="kr-ghost"
+                onClick={() => setPageTextEditorOpen(false)}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="kr-primary"
+                onClick={submitPageTextDraft}
+                disabled={savePageText.isPending}
+              >
+                {savePageText.isPending ? '保存中…' : '保存原文'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {ocrRegionResult ? (
         <div
           className="kr-modal-backdrop"
@@ -11447,7 +11813,7 @@ function ReaderView({
               </p>
             ) : null}
             <p className="kr-muted">
-              这里只展示框选区域识别出的文字，不会自动写回页面文字；引用前请回原页核对。
+              上面的文字可直接修改；保存后会替换或追加到本页原文，问答与检索使用保存后的文字。
             </p>
             <label className="kr-modal__field">
               整理后的文本（可编辑）
@@ -11484,6 +11850,24 @@ function ReaderView({
                 onClick={() => setOcrRegionResult(null)}
               >
                 关闭
+              </button>
+              <button
+                type="button"
+                className="kr-ghost"
+                disabled={ocrRegionSaving}
+                title="把上面编辑后的文字追加到本页原文末尾（保留原有文字）"
+                onClick={() => void saveRegionAsPageText('append')}
+              >
+                {ocrRegionSaving ? '保存中…' : '追加到本页原文'}
+              </button>
+              <button
+                type="button"
+                className="kr-ghost"
+                disabled={ocrRegionSaving}
+                title="用上面编辑后的文字替换本页原文（会覆盖原有文字，需确认）"
+                onClick={() => void saveRegionAsPageText('replace')}
+              >
+                替换本页原文
               </button>
               <button
                 type="button"

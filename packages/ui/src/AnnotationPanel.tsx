@@ -63,7 +63,7 @@ export interface AnnotationPanelProps {
   onCreate(content: string): void;
   onUpdate(
     id: string,
-    input: { content: string; color: string; style: string }
+    input: { content: string; quote?: string; color: string; style: string }
   ): void;
   onAsk(annotation: AnnotationRecord): void;
   onLocate(annotation: AnnotationRecord): void;
@@ -186,6 +186,7 @@ export function AnnotationPanel({
   const [showTrash, setShowTrash] = useState(defaultShowTrash);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
+  const [editQuote, setEditQuote] = useState('');
   const [editColor, setEditColor] = useState('yellow');
   const [editStyle, setEditStyle] = useState('highlight');
 
@@ -200,6 +201,7 @@ export function AnnotationPanel({
   const startEdit = (annotation: AnnotationRecord): void => {
     setEditingId(annotation.id);
     setEditContent(annotation.content);
+    setEditQuote(annotation.quote ?? '');
     setEditColor(annotation.color || 'yellow');
     setEditStyle(annotation.rects ? annotation.style || 'highlight' : 'page');
   };
@@ -207,6 +209,7 @@ export function AnnotationPanel({
   const saveEdit = (annotation: AnnotationRecord): void => {
     onUpdate(annotation.id, {
       content: editContent,
+      quote: editQuote,
       color: editColor,
       style: annotation.rects ? editStyle : 'page'
     });
@@ -236,9 +239,17 @@ export function AnnotationPanel({
           {showTrash ? '返回批注' : '回收站'}
         </button>
       </div>
-      <p className="kr-muted kr-annotations__hint">
-        删除的笔记/批注会进入回收站，可恢复或彻底删除；只有彻底删除才会清理仅被它引用的图片。
-      </p>
+      <details className="kr-reader-hint">
+        <summary>说明与回收站规则</summary>
+        <p className="kr-muted">
+          删除的笔记/批注会进入回收站，可恢复或彻底删除；只有彻底删除才会清理仅被它引用的图片。
+        </p>
+        {!showTrash ? (
+          <p className="kr-muted">
+            在页面上选中文字可高亮、下划线或加段落侧线；也可以写一条本页批注。
+          </p>
+        ) : null}
+      </details>
       {!showTrash && zoteroAvailable ? (
         <div>
           <button
@@ -281,9 +292,6 @@ export function AnnotationPanel({
       ) : null}
       {!showTrash ? (
         <>
-          <p className="kr-muted">
-            在页面上选中文字可高亮、下划线或加段落侧线；也可以写一条本页批注。
-          </p>
           <form onSubmit={submit} className="kr-annotations__form">
         <MarkdownEditor
           value={content}
@@ -353,6 +361,17 @@ export function AnnotationPanel({
             if (editingId === annotation.id) {
               return (
                 <li key={annotation.id} className="kr-annotation kr-annotation--editing">
+                  {annotation.rects || annotation.quote ? (
+                    <label className="kr-annotation__quote-edit">
+                      <span>原文摘录（OCR 结果可在此校对）</span>
+                      <textarea
+                        value={editQuote}
+                        rows={2}
+                        onChange={(event) => setEditQuote(event.target.value)}
+                        placeholder="这块区域的原文；扫描件可粘贴/修正 OCR 结果"
+                      />
+                    </label>
+                  ) : null}
                   <MarkdownEditor
                     value={editContent}
                     onChange={setEditContent}

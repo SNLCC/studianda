@@ -472,6 +472,8 @@ export interface CreateAnnotationInput {
 
 export interface UpdateAnnotationInput {
   content?: string;
+  /** 原文摘录：框选批注自动 OCR 写入后，允许用户校对/改写。 */
+  quote?: string;
   color?: string;
   style?: string;
 }
@@ -989,6 +991,47 @@ export interface OcrJobRecord {
     message: string;
   };
   startedAt: string;
+  finishedAt?: string;
+}
+
+/**
+ * 整本书 OCR 后台任务：逐页识别并写入 page_edits（origin='ocr'），
+ * 供扫描版文献建立可检索/可问答的正文；支持暂停、继续与取消。
+ */
+export type BookOcrJobState =
+  | 'idle'
+  | 'queued'
+  | 'running'
+  | 'paused'
+  | 'cancelling'
+  | 'done'
+  | 'failed'
+  | 'cancelled';
+
+export interface BookOcrJobRecord {
+  id: string;
+  documentId: string;
+  state: BookOcrJobState;
+  /** 文献总页数（本次任务的处理范围 1..total）。 */
+  total: number;
+  /** 已识别并写库的页数。 */
+  done: number;
+  /** 已有 OCR 文本而跳过的页数（重跑/续跑时）。 */
+  skipped: number;
+  /** 识别失败的页数（单页失败不中断整本任务）。 */
+  failed: number;
+  /** 当前（或最后处理到的）页码。 */
+  currentPage: number;
+  stage: string;
+  scale: number;
+  /** 最近一次识别使用的引擎（部分识别方式逐页可能不同）。 */
+  engine?: string;
+  error?: {
+    code?: string;
+    message: string;
+  };
+  startedAt: string;
+  updatedAt: string;
   finishedAt?: string;
 }
 

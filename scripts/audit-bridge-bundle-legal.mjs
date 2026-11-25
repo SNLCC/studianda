@@ -8,6 +8,7 @@
  *
  * 用法：node scripts/audit-bridge-bundle-legal.mjs
  */
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -15,6 +16,7 @@ const root = path.resolve(import.meta.dirname, '..');
 const metaFile = path.join(root, 'packages/agent-bridge/dist/agent-bridge.mjs.meta.json');
 const legalDir = path.join(root, 'legal/upstream/agent-bridge');
 const depsFile = path.join(legalDir, 'deps.json');
+const sourcesFile = path.join(legalDir, 'SOURCES.json');
 const noticeFile = path.join(root, 'legal/NOTICE.html');
 
 const fail = (message) => {
@@ -28,9 +30,23 @@ for (const file of [metaFile, depsFile, noticeFile]) {
     process.exit();
   }
 }
+if (!existsSync(sourcesFile)) {
+  fail(
+    '缺少 legal/upstream/agent-bridge/SOURCES.json（官方仓库来源记录）；' +
+      '先运行 node scripts/audit-agent-bridge-upstream.mjs，再运行 sync-agent-bridge-legal.mjs。'
+  );
+}
 
 const metafile = JSON.parse(readFileSync(metaFile, 'utf8'));
 const deps = JSON.parse(readFileSync(depsFile, 'utf8'));
+const sources = existsSync(sourcesFile)
+  ? JSON.parse(readFileSync(sourcesFile, 'utf8'))
+  : { entries: [] };
+const sourceByKey = new Map(
+  (sources.entries ?? []).map((entry) => [`${entry.package}@${entry.version}`, entry])
+);
+const sha256Of = (text) =>
+  createHash('sha256').update(String(text ?? '').replace(/\r\n/g, '\n').trim()).digest('hex');
 const notice = readFileSync(noticeFile, 'utf8');
 
 const bundled = new Set();
@@ -78,6 +94,27 @@ for (const pkg of deps.packages ?? []) {
   }
   if (!notice.includes(pkg.name)) {
     fail(`${pkg.name}@${pkg.version} 未出现在 legal/NOTICE.html`);
+  }
+  // 许可证必须来自官方仓库（或明确记录的例外），并记录可核对的 URL / ref / 哈希。
+  const id = `${pkg.name}@${pkg.version}`;
+  const source = sourceByKey.get(id);
+  if (!source) {
+    fail(`${id} 缺少官方仓库来源记录（SOURCES.json）`);
+  } else {
+    if (!source.officialUrl || !source.sha256) {
+      fail(`${id} 的官方来源缺少 officialUrl 或 sha256`);
+    }
+    if (pkg.licenseSource !== 'official') {
+      fail(`${id} 的许可证不是取自官方仓库（licenseSource=${pkg.licenseSource ?? '未标注'}）`);
+    }
+    if (source.sha256 && source.sha256 !== sha256Of(pkg.licenseText)) {
+      fail(`${id} 的许可证原文哈希与官方来源记录不一致`);
+    }
+    if (!source.versionPinned) {
+      console.warn(
+        `[bridge-legal] 注意：${id} 的官方原文未固定版本（ref=${source.ref}）；${source.versionPinNote}`
+      );
+    }
   }
 }
 

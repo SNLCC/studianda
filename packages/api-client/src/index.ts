@@ -73,6 +73,7 @@ import type {
   NavigationPreview,
   OcrPageResult,
   OcrJobRecord,
+  BookOcrJobRecord,
   OcrLanguageStatus,
   OutlineResult,
   RegionOcrResult,
@@ -844,6 +845,17 @@ export interface ApiClient {
   ): Promise<{ jobId: string }>;
   getOcrRegionJob(documentId: string, jobId: string): Promise<OcrJobRecord>;
   cancelOcrRegionJob(documentId: string, jobId: string): Promise<OcrJobRecord>;
+  /** 整本书 OCR（逐页识别并写入页文本）；同一篇文献同时只跑一个任务。 */
+  startBookOcr(
+    documentId: string,
+    options?: { fromPage?: number; scale?: number }
+  ): Promise<BookOcrJobRecord>;
+  getBookOcrJob(documentId: string): Promise<BookOcrJobRecord>;
+  pauseBookOcr(documentId: string, jobId: string): Promise<BookOcrJobRecord>;
+  resumeBookOcr(documentId: string, jobId: string): Promise<BookOcrJobRecord>;
+  cancelBookOcr(documentId: string, jobId: string): Promise<BookOcrJobRecord>;
+  /** 所有整本 OCR 任务（含刚结束的，用于工作台展示进度）。 */
+  listBookOcrJobs(): Promise<{ jobs: BookOcrJobRecord[] }>;
   getPageText(documentId: string, page: number): Promise<PageTextRecord>;
   /** 页数据：归一化行坐标 + 该页生效遮罩（文字层/高亮对齐用）。 */
   getPageData(documentId: string, page: number): Promise<PageData>;
@@ -2396,6 +2408,29 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         `/documents/${encodeURIComponent(documentId)}/ocr/jobs/${encodeURIComponent(jobId)}/cancel`,
         { method: 'POST' }
       ),
+    startBookOcr: (documentId, options) =>
+      request<BookOcrJobRecord>(
+        `/documents/${encodeURIComponent(documentId)}/ocr/book/start`,
+        { method: 'POST', body: JSON.stringify(options ?? {}) }
+      ),
+    getBookOcrJob: (documentId) =>
+      request<BookOcrJobRecord>(`/documents/${encodeURIComponent(documentId)}/ocr/book`),
+    pauseBookOcr: (documentId, jobId) =>
+      request<BookOcrJobRecord>(
+        `/documents/${encodeURIComponent(documentId)}/ocr/book/${encodeURIComponent(jobId)}/pause`,
+        { method: 'POST' }
+      ),
+    resumeBookOcr: (documentId, jobId) =>
+      request<BookOcrJobRecord>(
+        `/documents/${encodeURIComponent(documentId)}/ocr/book/${encodeURIComponent(jobId)}/resume`,
+        { method: 'POST' }
+      ),
+    cancelBookOcr: (documentId, jobId) =>
+      request<BookOcrJobRecord>(
+        `/documents/${encodeURIComponent(documentId)}/ocr/book/${encodeURIComponent(jobId)}/cancel`,
+        { method: 'POST' }
+      ),
+    listBookOcrJobs: () => request<{ jobs: BookOcrJobRecord[] }>('/ocr/book-jobs'),
 
     getPageText: (documentId, page) =>
       request<PageTextRecord>(
