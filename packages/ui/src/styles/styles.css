@@ -13105,3 +13105,664 @@ details.kr-outline2__card > summary::-webkit-details-marker {
 .kr-identity__label {
   font-weight: 600;
 }
+
+/* ---- 独立笔记：文件夹 / 标签导航 + 平铺列表（侧栏信息架构重做） ----
+   文件夹和标签是「导航」，笔记是「内容」：
+   - 文件夹树常显（含空目录），点一下即筛选，计数随搜索/标签实时变化；
+   - 标签按计数排序、可折叠，超过 12 个折成「+N」；
+   - 列表只显示当前筛选结果，紧凑单行，不再嵌在一层层展开的文件夹里。 */
+.kr-standalone__sidebar {
+  gap: 6px;
+}
+
+.kr-standalone__sidebar-head .kr-ghost {
+  height: 24px;
+  padding: 0 8px;
+}
+
+.kr-standalone__sidebar .kr-standalone__search input {
+  height: 28px;
+}
+
+/* 全局 button 是 30px 高：导航里的紧凑按钮必须显式压掉 min-height。 */
+.kr-standalone__nav-row,
+.kr-standalone__nav-title,
+.kr-standalone__nav-add,
+.kr-standalone__nav-caret-btn,
+.kr-standalone__nav-folder-btn,
+.kr-standalone__nav-folder-actions button,
+.kr-standalone__nav-tag,
+.kr-standalone__nav-tag-more,
+.kr-standalone__filter-chip,
+.kr-standalone__filterbar .kr-link-button,
+.kr-standalone__nav-head .kr-link-button,
+.kr-standalone__sidebar .kr-standalone__bulkbar button {
+  min-height: 0;
+}
+
+/* 导航区：文件夹目录自己滚动，标签固定在其下方，保证两者都一眼可见。 */
+.kr-standalone__nav {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  max-height: 40%;
+  overflow: hidden;
+  padding: 1px 2px 6px 0;
+  border-bottom: 1px solid var(--kr-line);
+}
+
+.kr-standalone__nav-section {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+}
+
+.kr-standalone__nav-section + .kr-standalone__nav-section {
+  padding-top: 6px;
+  border-top: 1px dashed var(--kr-line);
+}
+
+.kr-standalone__nav-section--folders {
+  flex: 0 1 auto;
+  overflow: hidden;
+}
+
+.kr-standalone__nav-section--tags {
+  flex: none;
+}
+
+.kr-standalone__nav-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 20px;
+  padding-right: 2px;
+}
+
+.kr-standalone__nav-head-actions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+
+.kr-standalone__nav-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 20px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--kr-ink-faint);
+  font: inherit;
+  font-size: var(--kr-fs-micro);
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.kr-standalone__nav-title:hover {
+  background: var(--kr-celadon-soft);
+  color: var(--kr-ink);
+}
+
+.kr-standalone__nav-caret {
+  width: 9px;
+  flex: none;
+  color: var(--kr-ink-soft);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.kr-standalone__nav-add {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--kr-line);
+  border-radius: 5px;
+  background: var(--kr-paper-raised);
+  color: var(--kr-ink-soft);
+  font-size: var(--kr-fs-caption);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.kr-standalone__nav-add:hover {
+  border-color: var(--kr-celadon);
+  background: var(--kr-celadon-soft);
+  color: var(--kr-celadon-deep);
+}
+
+.kr-standalone__nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.kr-standalone__nav-list--folders {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 1px;
+}
+
+.kr-standalone__nav-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  min-height: 22px;
+  padding: 1px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--kr-ink-soft);
+  font: inherit;
+  font-size: var(--kr-fs-caption);
+  text-align: left;
+  cursor: pointer;
+}
+
+.kr-standalone__nav-row:hover {
+  background: var(--kr-celadon-soft);
+  color: var(--kr-ink);
+}
+
+.kr-standalone__nav-row.is-active {
+  background: var(--kr-celadon-soft);
+  color: var(--kr-celadon-deep);
+  font-weight: 600;
+}
+
+.kr-standalone__nav-row.is-drop-target {
+  outline: 1px dashed var(--kr-celadon-deep);
+  outline-offset: -1px;
+}
+
+.kr-standalone__nav-glyph {
+  width: 9px;
+  flex: none;
+  color: var(--kr-ink-faint);
+  font-size: var(--kr-fs-micro);
+  line-height: 1;
+  text-align: center;
+}
+
+.kr-standalone__nav-row.is-active .kr-standalone__nav-glyph {
+  color: var(--kr-celadon-deep);
+}
+
+.kr-standalone__nav-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kr-standalone__nav-count {
+  flex: none;
+  color: var(--kr-ink-faint);
+  font-size: var(--kr-fs-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.kr-standalone__nav-row.is-active .kr-standalone__nav-count,
+.kr-standalone__nav-folder-row.is-active .kr-standalone__nav-count {
+  color: var(--kr-celadon-deep);
+}
+
+/* 文件夹行：箭头（展开子目录）+ 名字（点一下筛选）+ 计数 + 悬停操作。 */
+.kr-standalone__nav-folder-row {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  border-radius: 6px;
+}
+
+.kr-standalone__nav-folder-row:hover {
+  background: var(--kr-celadon-soft);
+}
+
+.kr-standalone__nav-folder-row.is-active {
+  background: var(--kr-celadon-soft);
+}
+
+.kr-standalone__nav-folder-row.is-drop-target {
+  outline: 1px dashed var(--kr-celadon-deep);
+  outline-offset: -1px;
+}
+
+.kr-standalone__nav-caret-btn {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--kr-ink-soft);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.kr-standalone__nav-caret-btn:hover {
+  color: var(--kr-ink);
+}
+
+.kr-standalone__nav-caret-btn.is-spacer {
+  cursor: default;
+}
+
+.kr-standalone__nav-folder-btn {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 22px;
+  padding: 1px 4px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--kr-ink-soft);
+  font: inherit;
+  font-size: var(--kr-fs-caption);
+  text-align: left;
+  cursor: pointer;
+}
+
+.kr-standalone__nav-folder-btn:hover {
+  color: var(--kr-ink);
+}
+
+.kr-standalone__nav-folder-row.is-active .kr-standalone__nav-folder-btn {
+  color: var(--kr-celadon-deep);
+  font-weight: 600;
+}
+
+.kr-standalone__nav-folder-actions {
+  display: flex;
+  flex: none;
+  gap: 1px;
+  padding-right: 2px;
+  opacity: 0;
+}
+
+.kr-standalone__nav-folder-row:hover .kr-standalone__nav-folder-actions,
+.kr-standalone__nav-folder-row:focus-within .kr-standalone__nav-folder-actions {
+  opacity: 1;
+}
+
+.kr-standalone__nav-folder-actions button {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--kr-ink-faint);
+  font-size: var(--kr-fs-micro);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.kr-standalone__nav-folder-actions button:hover {
+  border-color: var(--kr-line-strong);
+  background: var(--kr-paper-raised);
+  color: var(--kr-ink);
+}
+
+.kr-standalone__nav-empty {
+  margin: 0;
+  padding: 2px 4px 4px;
+  font-size: var(--kr-fs-micro);
+  line-height: 1.5;
+}
+
+/* 标签：带计数的胶囊，选中态与筛选条一致。 */
+.kr-standalone__nav-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 118px;
+  overflow: auto;
+  padding: 2px 2px 2px 0;
+}
+
+.kr-standalone__nav-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid var(--kr-line);
+  border-radius: 999px;
+  background: var(--kr-paper);
+  color: var(--kr-ink-soft);
+  font: inherit;
+  font-size: var(--kr-fs-micro);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.kr-standalone__nav-tag:hover {
+  border-color: var(--kr-celadon);
+  background: var(--kr-celadon-soft);
+  color: var(--kr-ink);
+}
+
+.kr-standalone__nav-tag.is-active {
+  border-color: var(--kr-celadon-deep);
+  background: var(--kr-celadon-soft);
+  color: var(--kr-celadon-deep);
+  font-weight: 600;
+}
+
+.kr-standalone__nav-tag.is-empty {
+  opacity: 0.55;
+}
+
+.kr-standalone__nav-tag-name {
+  max-width: 132px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kr-standalone__nav-tag-count {
+  color: var(--kr-ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.kr-standalone__nav-tag.is-active .kr-standalone__nav-tag-count {
+  color: var(--kr-celadon-deep);
+}
+
+.kr-standalone__nav-tag-more {
+  height: 22px;
+  padding: 0 7px;
+  border: 1px dashed var(--kr-line-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--kr-ink-faint);
+  font: inherit;
+  font-size: var(--kr-fs-micro);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.kr-standalone__nav-tag-more:hover {
+  border-color: var(--kr-celadon);
+  color: var(--kr-ink);
+}
+
+/* 筛选条：一行说清「现在看的是哪里的多少篇」，全选也在这里。 */
+.kr-standalone__filterbar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  overflow: hidden;
+  padding: 2px 0;
+  border-bottom: 1px solid var(--kr-line);
+  color: var(--kr-ink-soft);
+  font-size: var(--kr-fs-caption);
+}
+
+.kr-standalone__filterbar-all {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  cursor: pointer;
+}
+
+.kr-standalone__filterbar-all input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+}
+
+.kr-standalone__filterbar-path {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--kr-ink);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kr-standalone__filterbar-count {
+  flex: none;
+  margin-left: auto;
+  color: var(--kr-ink-faint);
+  font-size: var(--kr-fs-micro);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.kr-standalone__filter-chip {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  max-width: 96px;
+  height: 20px;
+  padding: 0 6px;
+  overflow: hidden;
+  border: 1px solid var(--kr-celadon);
+  border-radius: 6px;
+  background: var(--kr-celadon-soft);
+  color: var(--kr-celadon-deep);
+  font: inherit;
+  font-size: var(--kr-fs-micro);
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.kr-standalone__filter-chip-x {
+  flex: none;
+  color: var(--kr-ink-faint);
+}
+
+/* 平铺列表：去卡片感，靠行距和 hover 分层；标题一行、元信息一行、标签一行。 */
+.kr-standalone__list {
+  gap: 1px;
+  padding-right: 2px;
+}
+
+.kr-standalone__item {
+  gap: 1px;
+  padding: 4px 6px;
+  border-color: transparent;
+  border-radius: 7px;
+  background: transparent;
+}
+
+.kr-standalone__item:hover {
+  border-color: var(--kr-line);
+  background: var(--kr-paper-raised);
+}
+
+.kr-standalone__item.is-selected {
+  border-color: var(--kr-celadon);
+  background: var(--kr-celadon-soft);
+}
+
+.kr-standalone__item.is-active {
+  border-color: var(--kr-celadon);
+  background: var(--kr-celadon-soft);
+  box-shadow: inset 2px 0 0 var(--kr-celadon-deep);
+}
+
+/* 「清除」在筛选条 / 标签头里是文字按钮，不再撑成一个大按钮。 */
+.kr-standalone__filterbar .kr-link-button,
+.kr-standalone__nav-head .kr-link-button {
+  flex: none;
+  height: 20px;
+  padding: 0 3px;
+  border: 0;
+  background: transparent;
+  color: var(--kr-celadon-deep);
+  font: inherit;
+  font-size: var(--kr-fs-micro);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.kr-standalone__filterbar .kr-link-button:hover,
+.kr-standalone__nav-head .kr-link-button:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.kr-standalone__item-row {
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.kr-standalone__item-row .kr-standalone__select {
+  width: 13px;
+  height: 13px;
+  margin-top: 2px;
+}
+
+.kr-standalone__item .kr-standalone__open {
+  gap: 0;
+}
+
+.kr-standalone__item .kr-standalone__title {
+  line-height: 1.35;
+}
+
+.kr-standalone__item .kr-standalone__open.is-active .kr-standalone__title {
+  color: var(--kr-celadon-deep);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.kr-standalone__meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--kr-ink-faint);
+  font-size: var(--kr-fs-micro);
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.kr-standalone__meta > span {
+  flex: none;
+}
+
+.kr-standalone__meta-dot {
+  color: var(--kr-line-strong);
+}
+
+.kr-standalone__meta-folder {
+  flex: 0 1 auto !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kr-standalone__item .kr-standalone__tags {
+  margin-top: 1px;
+  gap: 3px;
+  overflow: hidden;
+}
+
+.kr-standalone__item .kr-standalone__tag {
+  height: 16px;
+  padding: 0 6px;
+  border-radius: 5px;
+  line-height: 1;
+}
+
+.kr-standalone__item .kr-standalone__tag-more {
+  font-size: var(--kr-fs-micro);
+}
+
+/* 反向链接只跟随当前笔记展开，不再给每条列表项各占一行。 */
+.kr-standalone__sidebar .kr-backlinks {
+  margin: 1px 0 1px 19px;
+}
+
+.kr-standalone__sidebar .kr-backlinks__toggle {
+  font-size: var(--kr-fs-micro);
+}
+
+/* 批量操作条只在有选中项时出现，避免常驻占一行；宽度不够时也不换行。 */
+.kr-standalone__sidebar .kr-standalone__bulkbar {
+  flex-wrap: nowrap;
+  gap: 4px;
+  overflow: hidden;
+  padding: 2px 0;
+  font-size: var(--kr-fs-micro);
+}
+
+.kr-standalone__bulk-count {
+  flex: none;
+  color: var(--kr-ink-soft);
+  font-size: var(--kr-fs-micro);
+  white-space: nowrap;
+}
+
+.kr-standalone__sidebar .kr-standalone__bulkbar button,
+.kr-standalone__sidebar .kr-standalone__bulk-move {
+  height: 24px;
+  min-width: 0;
+  padding: 0 6px;
+  font-size: var(--kr-fs-micro);
+}
+
+.kr-standalone__sidebar .kr-standalone__bulk-move {
+  max-width: 96px;
+  padding: 0 2px;
+}
+
+.kr-standalone__sidebar .kr-standalone__bulkbar .kr-standalone__bulk-cancel {
+  flex: none;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--kr-celadon-deep);
+}
+
+.kr-standalone__drag-hint {
+  flex: none;
+  margin: 0;
+  font-size: var(--kr-fs-micro);
+  line-height: 1.4;
+}
+
+.kr-standalone__sidebar .kr-standalone__action-notice {
+  font-size: var(--kr-fs-micro);
+}
+
+@media (max-width: 1100px) {
+  .kr-standalone__nav {
+    max-height: 46%;
+  }
+}

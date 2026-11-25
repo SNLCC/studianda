@@ -1,6 +1,9 @@
 import type { NoteRecord } from '@studianda/shared';
 
-/** 独立笔记的文件夹层级（按 NoteRecord.folderPath 分组，'' = 根目录）。 */
+/**
+ * 独立笔记的文件夹 / 标签导航数据（按 NoteRecord.folderPath 分组，'' = 根目录）。
+ * 侧栏的文件夹树、每层计数与标签计数都由这里的纯函数算出，便于单测。
+ */
 export interface StandaloneFolder {
   path: string;
   name: string;
@@ -11,7 +14,7 @@ export interface StandaloneFolder {
   totalCount: number;
 }
 
-function noteFolderPath(note: NoteRecord): string {
+function noteFolderPath(note: Pick<NoteRecord, 'folderPath'>): string {
   return (note.folderPath ?? '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
 }
 
@@ -128,4 +131,61 @@ export function filterStandaloneNotesByTags(
   return notes.filter((note) =>
     (note.tags ?? []).some((tag) => selectedTags.has(tag))
   );
+}
+
+/**
+ * 笔记是否属于某文件夹（含子文件夹）。
+ * `folderPath=''` 只匹配根目录下的直接笔记；调用方用 `null` 表示「不按文件夹筛选」。
+ */
+export function standaloneNoteInFolder(
+  note: Pick<NoteRecord, 'folderPath'>,
+  folderPath: string
+): boolean {
+  const path = noteFolderPath(note);
+  if (!folderPath) return path === '';
+  return path === folderPath || path.startsWith(`${folderPath}/`);
+}
+
+/**
+ * 每个文件夹（含祖先）下的笔记数：`a/b` 里的笔记同时计入 `a/b` 与 `a`。
+ * 根目录下的直接笔记不计入（侧栏「未分类」单独统计）。
+ */
+export function countStandaloneNotesByFolder(notes: NoteRecord[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const note of notes) {
+    let path = noteFolderPath(note);
+    while (path) {
+      counts.set(path, (counts.get(path) ?? 0) + 1);
+      path = path.split('/').slice(0, -1).join('/');
+    }
+  }
+  return counts;
+}
+
+/** 标签计数（同一笔记重复标签只算一次；空标签忽略）。 */
+export function countStandaloneTags(notes: NoteRecord[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const note of notes) {
+    const seen = new Set<string>();
+    for (const tag of note.tags ?? []) {
+      const trimmed = (tag ?? '').trim();
+      if (!trimmed || seen.has(trimmed)) continue;
+      seen.add(trimmed);
+      counts.set(trimmed, (counts.get(trimmed) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
+/** 在文件夹树里按路径查找节点（'' 返回根节点）；找不到返回 null。 */
+export function findStandaloneFolder(
+  folder: StandaloneFolder,
+  path: string
+): StandaloneFolder | null {
+  if (folder.path === path) return folder;
+  for (const child of folder.children) {
+    const found = findStandaloneFolder(child, path);
+    if (found) return found;
+  }
+  return null;
 }

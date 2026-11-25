@@ -29,10 +29,11 @@ import { onHostKeyDown } from './host-scope.js';
 import { resolveConfirm, type ConfirmAction } from './dialog-utils.js';
 import {
   buildStandaloneFolderTree,
-  collectFolderNotes,
   collectFolderPaths,
-  filterStandaloneFolderTree,
+  countStandaloneNotesByFolder,
+  countStandaloneTags,
   filterStandaloneNotesByTags,
+  standaloneNoteInFolder,
   type StandaloneFolder
 } from './standalone-folders.js';
 
@@ -110,7 +111,7 @@ export interface StandaloneNotesViewProps {
   ): Promise<MarkdownScanSearchResult>;
   /** 服务端虚拟文件夹列表（含空文件夹）。 */
   folders?: NoteFolderRecord[];
-  /** 全部笔记标签（用于顶部筛选）。 */
+  /** 全部笔记标签（侧栏标签导航；计数按当前文件夹与搜索统计）。 */
   tags?: string[];
   onCreateFolder?(path: string): void;
   onRenameFolder?(from: string, to: string): void;
@@ -373,6 +374,9 @@ function noteFolderPath(note: Pick<NoteRecord, 'folderPath'>): string {
 /** 笔记栏收起状态的本机持久化 key。 */
 export const STANDALONE_SIDEBAR_COLLAPSED_KEY = 'studianda.notes.sidebarCollapsed';
 
+/** 标签导航默认最多展示的标签数；超出时在标题右侧给出「全部 N」，点开再全量显示。 */
+export const STANDALONE_TAG_NAV_LIMIT = 8;
+
 /** 读取笔记栏收起状态；localStorage 不可用/内容损坏时用默认值。 */
 export function readStandaloneSidebarCollapsed(defaultCollapsed: boolean): boolean {
   try {
@@ -407,7 +411,7 @@ export function folderOptionToPath(value: string): string {
 
 
 /**
- * 独立笔记本地搜索：标题（首行）与全文内容，大小写不敏感；空关键词返回全部。
+ * 独立笔记本地搜索：标题（首行）、全文、文件夹路径与标签，大小写不敏感；空关键词返回全部。
  * 导出为纯函数便于测试。
  */
 export function filterStandaloneNotes(notes: NoteRecord[], keyword: string): NoteRecord[] {
@@ -416,12 +420,15 @@ export function filterStandaloneNotes(notes: NoteRecord[], keyword: string): Not
   return notes.filter(
     (note) =>
       standaloneNoteTitle(note.content).toLowerCase().includes(query) ||
-      note.content.toLowerCase().includes(query)
+      note.content.toLowerCase().includes(query) ||
+      (note.folderPath ?? '').toLowerCase().includes(query) ||
+      (note.tags ?? []).some((tag) => tag.toLowerCase().includes(query))
   );
 }
 
 /**
- * 独立笔记工作区：左侧笔记列表 + 右侧 Markdown 编辑器；每条笔记下方可展开反向链接。
+ * 独立笔记工作区：左侧「文件夹 / 标签」导航 + 当前筛选下的笔记列表，右侧 Markdown 编辑器；
+ * 每条笔记下方（选中时）可展开反向链接。
  *
  * 未保存内容按笔记 id 存在组件本地 drafts 里：切换笔记不会丢草稿，保存按钮只在有改动时可用。
  */
@@ -492,6 +499,11 @@ export function StandaloneNotesView({
   const [showTrash, setShowTrash] = useState(defaultShowTrash);
   const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
   const [tagFilter, setTagFilter] = useState<Set<string>>(new Set());
+  /** 侧栏文件夹导航当前选中的文件夹；null = 全部笔记，'' = 未分类（根目录）。 */
+  const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
+  const [folderSectionOpen, setFolderSectionOpen] = useState(true);
+  const [tagSectionOpen, setTagSectionOpen] = useState(true);
+  const [tagListExpanded, setTagListExpanded] = useState(false);
   const [folderMessage, setFolderMessage] = useState('');
   const [folderEditor, setFolderEditor] = useState<
     | { mode: 'create'; parent: string; value: string; error: string }
@@ -750,34 +762,77 @@ export function StandaloneNotesView({
     });
   }, [notes]);
 
-  // 本地搜索：标题（首行）/全文内容/文件夹路径，大小写不敏感；不影响草稿与选中状态。
-  // 顶部标签筛选优先于文件夹/搜索（标签为 OR 匹配）。
-  const tagFilteredNotes = filterStandaloneNotesByTags(notes, tagFilter);
-  // notes 由 app 按 core 的 folder_path, manual_order, created 顺序给出；
-  // 这里覆盖 helper 的默认创建时间排序，让拖拽排序结果立即可见。
-  const noteOrderIndex = new Map(tagFilteredNotes.map((note, index) => [note.id, index]));
-  const fullFolderTree = orderFolderTreeNotes(
-    buildStandaloneFolderTree(
-      tagFilteredNotes,
-      folders.map((folder) => folder.path)
-    ),
-    noteOrderIndex
+  // 侧栏导航的筛选口径：搜索命中 → 标签筛选 → 文件夹选择。
+  // 文件夹导航始终显示完整目录（含空文件夹），计数反映「点下去会看到多少篇」；
+  // 搜索/标签把某个文件夹筛到 0 时目录不会消失，只是计数变小。
+  const searchMatchedNotes = filterStandaloneNotes(notes, search);
+  const filteredNotes = filterStandaloneNotesByTags(searchMatchedNotes, tagFilter);
+  const folderCounts = countStandaloneNotesByFolder(filteredNotes);
+  const folderTree = buildStandaloneFolderTree(
+    notes,
+    folders.map((folder) => folder.path)
   );
-  const folderTree = filterStandaloneFolderTree(fullFolderTree, search);
+  const allFolderPaths = collectFolderPaths(folderTree);
+  const folderPathsKey = allFolderPaths.join('\u0000');
+  const knownFolderPaths = new Set(allFolderPaths);
+  const effectiveFolder =
+    selectedFolder !== null &&
+    selectedFolder !== '' &&
+    !knownFolderPaths.has(selectedFolder)
+      ? null
+      : selectedFolder;
+  // 选中的文件夹被删除/重命名后回退到「全部笔记」，避免列表一直为空（'' = 未分类，始终存在）。
+  useEffect(() => {
+    if (selectedFolder !== null && selectedFolder !== '' && !knownFolderPaths.has(selectedFolder)) {
+      setSelectedFolder(null);
+    }
+  }, [folderPathsKey]);
+  // notes 由 app 按 core 的 folder_path, manual_order, created 顺序给出，直接沿用该顺序；
+  // 文件夹选择包含子文件夹（点父文件夹能看到子文件夹里的笔记）。
+  const visibleNotes =
+    effectiveFolder === null
+      ? filteredNotes
+      : filteredNotes.filter((note) => standaloneNoteInFolder(note, effectiveFolder));
+  const rootNoteCount = filteredNotes.filter((note) => noteFolderPath(note) === '').length;
+  // 标签计数按「当前文件夹 + 搜索」统计，不按已选标签收缩，避免选中一个标签后其他计数全变 0。
+  const tagScopeNotes =
+    effectiveFolder === null
+      ? searchMatchedNotes
+      : searchMatchedNotes.filter((note) => standaloneNoteInFolder(note, effectiveFolder));
+  const tagCounts = countStandaloneTags(tagScopeNotes);
+  const sortedTags = [...tags]
+    // 只显示当前范围里真正有笔记的标签（选中的标签始终保留，方便取消筛选）。
+    .filter((tag) => tagFilter.has(tag) || (tagCounts.get(tag) ?? 0) > 0)
+    .sort((left, right) => {
+      const leftActive = tagFilter.has(left) ? 1 : 0;
+      const rightActive = tagFilter.has(right) ? 1 : 0;
+      if (leftActive !== rightActive) return rightActive - leftActive;
+      const countDelta = (tagCounts.get(right) ?? 0) - (tagCounts.get(left) ?? 0);
+      if (countDelta !== 0) return countDelta;
+      return left.localeCompare(right, 'zh-Hans-CN');
+    });
+  const visibleTags = tagListExpanded ? sortedTags : sortedTags.slice(0, STANDALONE_TAG_NAV_LIMIT);
   const scanPercent =
     scanJob && scanJob.total > 0
       ? Math.min(100, Math.round((scanJob.done / scanJob.total) * 100))
       : 0;
-  const allFolderPaths = collectFolderPaths(fullFolderTree);
-  const knownFolderPaths = new Set(allFolderPaths);
-  // 当前筛选（标签 + 搜索）下的全部笔记：批量「全选当前筛选结果」用。
-  const visibleFilteredNotes = folderTree ? collectFolderNotes(folderTree) : [];
+  // 当前筛选（文件夹 + 标签 + 搜索）下的全部笔记：批量「全选当前筛选结果」用。
   const allVisibleSelected =
-    visibleFilteredNotes.length > 0 &&
-    visibleFilteredNotes.every((note) => selectedNoteIds.has(note.id));
-  const someVisibleSelected = visibleFilteredNotes.some((note) =>
-    selectedNoteIds.has(note.id)
-  );
+    visibleNotes.length > 0 && visibleNotes.every((note) => selectedNoteIds.has(note.id));
+  const someVisibleSelected = visibleNotes.some((note) => selectedNoteIds.has(note.id));
+  const filtersActive = effectiveFolder !== null || tagFilter.size > 0 || search.trim() !== '';
+
+  const clearFilters = (): void => {
+    setSelectedFolder(null);
+    setTagFilter(new Set());
+    setSearch('');
+  };
+
+  /** 新建笔记：先清掉筛选再创建，否则新笔记（根目录、无标签）会被筛掉看不见。 */
+  const createNote = (): void => {
+    if (filtersActive) clearFilters();
+    onCreate();
+  };
 
   const toggleTag = (tag: string): void => {
     setTagFilter((current) => {
@@ -940,7 +995,7 @@ export function StandaloneNotesView({
   };
 
   const selectAllVisibleNotes = (): void => {
-    setSelectedNoteIds(new Set(visibleFilteredNotes.map((note) => note.id)));
+    setSelectedNoteIds(new Set(visibleNotes.map((note) => note.id)));
   };
 
   const clearNoteSelection = (): void => {
@@ -1099,8 +1154,7 @@ export function StandaloneNotesView({
     }
   };
 
-  const isFolderCollapsed = (path: string): boolean =>
-    !search.trim() && collapsedFolders.has(path);
+  const isFolderCollapsed = (path: string): boolean => collapsedFolders.has(path);
 
   const toggleFolderCollapsed = (path: string): void => {
     setCollapsedFolders((current) => {
@@ -1833,9 +1887,9 @@ export function StandaloneNotesView({
     return (
       <li
         key={note.id}
-        className={`kr-standalone__item${checked ? ' is-selected' : ''}${
-          dropBefore ? ' is-drop-before' : ''
-        }${dropAfter ? ' is-drop-after' : ''}`}
+        className={`kr-standalone__item${isActive ? ' is-active' : ''}${
+          checked ? ' is-selected' : ''
+        }${dropBefore ? ' is-drop-before' : ''}${dropAfter ? ' is-drop-after' : ''}`}
         draggable={Boolean(onMoveNote || onReorderNotes) && !isRenaming}
         onDragStart={(event) => {
           setDragNoteId(note.id);
@@ -1920,24 +1974,41 @@ export function StandaloneNotesView({
               onClick={() => onSelect(note.id)}
             >
               <span className="kr-standalone__title">{title}</span>
-              <small>
-                {new Date(note.created).toLocaleDateString()} ·{' '}
-                {note.content.replace(/\s+/g, '').length} 字
-                {note.folderPath ? ` · ${note.folderPath}` : ''}
-              </small>
+              <span className="kr-standalone__meta">
+                <span>{new Date(note.created).toLocaleDateString()}</span>
+                <span className="kr-standalone__meta-dot" aria-hidden="true">
+                  ·
+                </span>
+                <span>{note.content.replace(/\s+/g, '').length} 字</span>
+                {effectiveFolder === null && note.folderPath ? (
+                  <>
+                    <span className="kr-standalone__meta-dot" aria-hidden="true">
+                      ·
+                    </span>
+                    <span className="kr-standalone__meta-folder" title={note.folderPath}>
+                      {note.folderPath}
+                    </span>
+                  </>
+                ) : null}
+              </span>
               {(note.tags ?? []).length > 0 ? (
                 <span className="kr-standalone__tags">
-                  {(note.tags ?? []).map((tag) => (
+                  {(note.tags ?? []).slice(0, 4).map((tag) => (
                     <span key={tag} className="kr-standalone__tag">
                       {tag}
                     </span>
                   ))}
+                  {(note.tags ?? []).length > 4 ? (
+                    <span className="kr-standalone__tag-more">
+                      +{(note.tags ?? []).length - 4}
+                    </span>
+                  ) : null}
                 </span>
               ) : null}
             </button>
           )}
         </div>
-        {loadBacklinks ? (
+        {isActive && loadBacklinks ? (
           <Backlinks
             target={{ kind: 'note', documentId: '', id: note.id }}
             loadBacklinks={loadBacklinks}
@@ -1953,52 +2024,65 @@ export function StandaloneNotesView({
     const renameEditor = renderFolderInlineEditor('rename', folder.path);
     const dropActive = dragTarget === folder.path;
     const childCreateEditor = renderFolderInlineEditor('create', '', folder.path);
+    const selected = effectiveFolder === folder.path;
+    const count = folderCounts.get(folder.path) ?? 0;
+    const hasChildren = folder.children.length > 0;
     return (
-      <li
-        key={`folder:${folder.path}`}
-        className={`kr-standalone__folder${dropActive ? ' is-drop-target' : ''}`}
-        onDragOver={(event) => {
-          if (!dragNoteId) return;
-          event.preventDefault();
-          event.dataTransfer.dropEffect = 'move';
-          setDragTargetNote(null);
-          setDragTarget(folder.path);
-        }}
-        onDragLeave={(event) => {
-          if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
-          setDragTarget((current) => (current === folder.path ? null : current));
-        }}
-        onDrop={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          const noteId = dragNoteId || event.dataTransfer.getData('text/plain');
-          if (noteId) moveNoteToFolder(noteId, folder.path);
-          setDragNoteId(null);
-          setDragTarget(null);
-          setDragTargetNote(null);
-        }}
-      >
+      <li key={`folder:${folder.path}`} className="kr-standalone__nav-folder">
         {renameEditor ? (
           renameEditor
         ) : (
           <div
-            className="kr-standalone__folder-row"
-            style={{ paddingLeft: `${depth * 14}px` }}
+            className={`kr-standalone__nav-folder-row${selected ? ' is-active' : ''}${
+              dropActive ? ' is-drop-target' : ''
+            }`}
+            style={{ paddingLeft: `${depth * 12}px` }}
+            onDragOver={(event) => {
+              if (!dragNoteId) return;
+              event.preventDefault();
+              event.dataTransfer.dropEffect = 'move';
+              setDragTargetNote(null);
+              setDragTarget(folder.path);
+            }}
+            onDragLeave={(event) => {
+              if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+              setDragTarget((current) => (current === folder.path ? null : current));
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              const noteId = dragNoteId || event.dataTransfer.getData('text/plain');
+              if (noteId) moveNoteToFolder(noteId, folder.path);
+              setDragNoteId(null);
+              setDragTarget(null);
+              setDragTargetNote(null);
+            }}
           >
+            {hasChildren ? (
+              <button
+                type="button"
+                className="kr-standalone__nav-caret-btn"
+                aria-expanded={!collapsed}
+                aria-label={`${collapsed ? '展开' : '收起'} ${folder.path}`}
+                title={collapsed ? '展开子文件夹' : '收起子文件夹'}
+                onClick={() => toggleFolderCollapsed(folder.path)}
+              >
+                {collapsed ? '▸' : '▾'}
+              </button>
+            ) : (
+              <span className="kr-standalone__nav-caret-btn is-spacer" aria-hidden="true" />
+            )}
             <button
               type="button"
-              className="kr-standalone__folder-head"
-              aria-expanded={!collapsed}
-              onClick={() => toggleFolderCollapsed(folder.path)}
+              className="kr-standalone__nav-folder-btn"
+              aria-pressed={selected}
+              onClick={() => setSelectedFolder(folder.path)}
               title={folder.path}
             >
-              <span className="kr-standalone__folder-caret" aria-hidden="true">
-                {collapsed ? '▸' : '▾'}
-              </span>
-              <span className="kr-standalone__folder-name">{folder.name}</span>
-              <small className="kr-muted">{folder.totalCount} 篇</small>
+              <span className="kr-standalone__nav-name">{folder.name}</span>
+              <span className="kr-standalone__nav-count">{count}</span>
             </button>
-            <span className="kr-standalone__folder-actions">
+            <span className="kr-standalone__nav-folder-actions">
               {onCreateFolder ? (
                 <button
                   type="button"
@@ -2048,13 +2132,12 @@ export function StandaloneNotesView({
             </button>
           </div>
         ) : null}
-        {collapsed ? null : (
-          <ul className="kr-standalone__sublist">
+        {collapsed ? null : hasChildren || childCreateEditor ? (
+          <ul className="kr-standalone__nav-list">
             {childCreateEditor}
-            {folder.notes.map(renderNoteItem)}
             {folder.children.map((child) => renderFolder(child, depth + 1))}
           </ul>
-        )}
+        ) : null}
       </li>
     );
   };
@@ -2110,7 +2193,7 @@ export function StandaloneNotesView({
                   ? '正在扫描…'
                   : '导入 Markdown 笔记'}
           </button>
-          <button type="button" className="kr-primary" onClick={onCreate} disabled={creating}>
+          <button type="button" className="kr-primary" onClick={createNote} disabled={creating}>
             {creating ? '新建中…' : '+ 新建笔记'}
           </button>
         </div>
@@ -2443,37 +2526,26 @@ export function StandaloneNotesView({
               className="kr-standalone__sidebar-label"
               title="把笔记拖到文件夹可移动；打开笔记后，右上角可移动/重命名/移入回收站"
             >
-              笔记文件夹
+              {showTrash ? '回收站' : '笔记'}
             </span>
             <div className="kr-standalone__sidebar-actions">
               <button
                 type="button"
                 className="kr-ghost"
-                aria-expanded={true}
-                aria-controls="kr-standalone-sidebar"
-                onClick={() => setSidebarCollapsed(true)}
-                title="收起笔记文件夹栏，让编辑器占满宽度"
-              >
-                收起
-              </button>
-              {onCreateFolder ? (
-                <button
-                  type="button"
-                  className="kr-ghost"
-                  onClick={() => openCreateFolderEditor('')}
-                  title="新建文件夹（可含 / 多级）"
-                >
-                  新建文件夹
-                </button>
-              ) : null}
-              <button
-                type="button"
-                className="kr-ghost"
                 onClick={() => toggleTrash(!showTrash)}
                 aria-pressed={showTrash}
-                title="查看已移入回收站的独立笔记"
+                title={showTrash ? '返回笔记列表' : '查看已移入回收站的独立笔记'}
               >
                 {showTrash ? '返回笔记' : '回收站'}
+              </button>
+              <button
+                type="button"
+                className="kr-ghost kr-standalone__sidebar-collapse"
+                aria-controls="kr-standalone-sidebar"
+                onClick={() => setSidebarCollapsed(true)}
+                title="收起笔记列表，让编辑器占满宽度"
+              >
+                收起
               </button>
             </div>
           </div>
@@ -2481,34 +2553,6 @@ export function StandaloneNotesView({
             <p className="kr-page-error" role="alert">
               {folderMessage}
             </p>
-          ) : null}
-          {!showTrash ? renderFolderInlineEditor('create', '', '') : null}
-          {!showTrash && dragNoteId ? (
-            <div
-              className={`kr-standalone__drop-root${
-                dragTarget === '' ? ' is-drop-target' : ''
-              }`}
-              onDragOver={(event) => {
-                event.preventDefault();
-                event.dataTransfer.dropEffect = 'move';
-                setDragTargetNote(null);
-                setDragTarget('');
-              }}
-              onDragLeave={() =>
-                setDragTarget((current) => (current === '' ? null : current))
-              }
-              onDrop={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                const noteId = dragNoteId || event.dataTransfer.getData('text/plain');
-                if (noteId) moveNoteToFolder(noteId, '');
-                setDragNoteId(null);
-                setDragTarget(null);
-                setDragTargetNote(null);
-              }}
-            >
-              拖到此处移动到根目录
-            </div>
           ) : null}
           {showTrash ? (
             <div className="kr-standalone__trash">
@@ -2569,38 +2613,235 @@ export function StandaloneNotesView({
                 <input
                   type="search"
                   value={search}
-                  placeholder="搜索独立笔记标题或内容"
+                  placeholder="搜索标题、正文、标签或文件夹"
                   aria-label="搜索独立笔记"
                   onChange={(event) => setSearch(event.target.value)}
                 />
               </label>
-              {tags.length > 0 ? (
-                <div className="kr-standalone__tag-filter" role="group" aria-label="按标签筛选笔记">
-                  <span className="kr-standalone__tag-filter-label">标签</span>
-                  {tags.map((tag) => (
-                    <button
-                      key={tag}
-                      type="button"
-                      className={`kr-standalone__tag-filter-item${
-                        tagFilter.has(tag) ? ' is-active' : ''
-                      }`}
-                      aria-pressed={tagFilter.has(tag)}
-                      onClick={() => toggleTag(tag)}
-                    >
-                      {tag}
-                    </button>
-                  ))}
-                  {tagFilter.size > 0 ? (
+              <div className="kr-standalone__nav" role="navigation" aria-label="笔记文件夹与标签">
+                <section className="kr-standalone__nav-section kr-standalone__nav-section--folders">
+                  <div className="kr-standalone__nav-head">
                     <button
                       type="button"
-                      className="kr-link-button"
-                      onClick={() => setTagFilter(new Set())}
+                      className="kr-standalone__nav-title"
+                      aria-expanded={folderSectionOpen}
+                      onClick={() => setFolderSectionOpen((current) => !current)}
                     >
-                      清除标签筛选
+                      <span className="kr-standalone__nav-caret" aria-hidden="true">
+                        {folderSectionOpen ? '▾' : '▸'}
+                      </span>
+                      文件夹
                     </button>
+                    {onCreateFolder ? (
+                      <button
+                        type="button"
+                        className="kr-standalone__nav-add"
+                        onClick={() => openCreateFolderEditor('')}
+                        title="新建文件夹（可含 / 多级）"
+                        aria-label="新建文件夹"
+                      >
+                        ＋
+                      </button>
+                    ) : null}
+                  </div>
+                  {folderSectionOpen ? (
+                    <>
+                      {renderFolderInlineEditor('create', '', '')}
+                      <ul className="kr-standalone__nav-list kr-standalone__nav-list--folders">
+                        <li>
+                          <button
+                            type="button"
+                            className={`kr-standalone__nav-row${
+                              effectiveFolder === null ? ' is-active' : ''
+                            }`}
+                            aria-pressed={effectiveFolder === null}
+                            onClick={() => setSelectedFolder(null)}
+                            title="不按文件夹筛选，显示全部笔记"
+                          >
+                            <span className="kr-standalone__nav-glyph" aria-hidden="true">
+                              ▤
+                            </span>
+                            <span className="kr-standalone__nav-name">全部笔记</span>
+                            <span className="kr-standalone__nav-count">{filteredNotes.length}</span>
+                          </button>
+                        </li>
+                        <li>
+                          <button
+                            type="button"
+                            className={`kr-standalone__nav-row${
+                              effectiveFolder === '' ? ' is-active' : ''
+                            }${dragNoteId && dragTarget === '' ? ' is-drop-target' : ''}`}
+                            aria-pressed={effectiveFolder === ''}
+                            title="根目录下的笔记；把笔记拖到这里可移回根目录"
+                            onClick={() => setSelectedFolder('')}
+                            onDragOver={(event) => {
+                              if (!dragNoteId) return;
+                              event.preventDefault();
+                              event.dataTransfer.dropEffect = 'move';
+                              setDragTargetNote(null);
+                              setDragTarget('');
+                            }}
+                            onDragLeave={() =>
+                              setDragTarget((current) => (current === '' ? null : current))
+                            }
+                            onDrop={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              const noteId =
+                                dragNoteId || event.dataTransfer.getData('text/plain');
+                              if (noteId) moveNoteToFolder(noteId, '');
+                              setDragNoteId(null);
+                              setDragTarget(null);
+                              setDragTargetNote(null);
+                            }}
+                          >
+                            <span className="kr-standalone__nav-glyph" aria-hidden="true">
+                              ·
+                            </span>
+                            <span className="kr-standalone__nav-name">未分类</span>
+                            <span className="kr-standalone__nav-count">{rootNoteCount}</span>
+                          </button>
+                        </li>
+                        {folderTree.children.map((child) => renderFolder(child, 0))}
+                      </ul>
+                    </>
                   ) : null}
-                </div>
+                </section>
+                <section className="kr-standalone__nav-section kr-standalone__nav-section--tags">
+                  <div className="kr-standalone__nav-head">
+                    <button
+                      type="button"
+                      className="kr-standalone__nav-title"
+                      aria-expanded={tagSectionOpen}
+                      onClick={() => setTagSectionOpen((current) => !current)}
+                    >
+                      <span className="kr-standalone__nav-caret" aria-hidden="true">
+                        {tagSectionOpen ? '▾' : '▸'}
+                      </span>
+                      标签
+                    </button>
+                    <span className="kr-standalone__nav-head-actions">
+                      {sortedTags.length > STANDALONE_TAG_NAV_LIMIT ? (
+                        <button
+                          type="button"
+                          className="kr-link-button"
+                          onClick={() => setTagListExpanded((current) => !current)}
+                          title={tagListExpanded ? '收起标签列表' : '显示全部标签'}
+                        >
+                          {tagListExpanded ? '收起' : `全部 ${sortedTags.length}`}
+                        </button>
+                      ) : null}
+                      {tagFilter.size > 0 ? (
+                        <button
+                          type="button"
+                          className="kr-link-button"
+                          onClick={() => setTagFilter(new Set())}
+                          title="清除全部标签筛选"
+                        >
+                          清除
+                        </button>
+                      ) : null}
+                    </span>
+                  </div>
+                  {tagSectionOpen ? (
+                    sortedTags.length === 0 ? (
+                      <p className="kr-muted kr-standalone__nav-empty">
+                        {tags.length === 0
+                          ? '还没有标签。打开笔记添加标签后，这里可以按标签筛选。'
+                          : '当前范围里没有带标签的笔记。'}
+                      </p>
+                    ) : (
+                      <div
+                        className="kr-standalone__nav-tags"
+                        role="group"
+                        aria-label="按标签筛选笔记"
+                      >
+                        {visibleTags.map((tag) => {
+                          const count = tagCounts.get(tag) ?? 0;
+                          const active = tagFilter.has(tag);
+                          return (
+                            <button
+                              key={tag}
+                              type="button"
+                              className={`kr-standalone__nav-tag${active ? ' is-active' : ''}${
+                                count === 0 && !active ? ' is-empty' : ''
+                              }`}
+                              aria-pressed={active}
+                              title={`${tag}：当前范围 ${count} 篇${active ? '（已筛选）' : ''}`}
+                              onClick={() => toggleTag(tag)}
+                            >
+                              <span className="kr-standalone__nav-tag-name">#{tag}</span>
+                              <span className="kr-standalone__nav-tag-count">{count}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )
+                  ) : null}
+                </section>
+              </div>
+              {dragNoteId ? (
+                <p className="kr-muted kr-standalone__drag-hint" role="status">
+                  拖到文件夹即可移动；拖到「未分类」移回根目录。
+                </p>
               ) : null}
+              <div className="kr-standalone__filterbar">
+                <label
+                  className="kr-standalone__filterbar-all"
+                  title="全选当前筛选结果；勾选后可批量移动或移入回收站"
+                >
+                  <input
+                    type="checkbox"
+                    checked={allVisibleSelected}
+                    disabled={visibleNotes.length === 0}
+                    ref={(element) => {
+                      if (element) {
+                        element.indeterminate = someVisibleSelected && !allVisibleSelected;
+                      }
+                    }}
+                    aria-label="全选当前筛选结果"
+                    onChange={() =>
+                      allVisibleSelected ? clearNoteSelection() : selectAllVisibleNotes()
+                    }
+                  />
+                </label>
+                <span
+                  className="kr-standalone__filterbar-path"
+                  title={
+                    effectiveFolder === null
+                      ? '全部笔记'
+                      : effectiveFolder === ''
+                        ? '未分类（根目录）'
+                        : effectiveFolder
+                  }
+                >
+                  {effectiveFolder === null
+                    ? '全部笔记'
+                    : effectiveFolder === ''
+                      ? '未分类'
+                      : effectiveFolder}
+                </span>
+                {[...tagFilter].map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    className="kr-standalone__filter-chip"
+                    title={`移除标签筛选：${tag}`}
+                    onClick={() => toggleTag(tag)}
+                  >
+                    #{tag}
+                    <span className="kr-standalone__filter-chip-x" aria-hidden="true">
+                      ×
+                    </span>
+                  </button>
+                ))}
+                <span className="kr-standalone__filterbar-count">{visibleNotes.length} 篇</span>
+                {filtersActive ? (
+                  <button type="button" className="kr-link-button" onClick={clearFilters}>
+                    清除
+                  </button>
+                ) : null}
+              </div>
               {noteActionNotice ? (
                 <p className="kr-muted kr-standalone__action-notice" role="status">
                   {noteActionNotice}
@@ -2614,87 +2855,84 @@ export function StandaloneNotesView({
                   </button>
                 </p>
               ) : null}
-              <div
-                className={`kr-standalone__bulkbar${selectedNoteIds.size > 0 ? ' is-active' : ''}`}
-                role="toolbar"
-                aria-label="笔记多选与批量操作"
-              >
-                <label className="kr-standalone__bulk-all" title="全选当前筛选结果">
-                  <input
-                    type="checkbox"
-                    checked={allVisibleSelected}
-                    ref={(element) => {
-                      if (element) element.indeterminate = someVisibleSelected && !allVisibleSelected;
-                    }}
-                    aria-label="全选当前筛选结果"
-                    onChange={() =>
-                      allVisibleSelected ? clearNoteSelection() : selectAllVisibleNotes()
-                    }
-                  />
-                  全选
-                </label>
-                <span className="kr-muted">已选 {selectedNoteIds.size} 篇</span>
-                {selectedNoteIds.size > 0 ? (
-                  <>
-                    {onBatchMoveNotes ? (
-                      <select
-                        className="kr-standalone__bulk-move"
-                        value=""
-                        aria-label={`批量移动已选 ${selectedNoteIds.size} 篇笔记`}
-                        title="批量移动到…"
-                        disabled={batchBusy}
-                        onChange={(event) => {
-                          const target = event.target.value;
-                          if (!target) return;
-                          void batchMoveSelected(folderOptionToPath(target));
-                        }}
-                      >
-                        <option value="">移动到…</option>
-                        <option value={ROOT_FOLDER_OPTION_VALUE}>根目录</option>
-                        {allFolderPaths.map((path) => (
-                          <option key={path} value={path}>
-                            {path}
-                          </option>
-                        ))}
-                      </select>
-                    ) : null}
-                    {onBatchDeleteNotes ? (
-                      <button
-                        type="button"
-                        className="kr-standalone__bulk-delete"
-                        disabled={batchBusy}
-                        title="批量移入回收站（可恢复）"
-                        onClick={() => void batchDeleteSelected()}
-                      >
-                        {batchBusy ? '处理中…' : `移入回收站（${selectedNoteIds.size}）`}
-                      </button>
-                    ) : null}
-                    <button type="button" onClick={clearNoteSelection} disabled={batchBusy}>
-                      取消选择
-                    </button>
-                  </>
-                ) : (
-                  <span className="kr-muted kr-standalone__bulk-hint">
-                    勾选笔记可批量移动或删除；拖动笔记可调整顺序。
+              {selectedNoteIds.size > 0 ? (
+                <div
+                  className="kr-standalone__bulkbar is-active"
+                  role="toolbar"
+                  aria-label="笔记批量操作"
+                >
+                  <span className="kr-standalone__bulk-count">
+                    已选 {selectedNoteIds.size}
                   </span>
-                )}
-              </div>
-              {!folderTree || folderTree.totalCount === 0 ? (
-                <div className="kr-standalone__empty">
-                  <p>没有匹配的独立笔记。</p>
-                  <p className="kr-muted">换个关键词，或清除搜索查看全部笔记。</p>
+                  {onBatchMoveNotes ? (
+                    <select
+                      className="kr-standalone__bulk-move"
+                      value=""
+                      aria-label={`批量移动已选 ${selectedNoteIds.size} 篇笔记`}
+                      title="批量移动到…"
+                      disabled={batchBusy}
+                      onChange={(event) => {
+                        const target = event.target.value;
+                        if (!target) return;
+                        void batchMoveSelected(folderOptionToPath(target));
+                      }}
+                    >
+                      <option value="">移动到…</option>
+                      <option value={ROOT_FOLDER_OPTION_VALUE}>根目录</option>
+                      {allFolderPaths.map((path) => (
+                        <option key={path} value={path}>
+                          {path}
+                        </option>
+                      ))}
+                    </select>
+                  ) : null}
+                  {onBatchDeleteNotes ? (
+                    <button
+                      type="button"
+                      className="kr-standalone__bulk-delete"
+                      disabled={batchBusy}
+                      title="批量移入回收站（可恢复）"
+                      onClick={() => void batchDeleteSelected()}
+                    >
+                      {batchBusy ? '处理中…' : '回收站'}
+                    </button>
+                  ) : null}
                   <button
                     type="button"
-                    className="kr-ghost"
-                    onClick={() => setSearch('')}
+                    className="kr-standalone__bulk-cancel"
+                    onClick={clearNoteSelection}
+                    disabled={batchBusy}
+                    title="取消选择"
                   >
-                    清除搜索
+                    取消
                   </button>
+                </div>
+              ) : null}
+              {visibleNotes.length === 0 ? (
+                <div className="kr-standalone__empty">
+                  <p>
+                    {notes.length === 0
+                      ? '还没有独立笔记。'
+                      : filtersActive
+                        ? '没有匹配的笔记。'
+                        : '这个文件夹还没有笔记。'}
+                  </p>
+                  <p className="kr-muted">
+                    {notes.length === 0
+                      ? '点右上角「新建笔记」记录不依附文献的想法。'
+                      : filtersActive
+                        ? '文件夹与标签计数会随筛选实时变化；清除筛选可看全部。'
+                        : '把笔记拖到左侧文件夹，或点右上角「新建笔记」。'}
+                  </p>
+                  {filtersActive ? (
+                    <button type="button" className="kr-ghost" onClick={clearFilters}>
+                      清除筛选
+                    </button>
+                  ) : null}
                 </div>
               ) : (
                 <ul className="kr-standalone__list">
-                  {folderTree?.notes.map(renderNoteItem)}
-                  {folderTree?.children.map((child) => renderFolder(child, 0))}
+                  {visibleNotes.map(renderNoteItem)}
                 </ul>
               )}
             </>
