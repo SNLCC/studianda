@@ -378,7 +378,7 @@ export function DocumentList({
   const sortHint =
     sort === 'manual'
       ? '默认排序：拖动卡片/列表可调整顺序，其它排序只是浏览'
-      : '当前是浏览排序；拖动卡片/列表会自动切回「默认排序」并保存新顺序';
+      : '仅浏览排序，不改变默认顺序；拖拽请切回「默认排序」';
   const dragHint = searching
     ? '拖动 ⋮⋮ 可在当前搜索结果内调整默认顺序'
     : '拖动 ⋮⋮ 调整默认顺序';

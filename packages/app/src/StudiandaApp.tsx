@@ -4003,14 +4003,11 @@ function Workspace({ api, adapter }: { api: ApiClient; adapter: AppRuntimeAdapte
         onSortChange={setSortMode}
         view={libraryView}
         onViewChange={setLibraryView}
-        reorderable={!showTrash}
+        reorderable={sortMode === 'manual' && !showTrash}
         reorderPending={moveDocumentMutation.isPending}
-        onReorder={(documentId, target) => {
-          // 拖动排序只在「默认排序」下有明确语义：别的排序里拖动时自动切回默认排序，
-          // 否则拖动看起来毫无反应（用户会以为卡片不能拖了）。
-          if (sortMode !== 'manual') setSortMode('manual');
-          moveDocumentMutation.mutate({ id: documentId, ...target });
-        }}
+        onReorder={(documentId, target) =>
+          moveDocumentMutation.mutate({ id: documentId, ...target })
+        }
         tags={availableTags}
         tagFilter={tagFilter}
         onTagFilterChange={setTagFilter}

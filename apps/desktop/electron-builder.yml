@@ -27,6 +27,8 @@ files:
   - NOTICE
   - "!**/*.map"
   - "!**/*.test.*"
+  - "!**/.preview-*/**"
+  - "!**/.preview*/**"
   - "!**/out/core/src/**"
   # 水印字体不随 pnpm deploy 的 out/core/assets 进 asar：canvas 原生模块（libfont）读不了
   # asar 内的虚拟路径，统一由 extraResources 放到 resources/assets/fonts 再读。

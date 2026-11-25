@@ -34,3 +34,7 @@ dev-notes/
 # 生成物
 .font-build-cache/
 studianda-src.zip
+
+
+# local UI preview harnesses (mock data only; never commit or package)
+.preview-*/

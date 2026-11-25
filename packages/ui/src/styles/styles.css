@@ -14192,3 +14192,59 @@ details.kr-outline2__card > summary::-webkit-details-marker {
   font-size: var(--kr-fs-caption);
   line-height: 1.5;
 }
+
+/* ---- 文献库列表不再被长标题撑宽：所有纵向 flex/grid 容器允许收缩 ---- */
+.kr-app-content,
+.kr-workspace,
+.kr-library,
+.kr-doc-list,
+.kr-doc-list--rows {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.kr-doc-row {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  /* 不要在这里 overflow:hidden：行内「⋯」菜单是绝对定位，会被裁掉。 */
+  overflow: visible;
+}
+
+.kr-doc-row__main {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.kr-doc-row__title {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kr-doc-row__badges {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.kr-doc-row__badges > span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kr-doc-row__meta,
+.kr-doc-row__state,
+.kr-doc-row__ocr {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
